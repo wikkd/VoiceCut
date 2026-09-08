@@ -48,6 +48,18 @@
         <button data-act="toggle-minimap">总览条 开关</button>
       </div>
     </div>
+    <div class="menu" data-menu="window">
+      <button class="menu-title">窗口</button>
+      <div class="menu-items">
+        <button data-act="panel-toggle" data-panel="media">素材列表</button>
+        <button data-act="panel-toggle" data-panel="video">视频预览</button>
+        <button data-act="panel-toggle" data-panel="wave">波形</button>
+        <button data-act="panel-toggle" data-panel="sub">实时字幕</button>
+        <button data-act="panel-toggle" data-panel="seg">片段列表</button>
+        <div class="menu-sep"></div>
+        <button data-act="layout-reset">恢复默认布局</button>
+      </div>
+    </div>
     <div class="menu" data-menu="help">
       <button class="menu-title">帮助</button>
       <div class="menu-items">
@@ -64,107 +76,134 @@
     <span class="spacer"></span>
   </div>
 
-  <!-- ③ 主区 -->
-  <div id="main">
-    <aside id="media-panel">
-      <div class="panel-title">素材列表</div>
-      <ul id="media-list"></ul>
-      <div id="media-empty" class="muted">拖拽文件到窗口<br>或点「导入文件」</div>
+  <!-- ③ 工作区：3×3 网格 / 分隔条 / 面板换位 / 布局记忆 -->
+  <div id="workspace">
+    <aside id="media-panel" class="panel" data-panel="media">
+      <div class="panel-grip">
+        <span class="grip-title">素材列表</span>
+        <button class="grip-close" data-close-panel="media" title="隐藏面板">×</button>
+      </div>
+      <div class="panel-body media-body">
+        <ul id="media-list"></ul>
+        <div id="media-empty" class="muted">拖拽文件到窗口<br>或点「导入文件」</div>
+      </div>
     </aside>
 
-    <section id="center">
-      <div id="video-panel" class="hidden">
-        <video id="video-preview" muted playsinline controls></video>
+    <section id="video-panel" class="panel" data-panel="video">
+      <div class="panel-grip">
+        <span class="grip-title">视频预览</span>
+        <button class="grip-close" data-close-panel="video" title="隐藏面板">×</button>
       </div>
-      <div id="wave-box">
+      <div class="panel-body video-body">
+        <video id="video-preview" muted playsinline controls></video>
+        <div id="video-placeholder" class="muted">无视频预览（音频素材）</div>
+      </div>
+    </section>
+
+    <section id="wave-box" class="panel" data-panel="wave">
+      <div class="panel-grip">
+        <span class="grip-title">波形</span>
+        <label class="chip toggle"><input type="checkbox" id="minimap-toggle" checked> 总览条</label>
+        <button class="grip-close" data-close-panel="wave" title="隐藏面板">×</button>
+      </div>
+      <div class="panel-body wave-body">
         <div id="timeline"></div>
         <div id="waveform"></div>
-        <div id="wave-tools">
-          <label class="chip toggle"><input type="checkbox" id="minimap-toggle" checked> 总览条</label>
-        </div>
         <div id="minimap"></div>
         <div id="empty-state" class="muted">导入文件后在此显示波形</div>
       </div>
+    </section>
 
-      <div id="subtitle-panel">
-        <div class="sub-toolbar">
-          <span class="panel-title">实时字幕 <small id="sub-count"></small></span>
-          <div class="menu sub-menu">
-            <button class="menu-title chip">字幕 ▾</button>
-            <div class="menu-items">
-              <button id="btn-sub-open">📄 加载字幕文件…</button>
-              <button id="btn-sub-generate">🎙 生成字幕（Whisper）</button>
-            </div>
+    <section id="subtitle-panel" class="panel" data-panel="sub">
+      <div class="panel-grip">
+        <span class="grip-title">实时字幕 <small id="sub-count"></small></span>
+        <div class="menu sub-menu">
+          <button class="menu-title chip">字幕 ▾</button>
+          <div class="menu-items">
+            <button id="btn-sub-open">📄 加载字幕文件…</button>
+            <button id="btn-sub-generate">🎙 生成字幕（Whisper）</button>
           </div>
-          <button id="btn-sub-add" class="chip primary">＋ 当前字幕加片段</button>
-          <button id="btn-sub-toggle" class="chip">▾ 收起</button>
         </div>
+        <button id="btn-sub-add" class="chip primary">＋ 当前字幕加片段</button>
+        <button class="grip-close" data-close-panel="sub" title="隐藏面板">×</button>
+      </div>
+      <div class="panel-body sub-body">
         <div id="sub-current" class="sub-current">—</div>
         <div id="sub-scroll">
           <table id="sub-table">
             <thead>
-              <tr><th style="width:150px">起止</th><th>文本</th><th style="width:100px">操作</th></tr>
+              <tr><th style="width:110px">起止</th><th>文本</th><th style="width:90px">操作</th></tr>
             </thead>
             <tbody id="sub-tbody"></tbody>
           </table>
           <div id="sub-empty" class="muted">暂无字幕：可「加载字幕」导入 .srt/.ass 文件，或「生成字幕」用 Whisper 自动识别</div>
         </div>
       </div>
-      <div id="transport">
-        <div class="tr-group">
-          <button id="btn-prev" class="chip" title="回到开头">⏮</button>
-          <button id="btn-play2" class="chip big" title="播放/暂停 (空格)">▶</button>
-          <button id="btn-next" class="chip" title="跳到结尾">⏭</button>
+    </section>
+
+    <section id="segments-panel" class="panel" data-panel="seg">
+      <div class="panel-grip">
+        <span class="grip-title">片段列表 <small id="seg-count"></small></span>
+        <button id="btn-add-seg" class="chip">＋ 选区加片段</button>
+        <button id="btn-transcribe" class="chip">🔤 批量转写</button>
+        <div class="menu seg-menu">
+          <button class="menu-title chip" title="更多操作">⋯</button>
+          <div class="menu-items">
+            <button id="btn-clear-segs">清空片段…</button>
+          </div>
         </div>
-        <div class="tr-group">
-          <button id="btn-loop" class="chip" title="循环播放选区 (L)">🔁 循环</button>
-          <button id="btn-play-selection" class="chip" title="播放选区">▶ 选区</button>
+        <button class="grip-close" data-close-panel="seg" title="隐藏面板">×</button>
+      </div>
+      <div class="panel-body seg-body">
+        <div id="seg-scroll">
+          <table id="seg-table">
+            <thead>
+              <tr>
+                <th style="width:38px">#</th>
+                <th style="width:130px">起止</th>
+                <th style="width:64px">时长</th>
+                <th style="width:70px">状态</th>
+                <th style="width:72px">试听</th>
+                <th>文本（可编辑）</th>
+                <th style="width:84px">语言</th>
+                <th style="width:96px">说话人</th>
+                <th style="width:90px">操作</th>
+              </tr>
+            </thead>
+            <tbody id="seg-tbody"></tbody>
+          </table>
         </div>
-        <div class="tr-info">
-          <span>播放头 <b id="cur-time">0:00.0</b></span>
-          <span>选区 <b id="sel-info">—</b></span>
-          <span>时长 <b id="dur-info">—</b></span>
-        </div>
-        <div class="tr-group export">
-          <button id="btn-export-selection" class="btn primary">导出选区 <kbd>E</kbd></button>
-        </div>
+        <div id="seg-empty" class="muted">在波形上拖拽出选区，点「＋ 选区加片段」加入训练片段</div>
       </div>
     </section>
+
+    <!-- 分隔条（绝对定位，覆盖在网格线上） -->
+    <div class="splitter" data-split="col-media" title="拖拽调整素材列宽度"></div>
+    <div class="splitter" data-split="col-sub" title="拖拽调整字幕列宽度"></div>
+    <div class="splitter" data-split="row-video" title="拖拽调整视频行高度"></div>
+    <div class="splitter" data-split="row-seg" title="拖拽调整片段行高度"></div>
   </div>
 
-  <!-- ④ 片段列表 -->
-  <section id="segments-panel">
-    <div class="seg-toolbar">
-      <span class="panel-title">片段列表 <small id="seg-count"></small></span>
-      <button id="btn-add-seg" class="chip">＋ 选区加片段</button>
-      <button id="btn-transcribe" class="chip">🔤 批量转写</button>
-      <div class="menu seg-menu">
-        <button class="menu-title chip" title="更多操作">⋯</button>
-        <div class="menu-items">
-          <button id="btn-clear-segs">清空片段…</button>
-        </div>
-      </div>
+  <!-- ④ 传输栏（固定 Chrome，窗口底部） -->
+  <div id="transport">
+    <div class="tr-group">
+      <button id="btn-prev" class="chip" title="回到开头">⏮</button>
+      <button id="btn-play2" class="chip big" title="播放/暂停 (空格)">▶</button>
+      <button id="btn-next" class="chip" title="跳到结尾">⏭</button>
     </div>
-    <div id="seg-scroll">
-      <table id="seg-table">
-        <thead>
-          <tr>
-            <th style="width:38px">#</th>
-            <th style="width:130px">起止</th>
-            <th style="width:64px">时长</th>
-            <th style="width:70px">状态</th>
-            <th style="width:72px">试听</th>
-            <th>文本（可编辑）</th>
-            <th style="width:84px">语言</th>
-            <th style="width:96px">说话人</th>
-            <th style="width:90px">操作</th>
-          </tr>
-        </thead>
-        <tbody id="seg-tbody"></tbody>
-      </table>
+    <div class="tr-group">
+      <button id="btn-loop" class="chip" title="循环播放选区 (L)">🔁 循环</button>
+      <button id="btn-play-selection" class="chip" title="播放选区">▶ 选区</button>
     </div>
-    <div id="seg-empty" class="muted">在波形上拖拽出选区，点「＋ 选区加片段」加入训练片段</div>
-  </section>
+    <div class="tr-info">
+      <span>播放头 <b id="cur-time">0:00.0</b></span>
+      <span>选区 <b id="sel-info">—</b></span>
+      <span>时长 <b id="dur-info">—</b></span>
+    </div>
+    <div class="tr-group export">
+      <button id="btn-export-selection" class="btn primary">导出选区 <kbd>E</kbd></button>
+    </div>
+  </div>
 
   <!-- ⑤ 状态栏（任务进度） -->
   <footer id="statusbar">

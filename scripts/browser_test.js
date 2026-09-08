@@ -28,7 +28,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const errs = [];
       window.addEventListener('error', (e) => errs.push(String(e.message)));
       if (!vc) return { ok: false, reason: 'no __vc' };
-      if (!vc.state.items.length) return { ok: false, reason: 'no items' };
+      // 工作区结构
+      const wsEl = document.querySelector('#workspace');
+      const panels = Array.from(document.querySelectorAll('#workspace .panel')).map(el => el.id);
+      const winToggles = document.querySelectorAll("[data-act='panel-toggle']").length;
+      const layoutReset = !!document.querySelector("[data-act='layout-reset']");
+      const splitterCount = document.querySelectorAll('#workspace .splitter').length;
+      const out = {
+        ok: true,
+        boot: document.body.dataset.vc,
+        workspace: {
+          hasWorkspace: !!wsEl,
+          panels, winToggles, layoutReset, splitterCount,
+          transport: !!document.querySelector('#transport'),
+        },
+        errs: [],
+      };
+      if (!vc.state.items.length) { out.noItems = true; return out; }
       await vc.selectItem(vc.state.items[0]);
       await new Promise(r => setTimeout(r, 5000));
       // 穿透 shadow root 统计 canvas
@@ -42,22 +58,54 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       try { region = vc.state.regions.addRegion({ start: 0.5, end: 2.0, color: 'rgba(108,156,255,0.25)', drag: true, resize: true }); } catch (e) { errs.push('region:' + e.message); }
       let playErr = null;
       try { vc.state.ws.setTime(0); vc.state.ws.play(); await new Promise(r => setTimeout(r, 1000)); vc.state.ws.pause(); } catch (e) { playErr = String(e); }
-      return {
-        ok: true,
-        boot: document.body.dataset.vc,
-        canvases,
-        region: region ? { start: region.start, end: region.end } : null,
-        selection: vc.state.selection,
-        playErr, errs,
-        duration: vc.state.currentItem.duration,
-        videoVisible: !document.querySelector('#video-panel').classList.contains('hidden'),
-        hasItems: vc.state.items.length,
-      };
+      out.canvases = canvases;
+      out.region = region ? { start: region.start, end: region.end } : null;
+      out.selection = vc.state.selection;
+      out.playErr = playErr;
+      out.errs = errs;
+      out.duration = vc.state.currentItem.duration;
+      out.videoVisible = !document.querySelector('#video-panel').classList.contains('no-video') && !!document.querySelector('#video-preview').getAttribute('src');
+      out.hasItems = vc.state.items.length;
+      return out;
     })()`;
 
     const r = await send("Runtime.evaluate", { expression: expr, awaitPromise: true, returnByValue: true });
-    console.log(JSON.stringify(r.result && r.result.result && r.result.result.value, null, 2));
+    console.log("MAIN:", JSON.stringify(r.result && r.result.result && r.result.result.value, null, 2));
     if (r.result && r.result.exceptionDetails) console.log("EXC:", JSON.stringify(r.result.exceptionDetails));
+
+    // 布局持久化往返：隐藏 字幕 → 刷新 → 仍隐藏 → 恢复默认
+    const rH = await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      vc.workspace.togglePanel('sub');
+      return { hidden: vc.workspace.layout.hidden };
+    })()`, returnByValue: true });
+    console.log("HIDE:", JSON.stringify(rH.result && rH.result.result && rH.result.result.value));
+
+    await send("Page.reload", { ignoreCache: true });
+    await sleep(3500);
+    const rR = await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      const ws = document.querySelector('#workspace');
+      return {
+        boot: document.body.dataset.vc,
+        hidden: vc.workspace.layout.hidden,
+        subHiddenClass: document.querySelector('#subtitle-panel').classList.contains('panel-hidden'),
+        subTrack: getComputedStyle(ws).getPropertyValue('--w-sub').trim(),
+      };
+    })()`, returnByValue: true });
+    console.log("RELOAD:", JSON.stringify(rR.result && rR.result.result && rR.result.result.value));
+
+    const rS = await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      vc.workspace.resetLayout();
+      return {
+        hidden: vc.workspace.layout.hidden,
+        subVisible: !document.querySelector('#subtitle-panel').classList.contains('panel-hidden'),
+        subTrack: getComputedStyle(document.querySelector('#workspace')).getPropertyValue('--w-sub').trim(),
+      };
+    })()`, returnByValue: true });
+    console.log("RESET:", JSON.stringify(rS.result && rS.result.result && rS.result.result.value));
+
     ws.close();
   } finally { child.kill(); }
 })();
