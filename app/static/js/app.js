@@ -31,6 +31,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   };
 
   const SEG_MIN = 1.0, SEG_MAX = 15.0;
+  const SEEK_STEP = 5, SEEK_FAST = 15, VOL_STEP = 0.05; // 快退快进秒数 / 音量步进(5%)
 
   // ── 小工具 ─────────────────────────────────────────────
   const fmtT = (t) => {
@@ -446,6 +447,22 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#dur-info").textContent = fmtDur(state.currentItem.duration);
   }
   function updateSelUI() { $("#sel-info").textContent = fmtSel(state.selection); }
+
+  // 快退/快进：平移播放头（夹在 0 ~ 时长内），视频经 timeupdate 联动
+  function seekBy(delta) {
+    if (!state.ws) return toast("请先导入素材");
+    const dur = state.currentItem ? state.currentItem.duration : state.ws.getDuration();
+    state.ws.setTime(clampN(state.ws.getCurrentTime() + delta, 0, dur || 0));
+  }
+  // 音量 ±：波形与视频音量同步调整
+  function adjVolume(delta) {
+    if (!state.ws) return toast("请先导入素材");
+    const v = clampN(state.ws.getVolume() + delta, 0, 1);
+    state.ws.setVolume(v);
+    const vid = $("#video-preview");
+    if (vid) vid.volume = v;
+    toast("音量 " + Math.round(v * 100) + "%", 1200);
+  }
 
   function clearSelection() {
     if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} }
@@ -960,14 +977,29 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); importDialog(); return; }
+
+      // 小键盘快进：−/+快退/快进 15 秒；数字区方向键(2/4/6/8)等效主方向键（兼容 NumLock 开关）
+      const code = e.code || "";
+      if (code === "NumpadSubtract") { e.preventDefault(); seekBy(-SEEK_FAST); return; }
+      if (code === "NumpadAdd") { e.preventDefault(); seekBy(SEEK_FAST); return; }
+      if (code === "Numpad4" || code === "Numpad6") { e.preventDefault(); seekBy(code === "Numpad6" ? SEEK_STEP : -SEEK_STEP); return; }
+      if (code === "Numpad8" || code === "Numpad2") { e.preventDefault(); adjVolume(code === "Numpad8" ? VOL_STEP : -VOL_STEP); return; }
+
       switch (e.key) {
         case " ": e.preventDefault(); togglePlay(); break;
         case "l": case "L": toggleLoop(); break;
         case "e": case "E": openExportModal(); break;
         case "n": case "N": doDenoise(); break;
         case "v": case "V": doSeparate(); break;
-        case "ArrowRight": e.preventDefault(); nudgeSelection(0.05, e.shiftKey ? "move" : "end"); break;
-        case "ArrowLeft": e.preventDefault(); nudgeSelection(-0.05, e.shiftKey ? "move" : "end"); break;
+        case "ArrowLeft": case "ArrowRight": {
+          e.preventDefault();
+          const d = e.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
+          if (e.ctrlKey) nudgeSelection(d, "move");      // Ctrl+←→ 整体平移选区
+          else if (e.shiftKey) nudgeSelection(d, "end"); // Shift+←→ 微调选区终点边界
+          else seekBy(d);                                // ←→ 快退 / 快进 5 秒
+          break;
+        }
+        case "ArrowUp": case "ArrowDown": e.preventDefault(); adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
           if (focusedSeg != null && state.currentItem) { deleteSegment(Number(focusedSeg)); setSegFocus(null); }
           break;

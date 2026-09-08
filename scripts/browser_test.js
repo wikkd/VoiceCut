@@ -73,6 +73,30 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("MAIN:", JSON.stringify(r.result && r.result.result && r.result.result.value, null, 2));
     if (r.result && r.result.exceptionDetails) console.log("EXC:", JSON.stringify(r.result.exceptionDetails));
 
+    // 快捷键：←→ 快退/快进、↑↓ 音量、小键盘 −/+ 快进
+    const kd = (key, code, vk) => send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    const ku = (key, code, vk) => send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
+    const press = async (key, code, vk) => { await kd(key, code, vk); await ku(key, code, vk); };
+    const rK0 = await send("Runtime.evaluate", { expression: `(() => { window.__vc.state.ws.setVolume(0.5); window.__vc.state.ws.setTime(1); return window.__vc.state.ws.getVolume(); })()`, returnByValue: true });
+    const volBefore = rK0.result && rK0.result.result && rK0.result.result.value;
+    await press("ArrowRight", "ArrowRight", 39);       // +5s
+    const rK1 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
+    await press("ArrowLeft", "ArrowLeft", 37);         // -5s
+    const rK2 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
+    await press("ArrowUp", "ArrowUp", 38);             // +5%
+    const rK3 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getVolume()`, returnByValue: true });
+    await press("NumpadAdd", "NumpadAdd", 107);        // +15s
+    const rK4 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
+    await press("NumpadSubtract", "NumpadSubtract", 109); // -15s
+    const rK5 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
+    await press("ArrowDown", "ArrowDown", 40);         // -5%
+    const rK6 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getVolume()`, returnByValue: true });
+    const v = (o) => o.result && o.result.result && o.result.result.value;
+    const t1 = 1, t2 = v(rK1), t3 = v(rK2), vol1 = v(rK3), t4 = v(rK4), t5 = v(rK5), vol2 = v(rK6);
+    const keysOk = t2 > t1 + 1 && t3 < t2 - 1 && Math.abs(vol1 - (volBefore + 0.05)) < 0.001
+      && t4 > t3 + 1 && t5 < t4 - 1 && Math.abs(vol2 - volBefore) < 0.001;
+    console.log("KEYS:", JSON.stringify({ t1, t2, t3, volBefore, vol1, t4, t5, vol2, ok: keysOk }));
+
     // 布局持久化往返：隐藏 字幕 → 刷新 → 仍隐藏 → 恢复默认
     const rH = await send("Runtime.evaluate", { expression: `(() => {
       const vc = window.__vc;
