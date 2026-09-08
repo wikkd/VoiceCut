@@ -7,11 +7,11 @@
 | 阶段 | 验证内容 | 首次耗时 | 说明 |
 |---|---|---|---|
 | 1 | 全部依赖可导入 | 秒级 | flask/numpy/scipy/soundfile/noisereduce/yt_dlp/faster_whisper/torch/torchaudio/demucs |
-| 2 | CUDA / GPU | 秒级 | 校验 RTX 5060 Ti (Blackwell)，实际跑 matmul |
+| 2 | CUDA / GPU | 秒级 | 校验 RTX 5060 Ti (Blackwell sm_120)，实际跑 matmul |
 | 3 | ffmpeg 管线 | 秒级 | 合成测试视频 → 抽音频 → 波形峰值 → 导出选区 → 质量指标 → 去静音 |
 | 4 | noisereduce 降噪 | 数秒 | 正弦+白噪声 → 降噪后 RMS 显著下降 |
-| 5 | demucs GPU 分离 | 首次~10min | 首次自动下载 htdemucs (~300MB)，之后秒级 |
-| 6 | faster-whisper 转写 | 首次~2min | 用 tiny (~75MB) 验证转写管线 |
+| 5 | demucs GPU 分离 | 首次~3min | 首次自动下载 htdemucs (~80MB 缓存)，之后秒级 |
+| 6 | faster-whisper 转写 | 首次~1min | 用 tiny 验证转写管线 |
 
 用法：
 ```powershell
@@ -47,6 +47,23 @@
 - [ ] 导出训练集目录结构 + list.txt 格式校验
 - [ ] B 站链接打开 → 页面播放 → 边看边缓存 → 可剪辑
 
-## 4. 当前阶段测试记录
+## 4. 阶段 02 测试记录（2026-09-08）
 
-（阶段 02 环境安装与冒烟测试结果，执行后在此填写。）
+| 项 | 结果 | 备注 |
+|---|---|---|
+| 环境 | ✅ | D 盘 Python 3.12.14 + uv venv；FFmpeg 7.1 (D:\ffmpeg，无 ffprobe，走 stderr 回退) |
+| 依赖安装 | ✅ | flask 3.1.3 / numpy 2.5.3 / scipy 1.18.1 / soundfile 0.14.0 / noisereduce 3.0.3 / demucs 4.1.0 / yt-dlp 2026.8.19 / faster-whisper 1.2.1 |
+| GPU torch | ✅ | torch 2.11.0+cu128 (CUDA 12.8)，RTX 5060 Ti capability (12,0)=sm_120，matmul 实跑通过 |
+| 冒烟测试 | ✅ | 6/6 阶段 PASS（含 demucs GPU 分离、whisper 转写） |
+| 单元测试 | ✅ | 16/16 PASS |
+| 服务启动 | ✅ | /api/health /api/config /api/items / 静态页 全部 200 |
+| htdemucs 模型 | ✅ | 已缓存 ~/.cache/torch/hub/checkpoints (80MB) |
+| whisper tiny | ✅ | 已缓存（验证用）；medium 为默认，首次使用自动下载 |
+| 网络适配 | ✅ | huggingface.co 不可达 → 自动回退 hf-mirror.com + 禁用 Xet；torch/lib 加入 PATH 解决 cublas64_12.dll |
+
+### 已知环境要点
+
+- `D:\ffmpeg` 只有 ffmpeg.exe（无 ffprobe）→ `probe()` 已实现 stderr 回退，无需补装
+- huggingface.co 在本机网络超时 → `app/transcribe.py` 已内置镜像回退（`VC_HF_ENDPOINT` 可覆盖）
+- faster-whisper GPU 依赖 cublas → `app/transcribe.py` 启动时自动把 `torch/lib` 加入 PATH
+- 首次真实使用时：whisper **medium**（~1.5GB）与 demucs 模型会按需下载；已用 tiny 验证管线可通

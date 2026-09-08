@@ -1,7 +1,13 @@
-"""ffmpeg 进程封装：探测、运行、转码、抽流。"""
+"""ffmpeg 进程封装：探测、运行、转码、抽流。
+
+probe() 优先使用 ffprobe（JSON）；若环境无 ffprobe（如 D:\\ffmpeg 只有 ffmpeg.exe），
+回退到解析 `ffmpeg -i` 的 stderr。
+"""
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -29,7 +35,8 @@ def run_ffmpeg(
     """
     cmd = [_ffmpeg(), *args]
     if capture:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                              encoding="utf-8", errors="replace")
         if proc.returncode != 0:
             tail = (proc.stderr or "").strip().splitlines()[-12:]
             raise FFmpegError(f"ffmpeg 失败 (rc={proc.returncode}):\n" + "\n".join(tail))
@@ -37,16 +44,69 @@ def run_ffmpeg(
     return subprocess.Popen(cmd)
 
 
+# ── 探测 ─────────────────────────────────────────────────────
+
+_FFPROBE: str | None = None
+
+
+def _ffprobe_path() -> str | None:
+    """ffprobe 路径：与 ffmpeg 同目录优先，其次 PATH。找不到返回 None。"""
+    global _FFPROBE
+    if _FFPROBE is None:
+        p = Path(_ffmpeg()).with_name("ffprobe.exe")
+        if p.exists():
+            _FFPROBE = str(p)
+        else:
+            q = shutil.which("ffprobe")
+            _FFPROBE = q
+    return _FFPROBE
+
+
 def probe(path: str | Path) -> dict:
-    """返回媒体文件的 ffprobe JSON 元信息。"""
+    """返回媒体文件元信息 {"format": {...}, "streams": [...]}。"""
+    fp = _ffprobe_path()
+    if fp:
+        proc = subprocess.run(
+            [fp, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        if proc.returncode == 0:
+            info = json.loads(proc.stdout)
+            if info.get("format") or info.get("streams"):
+                return info
+    return _probe_via_ffmpeg(path)
+
+
+def _probe_via_ffmpeg(path: str | Path) -> dict:
+    """无 ffprobe 时，用 `ffmpeg -i` 的 stderr 解析基本元信息。"""
     proc = subprocess.run(
-        [str(Path(_ffmpeg()).with_name("ffprobe.exe")), "-v", "error", "-print_format", "json",
-         "-show_format", "-show_streams", str(path)],
+        [_ffmpeg(), "-hide_banner", "-i", str(path), "-f", "null", "-"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
-    if proc.returncode != 0:
-        raise FFmpegError(f"ffprobe 失败: {(proc.stderr or '').strip()[:500]}")
-    return json.loads(proc.stdout)
+    err = proc.stderr or ""
+
+    duration: float | None = None
+    m = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
+    if m:
+        hh, mm, ss = m.groups()
+        duration = float(hh) * 3600 + float(mm) * 60 + float(ss)
+
+    fmt_name: str | None = None
+    m = re.search(r"Input #\d+, ([^,]+), from '", err)
+    if m:
+        fmt_name = m.group(1).strip()
+
+    streams: list[dict] = []
+    for line in err.splitlines():
+        m = re.search(r"Stream #\S+: (Video|Audio): (\S+)", line)
+        if not m:
+            continue
+        st = {"codec_type": m.group(1).lower(), "codec_name": m.group(2)}
+        streams.append(st)
+
+    if duration is None:
+        raise FFmpegError(f"无法解析媒体信息: {(err or 'empty')[:300]}")
+    return {"format": {"duration": duration, "format_name": fmt_name}, "streams": streams}
 
 
 def media_duration(path: str | Path) -> float:
@@ -55,13 +115,14 @@ def media_duration(path: str | Path) -> float:
     try:
         return float(info["format"]["duration"])
     except (KeyError, ValueError):
-        # 回退：从音频/视频流读取时长
         for st in info.get("streams", []):
             d = st.get("duration")
             if d:
                 return float(d)
         raise FFmpegError("无法读取媒体时长")
 
+
+# ── 抽流 / 导出 / 处理 ───────────────────────────────────────
 
 def extract_audio(
     src: str | Path,
@@ -71,11 +132,7 @@ def extract_audio(
     channels: int = 1,
     codec: str = "pcm_s16le",
 ) -> Path:
-    """把任意媒体（视频/音频）转成 PCM WAV，供波形计算与处理。
-
-    - 默认 48kHz 单声道 16bit PCM（内部工作格式）。
-    - 训练集导出再统一重采样到 32kHz。
-    """
+    """把任意媒体（视频/音频）转成 PCM WAV，供波形计算与处理。"""
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     run_ffmpeg([
@@ -88,10 +145,7 @@ def extract_audio(
 
 
 def remux_preview(src: str | Path, dst: str | Path) -> Path:
-    """把视频无损转封装为浏览器可播的 MP4 (H.264/AAC)。
-
-    `-c copy` 失败时回退转码。用于页面内视频预览。
-    """
+    """把视频无损转封装为浏览器可播的 MP4 (H.264/AAC)。失败回退转码。"""
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -149,13 +203,12 @@ def trim_silence(
     """去除头尾静音（ffmpeg silenceremove + 反向再处理一次）。"""
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
-    pad_s = f"{pad:.3f}"
     run_ffmpeg([
         "-y", "-i", str(src),
         "-af",
         f"silenceremove=start_periods=1:start_threshold={silence_threshold}:start_silence={min_silence:.3f},"
         f"areverse,silenceremove=start_periods=1:start_threshold={silence_threshold}:start_silence={min_silence:.3f},"
-        f"areverse,apad=pad_dur={pad_s}:pad_dur_type=end",
+        f"areverse",
         "-ar", str(sample_rate), "-ac", "1",
         str(dst),
     ])

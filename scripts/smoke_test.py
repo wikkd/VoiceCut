@@ -28,6 +28,14 @@ if str(ROOT) not in sys.path:
 from app.config import find_ffmpeg  # noqa: E402
 
 
+def _init_console() -> None:
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
+
 def stage(name: str) -> None:
     print(f"\n=== [{name}] ===================================================", flush=True)
 
@@ -45,7 +53,7 @@ def run(name: str, fn, *args, **kwargs) -> None:
 
 # ── 阶段 1：依赖导入 ─────────────────────────────────────────
 
-def check_imports() -> None:
+def check_imports(tmp: Path) -> None:
     mods = ["flask", "numpy", "scipy", "soundfile", "noisereduce",
             "yt_dlp", "faster_whisper", "torch", "torchaudio", "demucs"]
     import importlib
@@ -57,7 +65,7 @@ def check_imports() -> None:
 
 # ── 阶段 2：CUDA ─────────────────────────────────────────────
 
-def check_cuda() -> None:
+def check_cuda(tmp: Path) -> None:
     import torch
 
     print(f"  torch={torch.__version__}  cuda_build={torch.version.cuda}")
@@ -198,6 +206,7 @@ def main() -> None:
     parser.add_argument("--stage", type=int, choices=sorted(STAGES), help="只跑指定阶段")
     args = parser.parse_args()
 
+    _init_console()
     print(f"VoiceCut smoke test — Python {sys.version.split()[0]}")
     with tempfile.TemporaryDirectory(prefix="vc-smoke-") as td:
         tmp = Path(td)

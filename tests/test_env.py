@@ -1,9 +1,14 @@
 """环境冒烟测试：依赖导入 / CUDA(Blackwell) / 关键库可用性。"""
 from __future__ import annotations
 
+import importlib.metadata as md
 from pathlib import Path
 
 import pytest
+
+
+def _ver(pkg: str) -> str:
+    return md.version(pkg)
 
 
 def test_core_imports() -> None:
@@ -17,12 +22,13 @@ def test_core_imports() -> None:
     import torch
     import torchaudio
 
-    assert flask.__version__ >= "3"
-    assert noisereduce.__version__  # noqa: B009
+    assert float(_ver("flask").split(".")[0]) >= 3
+    assert noisereduce is not None
+    assert _ver("noisereduce") >= "3"
 
     # demucs 依赖的音频库
     import demucs  # noqa: F401
-    assert demucs.__version__  # noqa: B009
+    assert _ver("demucs") >= "4"
 
 
 def test_ffmpeg_found() -> None:
@@ -30,8 +36,8 @@ def test_ffmpeg_found() -> None:
 
     p = find_ffmpeg()
     assert p.lower().endswith("ffmpeg.exe"), p
-    # 配套 ffprobe 存在
-    assert Path(p).with_name("ffprobe.exe").exists()
+    assert Path(p).exists()
+    # 注意: 本机 D:\ffmpeg 无 ffprobe，probe() 走 ffmpeg stderr 回退（test_ffmpeg_util 覆盖）
 
 
 def test_torch_cuda_blackwell() -> None:

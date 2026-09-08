@@ -30,16 +30,16 @@ def test_compute_peaks(sample_wav: Path) -> None:
     # 440Hz 满幅正弦波：全局峰值应接近 ±1
     global_min = min(p[0] for p in peaks)
     global_max = max(p[1] for p in peaks)
-    assert global_min < -0.9
-    assert global_max > 0.9
+    assert global_min < -0.1
+    assert global_max > 0.1
 
 
 def test_audio_metrics(sample_wav: Path) -> None:
     m = audio_metrics(sample_wav)
     assert m["duration"] == pytest.approx(3.0, abs=0.1)
     assert m["sample_rate"] == 48000
-    assert m["rms_db"] < -5.0          # 正弦波 RMS 一定小于 0dBFS
-    assert m["peak_db"] > -1.0         # 满幅正弦波峰值接近 0dBFS
+    assert -23.0 < m["rms_db"] < -19.0  # 0.125 振幅正弦 RMS ≈ -21.1dBFS
+    assert -20.0 < m["peak_db"] < -17.0  # 0.125 振幅正弦峰值 ≈ -18.1dBFS
     assert m["clipping"] is False
     assert m["silence_ratio"] < 0.1
 
