@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceCut</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">VoiceCut</span>
+    <span class="stage-badge">环境就绪</span>
+  </header>
+  <main class="placeholder">
+    <h1>VoiceCut — GPT-SoVITS 训练集制作工具</h1>
+    <p>阶段 01/02 已完成：git 环境 / 项目结构 / 开发文档 / 环境安装与冒烟测试。</p>
+    <p class="muted">核心管线（导入 / 波形 / 选区 / 播放 / 导出）将在下一阶段实现。</p>
+    <div id="health" class="muted">检测后端…</div>
+  </main>
+  <script>
+    fetch("/api/health").then(r => r.json()).then(d => {
+      document.getElementById("health").textContent =
+        "后端 OK · version " + d.version + " · " + d.stage;
+    }).catch(() => {
+      document.getElementById("health").textContent = "后端连接失败";
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+# VoiceCut 依赖清单
+# 安装方式: uv pip install --python .venv\Scripts\python.exe -r requirements.txt
+# 说明: demucs 会自动拉取 GPU 版 torch(Windows PyPI 默认即 CUDA 构建), 无需单独装 torch
+
+flask>=3.0,<4
+soundfile>=0.12
+numpy>=1.26
+scipy>=1.11
+noisereduce>=3.0
+demucs>=4.0
+yt-dlp>=2025.1
+faster-whisper>=1.0
