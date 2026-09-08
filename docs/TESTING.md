@@ -58,7 +58,7 @@
 | 单元测试 | ✅ | 16/16 PASS |
 | 服务启动 | ✅ | /api/health /api/config /api/items / 静态页 全部 200 |
 | htdemucs 模型 | ✅ | 已缓存 ~/.cache/torch/hub/checkpoints (80MB) |
-| whisper tiny | ✅ | 已缓存（验证用）；medium 为默认，首次使用自动下载 |
+| whisper 模型 | ✅ | tiny + **medium**（默认档，~1.5GB）均已预下载；large-v3 按需下载 |
 | 网络适配 | ✅ | huggingface.co 不可达 → 自动回退 hf-mirror.com + 禁用 Xet；torch/lib 加入 PATH 解决 cublas64_12.dll |
 
 ### 已知环境要点
@@ -66,4 +66,4 @@
 - `D:\ffmpeg` 只有 ffmpeg.exe（无 ffprobe）→ `probe()` 已实现 stderr 回退，无需补装
 - huggingface.co 在本机网络超时 → `app/transcribe.py` 已内置镜像回退（`VC_HF_ENDPOINT` 可覆盖）
 - faster-whisper GPU 依赖 cublas → `app/transcribe.py` 启动时自动把 `torch/lib` 加入 PATH
-- 首次真实使用时：whisper **medium**（~1.5GB）与 demucs 模型会按需下载；已用 tiny 验证管线可通
+- whisper **medium**（默认档，~1.5GB）已预下载并 GPU 实跑通过；large-v3 按需下载
