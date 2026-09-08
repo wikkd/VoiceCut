@@ -288,6 +288,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     state.zoomLevel = Math.max(0, Math.min(200, lv));
     state.ws.zoom(state.zoomLevel);
   }
+  function zoomIn() { zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5); }
+  function zoomOut() { zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5); }
   function nudgeSelection(delta, mode) {
     if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先拖拽出选区");
     let { start, end } = state.selection;
@@ -746,6 +748,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   // ── 快捷键 ─────────────────────────────────────────────
   function setupShortcuts() {
     window.addEventListener("keydown", (e) => {
+      // Ctrl/Cmd + +/-/0: 屏蔽浏览器页面缩放，改为时间轴缩放
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key;
+        if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); zoomIn(); return; }
+        if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); zoomOut(); return; }
+        if (k === "0") { e.preventDefault(); zoomSet(0); return; }
+      }
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); importDialog(); return; }
@@ -793,8 +802,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#btn-loop").addEventListener("click", toggleLoop);
     $("#btn-play-selection").addEventListener("click", playSelection);
     $("#btn-export-selection").addEventListener("click", openExportModal);
-    $("#btn-zoom-in").addEventListener("click", () => zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5));
-    $("#btn-zoom-out").addEventListener("click", () => zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5));
+    $("#btn-zoom-in").addEventListener("click", zoomIn);
+    $("#btn-zoom-out").addEventListener("click", zoomOut);
     $("#btn-fit").addEventListener("click", () => zoomSet(0));
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap").classList.toggle("hidden", !e.target.checked));
     $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
