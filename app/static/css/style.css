@@ -237,3 +237,9 @@ tr.seg-row.bad { background: rgba(255, 107, 107, 0.08); }
 .tag.ok { background: rgba(70,192,106,0.18); color: var(--ok); }
 .tag.warn { background: rgba(255,180,84,0.18); color: var(--warn); }
 .tag.bad { background: rgba(255,107,107,0.18); color: var(--danger); }
+
+/* --- collapsed control styles --- */
+.menu-title.chip { background: var(--panel-2); }
+.seg-toolbar .menu { margin-left: auto; }
+.seg-toolbar .menu-items { left: auto; right: 0; min-width: 170px; }
+.sub-toolbar .menu .menu-items { min-width: 220px; }

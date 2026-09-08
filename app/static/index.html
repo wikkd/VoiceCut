@@ -41,7 +41,9 @@
     <div class="menu" data-menu="view">
       <button class="menu-title">视图</button>
       <div class="menu-items">
-        <button data-act="fit">适配窗口</button>
+        <button data-act="zoom-in">放大 <kbd>Ctrl++</kbd></button>
+        <button data-act="zoom-out">缩小 <kbd>Ctrl+-</kbd></button>
+        <button data-act="fit">适配窗口 <kbd>Ctrl+0</kbd></button>
         <button data-act="zoom-sel">缩放到选区</button>
         <button data-act="toggle-minimap">总览条 开关</button>
       </div>
@@ -60,7 +62,6 @@
     <button id="btn-bilibili" class="btn">🔗 从 B 站打开</button>
     <button id="btn-export-dataset" class="btn">📦 导出训练集</button>
     <span class="spacer"></span>
-    <button id="btn-play" class="btn round" title="播放/暂停 (空格)">▶</button>
   </div>
 
   <!-- ③ 主区 -->
@@ -79,9 +80,6 @@
         <div id="timeline"></div>
         <div id="waveform"></div>
         <div id="wave-tools">
-          <button id="btn-zoom-out" class="chip" title="缩小">−</button>
-          <button id="btn-zoom-in" class="chip" title="放大">＋</button>
-          <button id="btn-fit" class="chip">适配窗口</button>
           <label class="chip toggle"><input type="checkbox" id="minimap-toggle" checked> 总览条</label>
         </div>
         <div id="minimap"></div>
@@ -91,10 +89,15 @@
       <div id="subtitle-panel">
         <div class="sub-toolbar">
           <span class="panel-title">实时字幕 <small id="sub-count"></small></span>
-          <button id="btn-sub-open" class="chip">📄 加载字幕</button>
-          <button id="btn-sub-generate" class="chip">🎙 生成字幕</button>
+          <div class="menu sub-menu">
+            <button class="menu-title chip">字幕 ▾</button>
+            <div class="menu-items">
+              <button id="btn-sub-open">📄 加载字幕文件…</button>
+              <button id="btn-sub-generate">🎙 生成字幕（Whisper）</button>
+            </div>
+          </div>
           <button id="btn-sub-add" class="chip primary">＋ 当前字幕加片段</button>
-          <button id="btn-sub-toggle" class="chip">收起</button>
+          <button id="btn-sub-toggle" class="chip">▾ 收起</button>
         </div>
         <div id="sub-current" class="sub-current">—</div>
         <div id="sub-scroll">
@@ -123,15 +126,6 @@
           <span>时长 <b id="dur-info">—</b></span>
         </div>
         <div class="tr-group export">
-          <select id="fmt-select" title="导出格式">
-            <option value="wav" selected>WAV</option>
-            <option value="mp3">MP3</option>
-          </select>
-          <select id="sr-select" title="采样率">
-            <option value="32000">32 kHz</option>
-            <option value="44100" selected>44.1 kHz</option>
-            <option value="48000">48 kHz</option>
-          </select>
           <button id="btn-export-selection" class="btn primary">导出选区 <kbd>E</kbd></button>
         </div>
       </div>
@@ -144,8 +138,12 @@
       <span class="panel-title">片段列表 <small id="seg-count"></small></span>
       <button id="btn-add-seg" class="chip">＋ 选区加片段</button>
       <button id="btn-transcribe" class="chip">🔤 批量转写</button>
-      <button id="btn-dataset-export" class="chip primary">📦 导出训练集</button>
-      <button id="btn-clear-segs" class="chip danger">清空片段</button>
+      <div class="menu seg-menu">
+        <button class="menu-title chip" title="更多操作">⋯</button>
+        <div class="menu-items">
+          <button id="btn-clear-segs">清空片段…</button>
+        </div>
+      </div>
     </div>
     <div id="seg-scroll">
       <table id="seg-table">

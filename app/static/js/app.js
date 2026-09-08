@@ -244,7 +244,6 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function togglePlay() { if (state.ws) { if (state.playing) state.ws.pause(); else state.ws.play(); } }
   function updatePlayUI() {
     const icon = state.playing ? "⏸" : "▶";
-    $("#btn-play").textContent = icon;
     $("#btn-play2").textContent = icon;
     $("#btn-loop").classList.toggle("primary", state.loop);
     $("#btn-loop").textContent = state.loop ? "🔁 循环中" : "🔁 循环";
@@ -494,7 +493,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function toggleSubPanel() {
     state.subCollapsed = !state.subCollapsed;
     $("#subtitle-panel").classList.toggle("collapsed", state.subCollapsed);
-    $("#btn-sub-toggle").textContent = state.subCollapsed ? "展开" : "收起";
+    $("#btn-sub-toggle").textContent = state.subCollapsed ? "▴ 展开" : "▾ 收起";
   }
 
   let focusedSeg = null;
@@ -764,6 +763,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       "transcribe": openTranscribeModal,
       "dataset-export": openDatasetModal,
       "validate": renderSegments,
+      "zoom-in": zoomIn,
+      "zoom-out": zoomOut,
       "fit": () => zoomSet(0),
       "zoom-sel": () => { if (state.selection) { zoomSet(0); state.ws.setTime(state.selection.start); } },
       "toggle-minimap": () => $("#minimap").classList.toggle("hidden"),
@@ -824,16 +825,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#btn-import").addEventListener("click", importDialog);
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
     $("#btn-export-dataset").addEventListener("click", openDatasetModal);
-    $("#btn-play").addEventListener("click", togglePlay);
     $("#btn-play2").addEventListener("click", togglePlay);
     $("#btn-prev").addEventListener("click", () => state.ws && state.ws.setTime(0));
     $("#btn-next").addEventListener("click", () => state.ws && state.ws.setTime(state.currentItem ? state.currentItem.duration : 0));
     $("#btn-loop").addEventListener("click", toggleLoop);
     $("#btn-play-selection").addEventListener("click", playSelection);
     $("#btn-export-selection").addEventListener("click", openExportModal);
-    $("#btn-zoom-in").addEventListener("click", zoomIn);
-    $("#btn-zoom-out").addEventListener("click", zoomOut);
-    $("#btn-fit").addEventListener("click", () => zoomSet(0));
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap").classList.toggle("hidden", !e.target.checked));
     $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
     $("#btn-clear-segs").addEventListener("click", () => {
@@ -841,7 +838,6 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       if (confirm("清空当前素材的全部片段？")) { segsFor(state.currentItem.id).length = 0; renderSegments(); }
     });
     $("#btn-transcribe").addEventListener("click", openTranscribeModal);
-    $("#btn-dataset-export").addEventListener("click", openDatasetModal);
 
     $("#bb-open").addEventListener("click", doBilibiliOpen);
     $("#tr-start").addEventListener("click", doTranscribe);
