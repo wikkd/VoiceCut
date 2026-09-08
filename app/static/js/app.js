@@ -857,6 +857,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     });
     vp.addEventListener("play", () => { videoToAudioSync(); if (state.ws) state.ws.play(); });
     vp.addEventListener("pause", () => { if (state.ws) state.ws.pause(); });
+    // 屏蔽 Ctrl+滚轮 页面缩放，改为时间轴缩放
+    window.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (!state.ws) return;
+      if (e.deltaY < 0) zoomIn(); else zoomOut();
+    }, { passive: false });
 
     $$(".modal-mask").forEach((mask) => mask.addEventListener("click", (e) => {
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
