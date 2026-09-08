@@ -24,10 +24,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     pollTimer: null,
     auditioning: null,         // {start, end, itemId}
     zoomLevel: 0,              // 0=fit, >=1 缩放级别
+    selectionCreatedAt: 0,     // 最近一次创建选区的时间(ms)，用于右键快速取消
+    dragRegion: null,          // 正在拖拽（未松手）的选区
     bootErr: null,
   };
 
   const SEG_MIN = 1.0, SEG_MAX = 15.0;
+  const SEL_CANCEL_MS = 3000;   // 左键选出选区后，此毫秒内右键可取消
 
   // ── 小工具 ─────────────────────────────────────────────
   const fmtT = (t) => {
@@ -126,6 +129,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function loadWavesurfer(item, peaks) {
     if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
     state.selection = null; state.selectionRegion = null;
+    state.selectionCreatedAt = 0; state.dragRegion = null;
     $("#empty-state").classList.add("hidden");
 
     const timeline = Timeline.create({ container: "#timeline", height: 24 });
@@ -152,11 +156,15 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
     // 选区
     state.regions.enableDragSelection({ color: "rgba(108,156,255,0.25)" });
+    // 拖拽进行中（未松手）会先触发 region-initialized，记录以便右键取消
+    state.regions.on("region-initialized", (region) => { state.dragRegion = region; });
     state.regions.on("region-created", (region) => {
+      state.dragRegion = null;
       if (state.selectionRegion && state.selectionRegion !== region) {
         try { state.selectionRegion.remove(); } catch (e) {}
       }
       state.selectionRegion = region;
+      state.selectionCreatedAt = Date.now();
       state.selection = { start: region.start, end: region.end };
       updateSelUI();
     });
@@ -212,6 +220,15 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#dur-info").textContent = fmtDur(state.currentItem.duration);
   }
   function updateSelUI() { $("#sel-info").textContent = fmtSel(state.selection); }
+
+  function clearSelection() {
+    if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} }
+    state.selectionRegion = null;
+    state.selection = null;
+    state.selectionCreatedAt = 0;
+    state.dragRegion = null;
+    updateSelUI();
+  }
 
   // 视频同步
   let lastVidSync = 0;
@@ -663,6 +680,26 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
     }));
     $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter") doBilibiliOpen(); });
+    // 左键选区后短时间内右键可取消（含拖拽中右键取消本次拖拽）
+    $("#waveform").addEventListener("contextmenu", (e) => {
+      if (state.dragRegion) {
+        e.preventDefault();
+        try { state.dragRegion.remove(); } catch (err) {}
+        if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (err) {} }
+        state.dragRegion = null;
+        state.selectionRegion = null;
+        state.selection = null;
+        state.selectionCreatedAt = 0;
+        updateSelUI();
+        toast("已取消选区");
+        return;
+      }
+      if (!state.selection || !state.selectionRegion) return;
+      if (!state.selectionCreatedAt || Date.now() - state.selectionCreatedAt > SEL_CANCEL_MS) return;
+      e.preventDefault();
+      clearSelection();
+      toast("已取消选区");
+    });
   }
 
   // ── 启动 ───────────────────────────────────────────────
