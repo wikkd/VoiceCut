@@ -67,3 +67,27 @@
 - huggingface.co 在本机网络超时 → `app/transcribe.py` 已内置镜像回退（`VC_HF_ENDPOINT` 可覆盖）
 - faster-whisper GPU 依赖 cublas → `app/transcribe.py` 启动时自动把 `torch/lib` 加入 PATH
 - whisper **medium**（默认档，~1.5GB）已预下载并 GPU 实跑通过；large-v3 按需下载
+
+## 5. 阶段 03~06 功能验证记录（2026-09-08）
+
+**后端 E2E（scripts/e2e_test.py，对运行中的服务全管线）**
+- ✅ 导入（multipart → 后台任务 → 素材注册）  ✅ peaks / audio-Range(206) / video-Range(206)
+- ✅ 导出 wav + mp3（命名 `原文件名_MM-SS.s-MM-SS.s.ext`，重名自动加序号，/api/files 下载）
+- ✅ trim / denoise 后台任务产出新素材
+- ✅ 数据集导出：001.wav + 001.txt + list.txt（UTF-8，`路径|speaker|JP|文本`）；空文本片段正确跳过
+- ✅ 转写（medium，返回文本数组）
+
+**前端浏览器验证（scripts/browser_test.js，CDP 无头 Chrome）**
+- ✅ 页面 boot（data-vc=ok）、后端连通
+- ✅ wavesurfer v7.12.11 ESM 渲染：波形/进度/时间轴/总览条 **4 个 canvas 位于 shadow DOM**（用 `document.querySelector('canvas')` 查不到，须穿透 shadowRoot）
+- ✅ 程序化选区 region → selection 状态同步；播放 1s 无错误；视频预览窗显示
+
+**关键实现要点 / 坑**
+- wavesurfer 必须用 **ESM 构建**（`wavesurfer.esm.js` + `plugins/*.esm.js`）；官方同时发布的 `*.min.js` 是 **UMD 且渲染失效**（decode 成功但 peaks 为空、不出 canvas），勿回退。
+- 预计算 peaks 需传**平铺单声道数组**（`[v0,v1,...]`），min/max 对格式会被误当作 2 样本声道；后端 `compute_peaks` 仍返回 min/max 对，前端转换。
+- 本机 `D:\ffmpeg` 无 ffprobe → probe 走 stderr 回退（已在阶段02固化）。
+
+**待人工回归（真实场景）**
+- 真实 B 站链接打开（yt-dlp 解析 + 代理播放 + 音频后台获取）
+- 真实拖拽导入 / 鼠标拖选选区 / 手柄微调 / 快捷键手感
+- 长视频（1h+）波形加载与拖动 seek

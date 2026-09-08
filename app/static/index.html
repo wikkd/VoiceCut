@@ -3,27 +3,269 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VoiceCut</title>
+  <title>VoiceCut — GPT-SoVITS 训练集制作工具</title>
   <link rel="stylesheet" href="/static/css/style.css">
 </head>
-<body>
-  <header class="topbar">
+<body data-vc="booting">
+
+  <!-- ① 菜单栏 -->
+  <nav id="menubar">
     <span class="brand">VoiceCut</span>
-    <span class="stage-badge">环境就绪</span>
-  </header>
-  <main class="placeholder">
-    <h1>VoiceCut — GPT-SoVITS 训练集制作工具</h1>
-    <p>阶段 01/02 已完成：git 环境 / 项目结构 / 开发文档 / 环境安装与冒烟测试。</p>
-    <p class="muted">核心管线（导入 / 波形 / 选区 / 播放 / 导出）将在下一阶段实现。</p>
-    <div id="health" class="muted">检测后端…</div>
-  </main>
-  <script>
-    fetch("/api/health").then(r => r.json()).then(d => {
-      document.getElementById("health").textContent =
-        "后端 OK · version " + d.version + " · " + d.stage;
-    }).catch(() => {
-      document.getElementById("health").textContent = "后端连接失败";
-    });
-  </script>
+    <div class="menu" data-menu="file">
+      <button class="menu-title">文件</button>
+      <div class="menu-items">
+        <button data-act="import">导入文件… <kbd>Ctrl+O</kbd></button>
+        <button data-act="bilibili">从 B 站打开…</button>
+        <div class="menu-sep"></div>
+        <button data-act="export-selection">导出选区 <kbd>E</kbd></button>
+      </div>
+    </div>
+    <div class="menu" data-menu="audio">
+      <button class="menu-title">音频</button>
+      <div class="menu-items">
+        <button data-act="denoise">降噪 <kbd>N</kbd></button>
+        <button data-act="separate">分离人声 <kbd>V</kbd></button>
+        <div class="menu-sep"></div>
+        <button data-act="trim">去头尾静音</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="dataset">
+      <button class="menu-title">数据集</button>
+      <div class="menu-items">
+        <button data-act="transcribe">批量转写…</button>
+        <button data-act="dataset-export">导出训练集…</button>
+        <div class="menu-sep"></div>
+        <button data-act="validate">质量校验</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="view">
+      <button class="menu-title">视图</button>
+      <div class="menu-items">
+        <button data-act="fit">适配窗口</button>
+        <button data-act="zoom-sel">缩放到选区</button>
+        <button data-act="toggle-minimap">总览条 开关</button>
+      </div>
+    </div>
+    <div class="menu" data-menu="help">
+      <button class="menu-title">帮助</button>
+      <div class="menu-items">
+        <button data-act="help">快捷键说明</button>
+      </div>
+    </div>
+  </nav>
+
+  <!-- ② 高频工具栏 -->
+  <div id="toolbar">
+    <button id="btn-import" class="btn primary">📂 导入文件</button>
+    <button id="btn-bilibili" class="btn">🔗 从 B 站打开</button>
+    <button id="btn-export-dataset" class="btn">📦 导出训练集</button>
+    <span class="spacer"></span>
+    <button id="btn-play" class="btn round" title="播放/暂停 (空格)">▶</button>
+  </div>
+
+  <!-- ③ 主区 -->
+  <div id="main">
+    <aside id="media-panel">
+      <div class="panel-title">素材列表</div>
+      <ul id="media-list"></ul>
+      <div id="media-empty" class="muted">拖拽文件到窗口<br>或点「导入文件」</div>
+    </aside>
+
+    <section id="center">
+      <div id="video-panel" class="hidden">
+        <video id="video-preview" muted playsinline controls></video>
+      </div>
+      <div id="wave-box">
+        <div id="timeline"></div>
+        <div id="waveform"></div>
+        <div id="wave-tools">
+          <button id="btn-zoom-out" class="chip" title="缩小">−</button>
+          <button id="btn-zoom-in" class="chip" title="放大">＋</button>
+          <button id="btn-fit" class="chip">适配窗口</button>
+          <label class="chip toggle"><input type="checkbox" id="minimap-toggle" checked> 总览条</label>
+        </div>
+        <div id="minimap"></div>
+        <div id="empty-state" class="muted">导入文件后在此显示波形</div>
+      </div>
+
+      <div id="transport">
+        <div class="tr-group">
+          <button id="btn-prev" class="chip" title="回到开头">⏮</button>
+          <button id="btn-play2" class="chip big" title="播放/暂停 (空格)">▶</button>
+          <button id="btn-next" class="chip" title="跳到结尾">⏭</button>
+        </div>
+        <div class="tr-group">
+          <button id="btn-loop" class="chip" title="循环播放选区 (L)">🔁 循环</button>
+          <button id="btn-play-selection" class="chip" title="播放选区">▶ 选区</button>
+        </div>
+        <div class="tr-info">
+          <span>播放头 <b id="cur-time">0:00.0</b></span>
+          <span>选区 <b id="sel-info">—</b></span>
+          <span>时长 <b id="dur-info">—</b></span>
+        </div>
+        <div class="tr-group export">
+          <select id="fmt-select" title="导出格式">
+            <option value="wav" selected>WAV</option>
+            <option value="mp3">MP3</option>
+          </select>
+          <select id="sr-select" title="采样率">
+            <option value="32000">32 kHz</option>
+            <option value="44100" selected>44.1 kHz</option>
+            <option value="48000">48 kHz</option>
+          </select>
+          <button id="btn-export-selection" class="btn primary">导出选区 <kbd>E</kbd></button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ④ 片段列表 -->
+  <section id="segments-panel">
+    <div class="seg-toolbar">
+      <span class="panel-title">片段列表 <small id="seg-count"></small></span>
+      <button id="btn-add-seg" class="chip">＋ 选区加片段</button>
+      <button id="btn-transcribe" class="chip">🔤 批量转写</button>
+      <button id="btn-dataset-export" class="chip primary">📦 导出训练集</button>
+      <button id="btn-clear-segs" class="chip danger">清空片段</button>
+    </div>
+    <div id="seg-scroll">
+      <table id="seg-table">
+        <thead>
+          <tr>
+            <th style="width:38px">#</th>
+            <th style="width:130px">起止</th>
+            <th style="width:64px">时长</th>
+            <th style="width:70px">状态</th>
+            <th style="width:72px">试听</th>
+            <th>文本（可编辑）</th>
+            <th style="width:84px">语言</th>
+            <th style="width:96px">说话人</th>
+            <th style="width:90px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="seg-tbody"></tbody>
+      </table>
+    </div>
+    <div id="seg-empty" class="muted">在波形上拖拽出选区，点「＋ 选区加片段」加入训练片段</div>
+  </section>
+
+  <!-- ⑤ 状态栏（任务进度） -->
+  <footer id="statusbar">
+    <div id="task-info">就绪</div>
+    <div id="task-bar-wrap" class="hidden"><div id="task-bar"></div></div>
+    <span id="boot-state">连接后端…</span>
+  </footer>
+
+  <!-- ⑥ 弹窗 -->
+  <div id="modal-bilibili" class="modal-mask hidden">
+    <div class="modal">
+      <h3>从 B 站打开</h3>
+      <p class="muted">免登录直链（通常 360p/480p）。页面内直接播放，音频后台获取后即可剪辑。</p>
+      <input id="bb-url" type="text" placeholder="https://www.bilibili.com/video/BV…">
+      <div class="modal-actions">
+        <button class="btn" data-close>取消</button>
+        <button class="btn primary" id="bb-open">打开</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-transcribe" class="modal-mask hidden">
+    <div class="modal">
+      <h3>批量转写（日语）</h3>
+      <p class="muted">对片段列表逐条转写并回填文本。仅处理文本为空的片段。</p>
+      <label>转写模型
+        <select id="tr-model">
+          <option value="medium" selected>medium（推荐，已下载）</option>
+          <option value="large-v3">large-v3（更准，首次需下载 ~3GB）</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="btn" data-close>取消</button>
+        <button class="btn primary" id="tr-start">开始转写</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-dataset" class="modal-mask hidden">
+    <div class="modal">
+      <h3>导出训练集（GPT-SoVITS）</h3>
+      <p class="muted">生成 001.wav + 001.txt + list.txt，32kHz 单声道，自动去静音 + 响度标准化；空文本/过短片段跳过。</p>
+      <label>说话人
+        <input id="ds-speaker" type="text" value="speaker" placeholder="speaker">
+      </label>
+      <label>默认语言
+        <select id="ds-language">
+          <option value="JP" selected>JP</option>
+          <option value="ZH">ZH</option>
+          <option value="EN">EN</option>
+        </select>
+      </label>
+      <label>输出目录（可选）
+        <input id="ds-outdir" type="text" placeholder="留空=自动(workdir/datasets)">
+      </label>
+      <div class="modal-actions">
+        <button class="btn" data-close>取消</button>
+        <button class="btn primary" id="ds-start">导出</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-export" class="modal-mask hidden">
+    <div class="modal">
+      <h3>导出选区</h3>
+      <p class="muted">导出当前选区 [<b id="ex-range"></b>] 为独立文件。</p>
+      <label>格式
+        <select id="ex-fmt">
+          <option value="wav" selected>WAV（推荐）</option>
+          <option value="mp3">MP3</option>
+        </select>
+      </label>
+      <label>采样率
+        <select id="ex-sr">
+          <option value="32000">32 kHz</option>
+          <option value="44100" selected>44.1 kHz</option>
+          <option value="48000">48 kHz</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="btn" data-close>取消</button>
+        <button class="btn primary" id="ex-start">导出</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-result" class="modal-mask hidden">
+    <div class="modal">
+      <h3 id="result-title">结果</h3>
+      <pre id="result-body" class="result-pre"></pre>
+      <div class="modal-actions">
+        <button class="btn primary" data-close>关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="modal-help" class="modal-mask hidden">
+    <div class="modal wide">
+      <h3>快捷键</h3>
+      <table class="help-table">
+        <tr><td>空格</td><td>播放 / 暂停</td></tr>
+        <tr><td>L</td><td>循环播放选区</td></tr>
+        <tr><td>E</td><td>导出选区</td></tr>
+        <tr><td>N</td><td>降噪</td></tr>
+        <tr><td>V</td><td>人声分离</td></tr>
+        <tr><td>← →</td><td>微调选区终点边界</td></tr>
+        <tr><td>Shift+← →</td><td>整体平移选区</td></tr>
+        <tr><td>Ctrl+O</td><td>导入文件</td></tr>
+        <tr><td>Delete</td><td>删除选中片段行</td></tr>
+      </table>
+      <div class="modal-actions">
+        <button class="btn primary" data-close>关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="file-input" multiple accept=".mp4,.mkv,.avi,.mov,.flv,.wav,.mp3,.flac,.aac,.ogg,.m4a">
+
+  <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>
