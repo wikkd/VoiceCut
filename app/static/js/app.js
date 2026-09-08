@@ -112,6 +112,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (item.video_url) {
       vp.classList.remove("hidden");
       if (v.src !== location.origin + item.video_url) v.src = item.video_url;
+      videoSeekByAudio = false;
       v.load();
     } else {
       vp.classList.add("hidden");
@@ -264,7 +265,21 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const now = performance.now();
     if (now - lastVidSync < 120) return;
     lastVidSync = now;
-    if (Math.abs(v.currentTime - t) > 0.05) v.currentTime = t;
+    if (Math.abs(v.currentTime - t) > 0.05) {
+      videoSeekByAudio = true;
+      v.currentTime = t;
+    }
+  }
+
+  // 视频 → 音频/波形联动：拖动视频进度条 / 点击播放暂停时同步波形
+  let videoSeekByAudio = false;   // 标记当前视频 seek 是否由音频同步触发
+  function videoToAudioSync() {
+    if (!state.ws) return;
+    const v = $("#video-preview");
+    if (!v || !v.src) return;
+    if (Math.abs(v.currentTime - state.ws.getCurrentTime()) > 0.15) {
+      state.ws.setTime(v.currentTime);
+    }
   }
 
   // 缩放
@@ -794,6 +809,16 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#tr-start").addEventListener("click", doTranscribe);
     $("#ds-start").addEventListener("click", doDatasetExport);
     $("#ex-start").addEventListener("click", doExportSelection);
+    // 视频 ↔ 音频双向联动
+    const vp = $("#video-preview");
+    vp.addEventListener("seeked", () => {
+      const drift = state.ws ? Math.abs(vp.currentTime - state.ws.getCurrentTime()) : 0;
+      if (videoSeekByAudio && drift <= 0.3) { videoSeekByAudio = false; return; }
+      videoSeekByAudio = false;
+      videoToAudioSync();
+    });
+    vp.addEventListener("play", () => { videoToAudioSync(); if (state.ws) state.ws.play(); });
+    vp.addEventListener("pause", () => { if (state.ws) state.ws.pause(); });
 
     $$(".modal-mask").forEach((mask) => mask.addEventListener("click", (e) => {
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
