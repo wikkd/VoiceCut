@@ -131,6 +131,31 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 #minimap { height: 46px; margin-top: 6px; }
 #empty-state { position: absolute; inset: 40px 0 0 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
 
+/* 实时字幕 */
+#subtitle-panel { background: var(--panel); border-top: 1px solid var(--border); }
+#subtitle-panel.collapsed #sub-scroll { display: none; }
+.sub-toolbar { display: flex; align-items: center; gap: 8px; padding: 6px 14px; }
+.sub-toolbar .panel-title { margin: 0; }
+.sub-current {
+  margin: 0 14px 6px; padding: 8px 12px; border-radius: 8px;
+  background: var(--accent-dim); color: var(--text); font-size: 14px; line-height: 1.5;
+  min-height: 20px; border-left: 3px solid var(--accent); word-break: break-all;
+}
+#sub-scroll { max-height: 130px; overflow-y: auto; border-top: 1px solid var(--border); }
+#sub-table { width: 100%; border-collapse: collapse; }
+#sub-table th {
+  position: sticky; top: 0; background: var(--panel-2); text-align: left;
+  padding: 4px 8px; font-size: 11px; color: var(--muted); z-index: 1;
+}
+#sub-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 12px; }
+#sub-table tr.sub-row { cursor: pointer; }
+#sub-table tr.sub-row:hover td { background: var(--panel-2); }
+#sub-table tr.sub-row.cur td { background: var(--accent-dim); }
+#sub-table tr.sub-row.cur td.sub-text { color: var(--accent); font-weight: 600; }
+#sub-empty { padding: 8px 14px; }
+.sub-act { display: flex; gap: 4px; }
+.sub-act button { padding: 1px 8px; font-size: 11px; }
+
 /* ── 传输栏 ─────────────────────────────── */
 #transport {
   display: flex; align-items: center; gap: 14px; padding: 8px 14px;

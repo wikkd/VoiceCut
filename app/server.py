@@ -15,6 +15,7 @@ from app import bilibili as bilibili_mod
 from app import dataset as dataset_mod
 from app import denoise as denoise_mod
 from app import separate as separate_mod
+from app import subtitles as subtitles_mod
 from app import transcribe as transcribe_mod
 from app.audio_ops import compute_peaks
 from app.config import AppConfig
@@ -55,6 +56,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             "audio_url": f"/api/audio/{item.id}",
             "video_url": video_url,
             "peaks_url": f"/api/peaks/{item.id}",
+            "subs_url": f"/api/subtitles/{item.id}",
             "derived_from": item.derived_from,
             "source": item.source,
             "extra": item.extra,
@@ -165,8 +167,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 preview = remux_preview(raw_path, items_dir / f"{new_id}.preview.mp4")
             except Exception:  # noqa: BLE001
                 preview = None
+        subs_file = None
+        if kind == "video":
+            try:
+                subs_file = subtitles_mod.extract_embedded_subtitles(
+                    raw_path, items_dir / f"{new_id}.srt")
+            except Exception:  # noqa: BLE001
+                subs_file = None
         item = _register_item(wav=wav, preview=preview, name=stem, kind=kind,
                               source=str(raw_path))
+        if subs_file:
+            item.extra["subs_file"] = str(subs_file)
         return {"item_id": item.id, "item": _item_json(item)}
 
     # ── 流式 ─────────────────────────────────────────────────
@@ -193,6 +204,64 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             peaks = compute_peaks(item.wav_path)
         return jsonify({"id": item.id, "duration": item.duration,
                         "sample_rate": item.sample_rate, "peaks": peaks})
+
+
+    # ---- subtitle routes ----
+
+    def _load_subs(item: MediaItem) -> list[dict]:
+        f = item.extra.get("subs_file")
+        if not f or not Path(f).exists():
+            return []
+        return [s.to_dict() for s in subtitles_mod.parse_subtitle_file(f)]
+
+    @app.get("/api/subtitles/<item_id>")
+    def api_subtitles(item_id: str) -> object:
+        item = store.require(item_id)
+        return jsonify({"id": item.id, "subs": _load_subs(item)})
+
+    @app.post("/api/subtitles/<item_id>")
+    def api_subtitles_upload(item_id: str) -> object:
+        item = store.require(item_id)
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "缺少字幕文件"}), 400
+        ext = Path(f.filename).suffix.lower()
+        if ext not in (".srt", ".ass", ".ssa"):
+            return jsonify({"error": "仅支持 .srt / .ass / .ssa 字幕"}), 400
+        subs_dir = cfg.workdir / "subs"
+        subs_dir.mkdir(parents=True, exist_ok=True)
+        path = subs_dir / f"{item.id}{ext}"
+        f.save(str(path))
+        subs = subtitles_mod.parse_subtitle_file(path)
+        if not subs:
+            return jsonify({"error": "字幕为空或无法解析"}), 400
+        item.extra["subs_file"] = str(path)
+        return jsonify({"count": len(subs), "subs": [s.to_dict() for s in subs]})
+
+    @app.post("/api/subtitles/<item_id>/generate")
+    def api_subtitles_generate(item_id: str) -> object:
+        item = store.require(item_id)
+        body = request.get_json(force=True) or {}
+        model = (body.get("model") or "medium").lower()
+        if model not in ("tiny", "base", "small", "medium", "large-v3"):
+            return jsonify({"error": "未知模型"}), 400
+        tid = tasks.submit(_subs_generate_worker, cfg, store, item, model)
+        return jsonify({"task_id": tid})
+
+    def _subs_generate_worker(cfg_: AppConfig, store_: MediaStore, item: MediaItem,
+                              model: str) -> dict:
+        tid = tasks.current_task_id()
+        subs = transcribe_mod.transcribe_timed(
+            item.wav_path, language="ja", model=model,
+            progress_cb=lambda p: tasks.update(tid, progress=p,
+                                               message=f"识别中 {p*100:.0f}%"),
+        )
+        if subs:
+            subs_dir = cfg_.workdir / "subs"
+            subs_dir.mkdir(parents=True, exist_ok=True)
+            path = subtitles_mod.write_srt(subs_dir / f"{item.id}.srt", subs)
+            item.extra["subs_file"] = str(path)
+        return {"count": len(subs), "subs": subs, "kept_existing": not subs}
 
     # ── 导出 ─────────────────────────────────────────────────
 

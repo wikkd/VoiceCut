@@ -25,6 +25,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     auditioning: null,         // {start, end, itemId}
     zoomLevel: 0,              // 0=fit, >=1 缩放级别
     dragRegion: null,          // 正在拖拽（未松手）的选区
+    subs: [],                 // 实时字幕 [{start,end,text}]
+    currentSubIdx: -1,        // 当前播放头命中的字幕行索引
+    subCollapsed: false,      // 字幕区是否收起
     bootErr: null,
   };
 
@@ -122,6 +125,17 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     loadWavesurfer(item, peaks);
     renderSegments();
     updateTransport();
+
+    // 实时字幕
+    state.subs = []; state.currentSubIdx = -1;
+    renderSubs();
+    if (item.subs_url) {
+      try {
+        const sj = await api(item.subs_url);
+        state.subs = sj.subs || [];
+      } catch (e) { state.subs = []; }
+      renderSubs();
+    }
   }
 
   function loadWavesurfer(item, peaks) {
@@ -189,6 +203,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       $("#cur-time").textContent = fmtT(t);
       videoSync(t);
       loopCheck(t);
+      updateCurrentSub(t);
       auditionCheck(t);
     });
     ws.on("ready", () => updateTransport());
@@ -338,6 +353,104 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     state.ws.play();
     state.auditioning = { start: seg.start, end: seg.end };
   }
+  // ── 实时字幕区 ────────────────────────────────────────
+  function currentSubAt(t) {
+    for (let i = 0; i < state.subs.length; i++) {
+      const s = state.subs[i];
+      if (t >= s.start - 0.05 && t < s.end + 0.05) return i;
+    }
+    return -1;
+  }
+  function updateCurrentSub(t) {
+    const idx = currentSubAt(t);
+    if (idx === state.currentSubIdx) { if (idx < 0) $("#sub-current").textContent = "—"; return; }
+    state.currentSubIdx = idx;
+    $$("#sub-tbody tr.sub-row").forEach((tr, i) => tr.classList.toggle("cur", i === idx));
+    $("#sub-current").textContent = idx >= 0 ? state.subs[idx].text : "—";
+    if (idx >= 0) { const row = $$("#sub-tbody tr.sub-row")[idx]; if (row) row.scrollIntoView({ block: "nearest" }); }
+  }
+  function renderSubs() {
+    const tb = $("#sub-tbody"), empty = $("#sub-empty");
+    tb.innerHTML = "";
+    const subs = state.subs || [];
+    $("#sub-count").textContent = subs.length ? `(${subs.length})` : "";
+    empty.classList.toggle("hidden", subs.length > 0);
+    subs.forEach((s, i) => {
+      const tr = document.createElement("tr");
+      tr.className = "sub-row" + (i === state.currentSubIdx ? " cur" : "");
+      tr.dataset.i = i;
+      tr.innerHTML = `
+        <td>${fmtT(s.start)} ~ ${fmtT(s.end)}</td>
+        <td class="sub-text">${esc(s.text)}</td>
+        <td class="sub-act">
+          <button class="chip sub-sel" data-i="${i}">选区</button>
+          <button class="chip primary sub-add" data-i="${i}">加片段</button>
+        </td>`;
+      tb.appendChild(tr);
+    });
+  }
+  function selectSubRange(i) {
+    const s = state.subs[i];
+    if (!state.ws || !s) return;
+    state.regions.addRegion({ start: s.start, end: s.end, color: "rgba(108,156,255,0.25)" });
+    state.ws.setTime(s.start);
+  }
+  function addSubToSegments(i) {
+    if (!state.currentItem) return toast("请先选择素材");
+    const s = state.subs[i];
+    if (!s) return;
+    const segs = segsFor(state.currentItem.id);
+    segs.push({ start: s.start, end: s.end, text: s.text || "", language: "JP", speaker: "speaker" });
+    renderSegments();
+    toast("已加入片段：" + ((s.text || "").slice(0, 24) || "（空文本）"));
+  }
+  function addCurrentSubToSegments() {
+    if (!state.currentItem) return toast("请先选择素材");
+    if (state.currentSubIdx >= 0 && state.subs[state.currentSubIdx]) { addSubToSegments(state.currentSubIdx); return; }
+    if (state.selection) {
+      const segs = segsFor(state.currentItem.id);
+      segs.push({ start: state.selection.start, end: state.selection.end, text: "", language: "JP", speaker: "speaker" });
+      renderSegments();
+      toast("已加入片段（选区）");
+      return;
+    }
+    toast("请先播放到有字幕的位置");
+  }
+  async function uploadSubFile(file) {
+    if (!state.currentItem) return toast("请先选择素材");
+    const fd = new FormData();
+    fd.append("file", file);
+    toast("加载字幕: " + file.name);
+    try {
+      const j = await api(`/api/subtitles/${state.currentItem.id}`, { method: "POST", body: fd });
+      state.subs = j.subs || [];
+      renderSubs();
+      toast("字幕已加载：" + j.count + " 条");
+    } catch (e) { toast("字幕加载失败: " + e.message, 6000); }
+  }
+  async function generateSubs() {
+    if (!state.currentItem) return toast("请先选择素材");
+    const itemId = state.currentItem.id;
+    toast("正在生成字幕（Whisper 识别）…");
+    try {
+      const j = await api(`/api/subtitles/${itemId}/generate`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: "medium" }) });
+      trackTask(j.task_id, async (result) => {
+        try {
+          const sj = await api(`/api/subtitles/${itemId}`);
+          state.subs = sj.subs || [];
+        } catch (e) { state.subs = (result && result.subs) || []; }
+        renderSubs();
+        toast("字幕生成完成：" + ((result && result.count) || 0) + " 条，请人工校对");
+      });
+    } catch (e) { toast("生成失败: " + e.message); }
+  }
+  function toggleSubPanel() {
+    state.subCollapsed = !state.subCollapsed;
+    $("#subtitle-panel").classList.toggle("collapsed", state.subCollapsed);
+    $("#btn-sub-toggle").textContent = state.subCollapsed ? "展开" : "收起";
+  }
+
   let focusedSeg = null;
   function setSegFocus(tr) {
     $$(".seg-row").forEach(r => r.style.outline = "");
@@ -686,6 +799,25 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
     }));
     $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter") doBilibiliOpen(); });
+    // 实时字幕
+    $("#btn-sub-open").addEventListener("click", () => $("#sub-file").click());
+    $("#btn-sub-generate").addEventListener("click", generateSubs);
+    $("#btn-sub-add").addEventListener("click", addCurrentSubToSegments);
+    $("#btn-sub-toggle").addEventListener("click", toggleSubPanel);
+    $("#sub-file").addEventListener("change", () => {
+      const f = $("#sub-file").files[0];
+      if (f) uploadSubFile(f);
+      $("#sub-file").value = "";
+    });
+    $("#sub-tbody").addEventListener("click", (e) => {
+      const btn = e.target.closest("button");
+      const tr = e.target.closest("tr.sub-row");
+      if (!tr) return;
+      const i = Number(tr.dataset.i);
+      if (btn && btn.classList.contains("sub-sel")) selectSubRange(i);
+      else if (btn && btn.classList.contains("sub-add")) addSubToSegments(i);
+      else selectSubRange(i);
+    });
     // 波形区域内右键：不弹浏览器菜单，始终取消选区/本次拖拽
     $("#wave-box").addEventListener("contextmenu", (e) => {
       e.preventDefault();

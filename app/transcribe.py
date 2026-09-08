@@ -109,3 +109,33 @@ def transcribe_batch(
     if tasks and task_id:
         tasks.update(task_id, progress=1.0, message="转写完成")
     return results
+
+
+def transcribe_timed(
+    wav_path: str | Path,
+    *,
+    language: str = "ja",
+    model: str = "medium",
+    task: str = "transcribe",
+    progress_cb=None,
+) -> list[dict]:
+    """Transcribe a whole file with per-segment timestamps (for the subtitle panel)."""
+    _init_runtime()
+    cached = _load_model(model, task)
+    assert cached is not None
+    segments, info = cached.transcribe(str(wav_path), language=language, task=task, vad_filter=True)
+    total = float(getattr(info, "duration", 0) or 0) or 0.0
+    subs: list[dict] = []
+    for seg in segments:
+        text = _normalize_jp_text(seg.text)
+        if text:
+            subs.append({
+                "start": round(float(seg.start), 3),
+                "end": round(float(seg.end), 3),
+                "text": text,
+            })
+        if progress_cb and total > 0:
+            progress_cb(min(0.99, float(seg.end) / total))
+    if progress_cb:
+        progress_cb(1.0)
+    return subs

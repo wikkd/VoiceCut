@@ -88,6 +88,25 @@
         <div id="empty-state" class="muted">导入文件后在此显示波形</div>
       </div>
 
+      <div id="subtitle-panel">
+        <div class="sub-toolbar">
+          <span class="panel-title">实时字幕 <small id="sub-count"></small></span>
+          <button id="btn-sub-open" class="chip">📄 加载字幕</button>
+          <button id="btn-sub-generate" class="chip">🎙 生成字幕</button>
+          <button id="btn-sub-add" class="chip primary">＋ 当前字幕加片段</button>
+          <button id="btn-sub-toggle" class="chip">收起</button>
+        </div>
+        <div id="sub-current" class="sub-current">—</div>
+        <div id="sub-scroll">
+          <table id="sub-table">
+            <thead>
+              <tr><th style="width:150px">起止</th><th>文本</th><th style="width:100px">操作</th></tr>
+            </thead>
+            <tbody id="sub-tbody"></tbody>
+          </table>
+          <div id="sub-empty" class="muted">暂无字幕：可「加载字幕」导入 .srt/.ass 文件，或「生成字幕」用 Whisper 自动识别</div>
+        </div>
+      </div>
       <div id="transport">
         <div class="tr-group">
           <button id="btn-prev" class="chip" title="回到开头">⏮</button>
@@ -266,6 +285,7 @@
   </div>
 
   <input type="file" id="file-input" multiple accept=".mp4,.mkv,.avi,.mov,.flv,.wav,.mp3,.flac,.aac,.ogg,.m4a">
+  <input type="file" id="sub-file" accept=".srt,.ass,.ssa" hidden>
 
   <script type="module" src="/static/js/app.js"></script>
 </body>
