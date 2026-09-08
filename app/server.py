@@ -122,8 +122,27 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     @app.delete("/api/items/<item_id>")
     def delete_item(item_id: str) -> object:
+        item = store.get(item_id)
         store.remove(item_id)
+        if item is not None:
+            _delete_item_files(item)
         return jsonify({"ok": True})
+
+    def _delete_item_files(item: MediaItem) -> None:
+        """尽力删除素材工作文件（wav/预览/字幕/来源副本），失败静默。"""
+        paths = {p for p in (item.wav_path, item.preview_mp4) if p}
+        f = item.extra.get("subs_file")
+        if f:
+            paths.add(Path(f))
+        src = Path(item.source) if item.source else None
+        if src and src not in paths and src.exists() and str(src).startswith(str(cfg.workdir)):
+            paths.add(src)
+        for p in paths:
+            try:
+                if p and p.exists():
+                    p.unlink()
+            except OSError:
+                pass
 
     @app.get("/api/tasks")
     def list_tasks() -> object:

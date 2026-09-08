@@ -90,8 +90,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
                         instrumental: "伴奏", trimmed: "去静音", bilibili: "B站" };
       li.innerHTML = `<div class="m-name">${esc(item.name)}</div>
         <div class="m-meta"><span class="m-badge">${kindMap[item.kind] || item.kind}</span>
-        <span>${fmtDur(item.duration)}</span></div>`;
+        <span>${fmtDur(item.duration)}</span>
+        <button class="m-del" title="删除素材">✕</button></div>`;
       li.addEventListener("click", () => selectItem(item));
+      li.querySelector(".m-del").addEventListener("click", (e) => {
+        e.stopPropagation();
+        deleteMediaItem(item);
+      });
       ul.appendChild(li);
     });
   }
@@ -100,6 +105,30 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   async function refreshItems() {
     try { state.items = await api("/api/items"); renderMediaList(); }
     catch (e) { /* ignore */ }
+  }
+  async function deleteMediaItem(item) {
+    if (!confirm("删除素材「" + item.name + "」？")) return;
+    try {
+      await api(`/api/items/${item.id}`, { method: "DELETE" });
+      if (state.currentItem && state.currentItem.id === item.id) {
+        state.currentItem = null;
+        state.selection = null; state.selectionRegion = null; state.dragRegion = null;
+        state.subs = []; state.currentSubIdx = -1; state.auditioning = null;
+        state.playing = false;
+        if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
+        $("#video-panel").classList.add("hidden");
+        const v = $("#video-preview"); v.removeAttribute("src");
+        $("#empty-state").classList.remove("hidden");
+        $("#sub-current").textContent = "—";
+        updatePlayUI();
+        updateSelUI();
+        updateTransport();
+        renderSubs();
+        renderSegments();
+      }
+      await refreshItems();
+      toast("已删除素材");
+    } catch (e) { toast("删除失败: " + e.message, 6000); }
   }
 
   // ── 选择素材 / 波形加载 ────────────────────────────────
