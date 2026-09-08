@@ -154,6 +154,16 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     });
     state.ws = ws;
 
+    // 时间轴与波形同步：放大后刻度按绝对坐标定位，需要让容器宽度跟随波形总宽度并随滚动偏移
+    const syncTimeline = () => {
+      const tl = document.querySelector("#timeline [part='timeline']");
+      if (!tl || !ws.getWrapper()) return;
+      tl.style.width = ws.getWrapper().scrollWidth + "px";
+      tl.style.transform = "translateX(" + (-ws.getScroll()) + "px)";
+    };
+    ws.on("redraw", syncTimeline);
+    ws.on("scroll", syncTimeline);
+
     // 选区
     state.regions.enableDragSelection({ color: "rgba(108,156,255,0.25)" });
     // 拖拽进行中（未松手）会先触发 region-initialized，记录以便右键取消

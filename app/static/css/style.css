@@ -122,7 +122,7 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 }
 
 #wave-box { flex: 1; position: relative; padding: 10px 14px 6px; min-height: 220px; display: flex; flex-direction: column; }
-#timeline { height: 24px; }
+#timeline { height: 24px; overflow: hidden; }
 #waveform { flex: 1; min-height: 120px; }
 #wave-tools { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
 .chip { padding: 3px 10px; font-size: 12px; border-radius: 12px; }
