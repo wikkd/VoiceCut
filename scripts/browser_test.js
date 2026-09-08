@@ -74,9 +74,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     if (r.result && r.result.exceptionDetails) console.log("EXC:", JSON.stringify(r.result.exceptionDetails));
 
     // 快捷键：←→ 快退/快进、↑↓ 音量、小键盘 −/+ 快进
-    const kd = (key, code, vk) => send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
-    const ku = (key, code, vk) => send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk });
-    const press = async (key, code, vk) => { await kd(key, code, vk); await ku(key, code, vk); };
+    const kd = (key, code, vk, mods = 0) => send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: mods });
+    const ku = (key, code, vk, mods = 0) => send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: mods });
+    const press = async (key, code, vk, mods = 0) => { await kd(key, code, vk, mods); await ku(key, code, vk, mods); };
     const rK0 = await send("Runtime.evaluate", { expression: `(() => { window.__vc.state.ws.setVolume(0.5); window.__vc.state.ws.setTime(1); return window.__vc.state.ws.getVolume(); })()`, returnByValue: true });
     const volBefore = rK0.result && rK0.result.result && rK0.result.result.value;
     await press("ArrowRight", "ArrowRight", 39);       // +5s
@@ -96,6 +96,47 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const keysOk = t2 > t1 + 1 && t3 < t2 - 1 && Math.abs(vol1 - (volBefore + 0.05)) < 0.001
       && t4 > t3 + 1 && t5 < t4 - 1 && Math.abs(vol2 - volBefore) < 0.001;
     console.log("KEYS:", JSON.stringify({ t1, t2, t3, volBefore, vol1, t4, t5, vol2, ok: keysOk }));
+
+    // Ctrl+→ 多选快进：导入 40s 长素材 → 连续标记多段 → Ctrl+← 撤销
+    const makeWav = (seconds, sr = 16000) => {
+      const n = seconds * sr, dataLen = n * 2;
+      const b = Buffer.alloc(44 + dataLen);
+      b.write("RIFF", 0); b.writeUInt32LE(36 + dataLen, 4); b.write("WAVE", 8);
+      b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+      b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+      b.write("data", 36); b.writeUInt32LE(dataLen, 40);
+      return b;
+    };
+    const fd = new FormData();
+    fd.append("file", new Blob([makeWav(40)], { type: "audio/wav" }), "long_test.wav");
+    const impR = await fetch("http://127.0.0.1:8765/api/import", { method: "POST", body: fd });
+    const imp = await impR.json();
+    let tsk = null;
+    for (let i = 0; i < 80; i++) {
+      await sleep(500);
+      tsk = await (await fetch(`http://127.0.0.1:8765/api/tasks/${imp.task_id}`)).json();
+      if (tsk && (tsk.status === "done" || tsk.status === "failed")) break;
+    }
+    console.log("IMPORT:", JSON.stringify({ task: tsk && tsk.status, item: tsk && tsk.result && tsk.result.item_id }));
+    await send("Page.reload", { ignoreCache: true });
+    await sleep(3500);
+    const rL = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const it = vc.state.items.find(x => x.name === 'long_test');
+      if (!it) return { ok: false, reason: 'item not found' };
+      await vc.selectItem(it);
+      await new Promise(r => setTimeout(r, 4000));
+      return { ok: true, dur: it.duration };
+    })()`, awaitPromise: true, returnByValue: true });
+    const longSel = v(rL);
+    await send("Runtime.evaluate", { expression: `window.__vc.state.ws.setTime(0)` });
+    await press("ArrowRight", "ArrowRight", 39, 2);      // Ctrl+→ 标记 0-5
+    await press("ArrowRight", "ArrowRight", 39, 2);      // Ctrl+→ 标记 5-10
+    const rM1 = await send("Runtime.evaluate", { expression: `(() => ({ n: window.__vc.state.multiRegions.length, sel: window.__vc.state.selection, t: window.__vc.state.ws.getCurrentTime() }))()`, returnByValue: true });
+    await press("ArrowLeft", "ArrowLeft", 37, 2);        // Ctrl+← 撤销 → 1 段
+    const rM2 = await send("Runtime.evaluate", { expression: `window.__vc.state.multiRegions.length`, returnByValue: true });
+    const m1 = v(rM1), m2 = v(rM2);
+    console.log("MULTI:", JSON.stringify({ selected: longSel, marks: m1, afterUndo: m2, ok: !!(longSel && longSel.ok && m1 && m1.n === 2 && m2 === 1) }));
 
     // 布局持久化往返：隐藏 字幕 → 刷新 → 仍隐藏 → 恢复默认
     const rH = await send("Runtime.evaluate", { expression: `(() => {

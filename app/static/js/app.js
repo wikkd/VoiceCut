@@ -25,6 +25,10 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     auditioning: null,         // {start, end, itemId}
     zoomLevel: 0,              // 0=fit, >=1 缩放级别
     dragRegion: null,          // 正在拖拽（未松手）的选区
+    multiRegions: [],          // Ctrl+→ 累积的多选区 [{start,end,region}]
+    ctrlMarking: false,        // 正在通过 Ctrl+→ 添加标记（不替换旧选区）
+    auditionSeq: null,         // 多选顺序试听队列
+    auditionIdx: 0,
     subs: [],                 // 实时字幕 [{start,end,text}]
     currentSubIdx: -1,        // 当前播放头命中的字幕行索引
     bootErr: null,
@@ -289,6 +293,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       if (state.currentItem && state.currentItem.id === item.id) {
         state.currentItem = null;
         state.selection = null; state.selectionRegion = null; state.dragRegion = null;
+        state.multiRegions = []; state.ctrlMarking = false;
+        state.auditionSeq = null; state.auditionIdx = 0;
         state.subs = []; state.currentSubIdx = -1; state.auditioning = null;
         state.playing = false;
         if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
@@ -348,6 +354,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
     state.selection = null; state.selectionRegion = null;
     state.dragRegion = null;
+    state.multiRegions = []; state.ctrlMarking = false;
+    state.auditionSeq = null; state.auditionIdx = 0;
     $("#empty-state").classList.add("hidden");
 
     const timeline = Timeline.create({ container: "#timeline", height: 24 });
@@ -388,8 +396,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     state.regions.on("region-initialized", (region) => { state.dragRegion = region; });
     state.regions.on("region-created", (region) => {
       state.dragRegion = null;
-      if (state.selectionRegion && state.selectionRegion !== region) {
-        try { state.selectionRegion.remove(); } catch (e) {}
+      if (!state.ctrlMarking) {                       // Ctrl 快进多选：保留之前标记
+        if (state.selectionRegion && state.selectionRegion !== region) {
+          try { state.selectionRegion.remove(); } catch (e) {}
+        }
+        clearMultiRegions();                          // 普通拖选：清空多选标记
       }
       state.selectionRegion = region;
       state.selection = { start: region.start, end: region.end };
@@ -397,9 +408,15 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     });
     state.regions.on("region-updated", (region) => {
       if (region === state.selectionRegion) {
+        const m = state.multiRegions.find((x) => x.region === region);
+        if (m) { m.start = region.start; m.end = region.end; }
         state.selection = { start: region.start, end: region.end };
         updateSelUI();
       }
+    });
+    state.regions.on("region-removed", (region) => {
+      const i = state.multiRegions.findIndex((m) => m.region === region);
+      if (i >= 0) { state.multiRegions.splice(i, 1); updateSelUI(); }
     });
 
     ws.on("play", () => { state.playing = true; updatePlayUI(); videoPlay(); });
@@ -427,8 +444,21 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
   function playSelection() {
     if (!state.ws || !state.selection) return toast("请先拖拽出选区");
+    if (state.multiRegions.length >= 2) {       // 多选：顺序试听全部标记段
+      state.auditionSeq = state.multiRegions.slice();
+      state.auditionIdx = 0;
+      playSeqItem();
+      return;
+    }
     state.ws.setTime(state.selection.start);
     state.ws.play();
+  }
+  function playSeqItem() {
+    const m = state.auditionSeq && state.auditionSeq[state.auditionIdx];
+    if (!m) { state.auditionSeq = null; return; }
+    state.ws.setTime(m.start);
+    state.ws.play();
+    state.auditioning = { start: m.start, end: m.end };
   }
   function loopCheck(t) {
     if (state.loop && state.selection && state.selection.end - state.selection.start > 0.02
@@ -438,15 +468,24 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
   function auditionCheck(t) {
     if (state.auditioning && t >= state.auditioning.end - 0.02) {
-      state.ws.pause();
-      state.auditioning = null;
+      if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
+        state.auditionIdx++;
+        playSeqItem();
+      } else {
+        state.ws.pause();
+        state.auditioning = null;
+        state.auditionSeq = null;
+      }
     }
   }
   function updateTransport() {
     if (!state.currentItem) { $("#dur-info").textContent = "—"; return; }
     $("#dur-info").textContent = fmtDur(state.currentItem.duration);
   }
-  function updateSelUI() { $("#sel-info").textContent = fmtSel(state.selection); }
+  function updateSelUI() {
+    const n = state.multiRegions.length;
+    $("#sel-info").textContent = (n >= 2 ? `多选 ${n} 段 · ` : "") + fmtSel(state.selection);
+  }
 
   // 快退/快进：平移播放头（夹在 0 ~ 时长内），视频经 timeupdate 联动
   function seekBy(delta) {
@@ -464,11 +503,46 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     toast("音量 " + Math.round(v * 100) + "%", 1200);
   }
 
+  // ── Ctrl+→ 多选快进：每按一次标记一段并前进，可连续累积多段 ──
+  const MULTI_COLOR = "rgba(255,170,80,0.4)"; // 多选标记色（橙），区别于普通选区（蓝）
+  function markForward() {
+    if (!state.ws) return toast("请先导入素材");
+    const dur = state.currentItem ? state.currentItem.duration : state.ws.getDuration();
+    const t = state.ws.getCurrentTime();
+    const start = t, end = Math.min(dur, t + SEEK_STEP);
+    if (end - start < 0.05) return toast("已到末尾");
+    state.ctrlMarking = true;
+    const region = state.regions.addRegion({ start, end, color: MULTI_COLOR, drag: true, resize: true });
+    state.ctrlMarking = false;
+    state.multiRegions.push({ start, end, region });
+    state.selectionRegion = region;
+    state.selection = { start, end };
+    state.ws.setTime(end);
+    updateSelUI();
+  }
+  function unmarkLast() {
+    if (!state.multiRegions.length) { seekBy(-SEEK_STEP); return; }
+    const last = state.multiRegions.pop();
+    try { last.region.remove(); } catch (e) {}
+    const prev = state.multiRegions[state.multiRegions.length - 1];
+    state.selectionRegion = prev ? prev.region : null;
+    state.selection = prev ? { start: prev.start, end: prev.end } : null;
+    state.ws.setTime(prev ? prev.start : Math.max(0, (last ? last.start : 0) - SEEK_STEP));
+    updateSelUI();
+  }
+  function clearMultiRegions() {
+    state.multiRegions.slice().forEach((m) => { try { m.region.remove(); } catch (e) {} });
+    state.multiRegions = [];
+    updateSelUI();
+  }
+
   function clearSelection() {
     if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} }
     state.selectionRegion = null;
     state.selection = null;
     state.dragRegion = null;
+    state.auditionSeq = null; state.auditionIdx = 0;
+    clearMultiRegions();
     updateSelUI();
   }
 
@@ -572,6 +646,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (!state.currentItem) return toast("请先导入素材");
     if (!state.selection) return toast("请先在波形上拖拽出选区");
     const segs = segsFor(state.currentItem.id);
+    const list = state.multiRegions.length >= 2 ? state.multiRegions : [];
+    if (list.length) {
+      list.forEach((m) => segs.push({ start: m.start, end: m.end, text: "", language: "JP", speaker: "speaker" }));
+      renderSegments();
+      toast(`已加入片段 ${list.length} 条`);
+      return;
+    }
     segs.push({ start: state.selection.start, end: state.selection.end, text: "", language: "JP", speaker: "speaker" });
     renderSegments();
   }
@@ -994,7 +1075,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
           const d = e.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
-          if (e.ctrlKey) nudgeSelection(d, "move");      // Ctrl+←→ 整体平移选区
+          if (e.ctrlKey) { (e.key === "ArrowRight" ? markForward() : unmarkLast()); } // Ctrl+→ 快进多选 / Ctrl+← 撤销上一段
           else if (e.shiftKey) nudgeSelection(d, "end"); // Shift+←→ 微调选区终点边界
           else seekBy(d);                                // ←→ 快退 / 快进 5 秒
           break;
@@ -1117,5 +1198,6 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // 调试/自动化钩子
   window.__vc = { state, selectItem, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
+    markForward, unmarkLast, clearMultiRegions,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };
 })();
