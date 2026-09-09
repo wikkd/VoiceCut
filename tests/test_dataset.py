@@ -125,3 +125,42 @@ def test_export_dataset_flat_unchanged(sample_wav, tmp_path) -> None:
     assert out["layout"] == "flat"
     assert sorted(p.name for p in (tmp_path / "dsf").glob("*.wav")) == ["001.wav"]
     assert out["files"] == ["001.wav"]
+
+
+def test_export_dataset_parallel_matches_serial(sample_wav: Path, tmp_path: Path) -> None:
+    """并行导出与串行导出结果完全一致（文件/编号/list.txt）。"""
+    segs = [DatasetSegment(start=0.2, end=1.5, text=f"line{i}", language="JP",
+                           speaker="s1") for i in range(8)]
+    out1 = export_dataset(sample_wav, segs, tmp_path / "ds1", workers=1)
+    out4 = export_dataset(sample_wav, segs, tmp_path / "ds4", workers=4)
+    assert out4["count"] == out1["count"] == 8
+    assert out4["files"] == out1["files"] == [f"{i + 1:03d}.wav" for i in range(8)]
+    def _suffixes(list_file: Path) -> list:
+        return [ln.split("|", 1)[1] for ln in list_file.read_text(encoding="utf-8").strip().splitlines()]
+    assert _suffixes(tmp_path / "ds1" / "list.txt") == _suffixes(tmp_path / "ds4" / "list.txt")
+    assert out4["skipped"] == out1["skipped"] == []
+    for i in range(8):
+        b1 = (tmp_path / "ds1" / f"{i + 1:03d}.wav").read_bytes()
+        b4 = (tmp_path / "ds4" / f"{i + 1:03d}.wav").read_bytes()
+        assert b1 == b4
+        assert (tmp_path / "ds1" / f"{i + 1:03d}.txt").read_text(encoding="utf-8") ==                (tmp_path / "ds4" / f"{i + 1:03d}.txt").read_text(encoding="utf-8")
+
+
+def test_export_dataset_parallel_per_speaker(sample_wav: Path, tmp_path: Path) -> None:
+    """并行 per-speaker 导出与串行编号/拆分/val 列表一致。"""
+    segs = [DatasetSegment(start=0.2, end=1.5, text=f"line{i}", language="JP",
+                           speaker=f"s{i % 2}") for i in range(8)]
+    out1 = export_dataset(sample_wav, segs, tmp_path / "p1", layout="per_speaker",
+                          val_ratio=0.5, workers=1)
+    out4 = export_dataset(sample_wav, segs, tmp_path / "p4", layout="per_speaker",
+                          val_ratio=0.5, workers=4)
+    assert out4["count"] == out1["count"] == 8
+    assert out4["files"] == out1["files"]
+    assert len(out4["speakers"]) == len(out1["speakers"]) == 2
+    for rel in out1["files"]:
+        assert (tmp_path / "p4" / rel).read_bytes() == (tmp_path / "p1" / rel).read_bytes()
+    def _suffixes(list_file: Path) -> list:
+        return [ln.split("|", 1)[1] for ln in list_file.read_text(encoding="utf-8").strip().splitlines()]
+    for sp in ("s0", "s1"):
+        assert _suffixes(tmp_path / "p1" / sp / "list.txt") == _suffixes(tmp_path / "p4" / sp / "list.txt")
+

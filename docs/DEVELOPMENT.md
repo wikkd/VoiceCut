@@ -123,7 +123,17 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 | 05 | 片段列表 + ASR 转写 + 训练集导出 | ⏳ |
 | 06 | B 站直链代理 | ⏳ |
 
-## 8. 开发约束
+## 8. 多线程 / 并行策略
+
+- GPU 任务（whisper / ECAPA / demucs）走单 worker GPU 池，显存共享、串行防 CUDA OOM。
+- CPU 池默认 2 worker（ffmpeg / 下载 / 降噪等）。
+- 数据集导出按片段并行：每片段独立 ffmpeg（切+去静音 → 归一 → 校验），
+  顺序预分配编号后放入有界线程池（默认 min(4, cpu)），输出文件/list.txt 与串行逐字节一致。
+- 视频导入时 抽音频 / 转预览 / 提内嵌字幕 三路并行。
+- 后台 worker 线程没有 Flask app context：worker 一律接收 WebContext 实例，
+  不要调用 current_app（那是请求线程专用）。
+
+## 9. 开发约束
 
 - 处理模块（非 server.py）**不 import flask**，保持可单测
 - 长任务必须后台执行并上报进度，禁止阻塞 HTTP 请求线程

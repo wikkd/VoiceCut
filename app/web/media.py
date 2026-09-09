@@ -1,6 +1,7 @@
 """素材 / 导入 / 流式 / 清洗 / 转写 / 训练集导出 路由（Blueprint）。"""
 from __future__ import annotations
 
+import concurrent.futures
 import time
 import uuid
 from pathlib import Path
@@ -108,20 +109,29 @@ def _import_worker(c, raw_path: Path, filename: str, project_id: str = "") -> di
 
     item_id = c.store.new_id()
     wav = items_dir / f"{item_id}.wav"
-    extract_audio(raw_path, wav, sample_rate=48000, channels=1)
+    # 视频导入时 抽音频 / 转预览 / 提内嵌字幕 三路并行（只读同一源文件，互不干扰）
     preview = None
-    if kind == "video":
-        try:
-            preview = remux_preview(raw_path, items_dir / f"{item_id}.preview.mp4")
-        except Exception:  # noqa: BLE001
-            preview = None
     subs_file = None
-    if kind == "video":
-        try:
-            subs_file = subtitles_mod.extract_embedded_subtitles(
-                raw_path, items_dir / f"{item_id}.srt")
-        except Exception:  # noqa: BLE001
-            subs_file = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        f_extract = ex.submit(extract_audio, raw_path, wav,
+                              sample_rate=48000, channels=1)
+        f_preview = f_subs = None
+        if kind == "video":
+            f_preview = ex.submit(remux_preview, raw_path,
+                                  items_dir / f"{item_id}.preview.mp4")
+            f_subs = ex.submit(subtitles_mod.extract_embedded_subtitles,
+                               raw_path, items_dir / f"{item_id}.srt")
+        f_extract.result()  # 抽音频失败则整体失败（保持原行为）
+        if f_preview is not None:
+            try:
+                preview = f_preview.result()
+            except Exception:  # noqa: BLE001
+                preview = None
+        if f_subs is not None:
+            try:
+                subs_file = f_subs.result()
+            except Exception:  # noqa: BLE001
+                subs_file = None
     item = c.register_item(item_id=item_id, wav=wav, preview=preview, name=stem,
                            kind=kind, source=str(raw_path),
                            project_id=project_id or None)
