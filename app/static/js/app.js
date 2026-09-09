@@ -12,6 +12,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   const state = {
     items: [],
+    projects: [],
+    currentProject: null,
     currentItem: null,
     ws: null,
     regions: null,
@@ -29,11 +31,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     ctrlMarking: false,        // 正在通过 Ctrl+→ 添加标记（不替换旧选区）
     auditionSeq: null,         // 多选顺序试听队列
     auditionIdx: 0,
-    characters: [],            // 当前素材角色池 [{id,name,color,speakerLabels,created}]
+    characters: [],            // 当前项目共享角色池 [{id,name,color,speakerLabels,created,embedding?}]
     speakerSegs: [],           // 当前素材说话人分段 [{start,end,label}]
+    speakerSegsByItem: new Map(), // itemId -> 说话人分段 [{start,end,label}]
+    dirtyItems: new Set(),     // 片段有改动待保存的素材 id
+    poolDirty: false,          // 角色池有改动待保存
     selectedSegs: new Set(),   // 片段列表多选行索引
     poolMerge: new Set(),      // 角色池合并勾选集
-    projectDirty: false,       // 片段/角色有改动待保存
     subs: [],                 // 实时字幕 [{start,end,text}]
     currentSubIdx: -1,        // 当前播放头命中的字幕行索引
     bootErr: null,
@@ -249,15 +253,20 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     document.body.dataset.vc = "error";
     $("#boot-state").textContent = "❌ " + msg;
   }
+  const LS_PROJECT = "vc.project.v1";
   async function boot() {
     if (typeof WaveSurfer === "undefined") return fail("wavesurfer 未加载");
     try {
       const cfg = await api("/api/config");
-      const items = await api("/api/items");
-      state.items = items;
+      const projects = await api("/api/projects");
+      state.projects = projects;
+      renderProjectSelect();
+      let pid = null;
+      try { pid = localStorage.getItem(LS_PROJECT); } catch (e) {}
+      const proj = projects.find(p => p.id === pid) || projects[0] || null;
+      if (proj) await selectProject(proj);
       $("#boot-state").textContent = "后端 OK · ffmpeg: " + cfg.ffmpeg.split(/[\\/]/).pop();
       document.body.dataset.vc = "ok";
-      renderMediaList();
     } catch (e) { return fail("后端连接失败: " + e.message); }
   }
 
@@ -318,10 +327,102 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     await refreshItems();
   }
   function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+  function shortName(s, n = 10) { s = s || ""; return s.length > n ? s.slice(0, n) + "…" : s; }
 
   async function refreshItems() {
-    try { state.items = await api("/api/items"); renderMediaList(); }
-    catch (e) { /* ignore */ }
+    try {
+      const q = state.currentProject ? `?project_id=${encodeURIComponent(state.currentProject.id)}` : "";
+      state.items = await api("/api/items" + q);
+      renderMediaList();
+    } catch (e) { /* ignore */ }
+  }
+
+  // ---- 项目切换 / 管理 ----
+  function renderProjectSelect() {
+    const sel = $("#project-select");
+    if (!sel) return;
+    sel.innerHTML = "";
+    state.projects.forEach(proj => {
+      const opt = document.createElement("option");
+      opt.value = proj.id;
+      opt.textContent = proj.name;
+      sel.appendChild(opt);
+    });
+    if (state.currentProject) sel.value = state.currentProject.id;
+  }
+
+  async function selectProject(proj) {
+    if (state.dirtyItems.size) await saveProjectNow();
+    if (state.poolDirty) await savePoolNow();
+    state.currentProject = proj;
+    try { localStorage.setItem(LS_PROJECT, proj.id); } catch (e) {}
+    state.currentItem = null;
+    state.selection = null; state.selectionRegion = null; state.dragRegion = null;
+    state.multiRegions = []; state.ctrlMarking = false;
+    state.selectedSegs = new Set(); state.poolMerge = new Set();
+    renderProjectSelect();
+    const j = await api(`/api/projects/${proj.id}`);
+    state.items = j.items || [];
+    state.characters = j.characters || [];
+    state.segmentsByItem = new Map();
+    state.speakerSegsByItem = new Map();
+    renderMediaList();
+    await loadAllItemData();
+    if (state.items.length) await selectItem(state.items[0]);
+    else clearWorkbench();
+  }
+
+  async function loadAllItemData() {
+    const items = state.items || [];
+    await Promise.all(items.map(item => loadProject(item, true)));
+  }
+
+  function clearWorkbench() {
+    state.currentItem = null;
+    state.subs = []; state.currentSubIdx = -1; state.auditioning = null; state.playing = false;
+    if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
+    $("#video-panel").classList.add("no-video");
+    const v = $("#video-preview"); if (v) v.removeAttribute("src");
+    $("#empty-state").classList.remove("hidden");
+    $("#sub-current").textContent = "—";
+    renderSegments(); renderSubs(); renderPool(); updateTransport(); updateSelUI(); updatePlayUI();
+  }
+
+  async function createProject() {
+    const name = prompt("新项目名称：", "新项目");
+    if (name == null || !name.trim()) return;
+    try {
+      const j = await api("/api/projects", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+      state.projects.push(j);
+      renderProjectSelect();
+      await selectProject(j);
+      toast("项目已创建");
+    } catch (e) { toast("创建项目失败: " + e.message, 6000); }
+  }
+  async function renameProject() {
+    if (!state.currentProject) return;
+    const name = prompt("重命名项目：", state.currentProject.name);
+    if (name == null || !name.trim()) return;
+    try {
+      await api(`/api/projects/${state.currentProject.id}/rename`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+      state.currentProject.name = name.trim();
+      renderProjectSelect();
+      toast("项目已重命名");
+    } catch (e) { toast("重命名失败: " + e.message, 6000); }
+  }
+  async function deleteProject() {
+    if (!state.currentProject) return;
+    if (state.items && state.items.length) return toast("项目非空，请先移除素材");
+    if (!confirm(`删除项目「${state.currentProject.name}」？角色池将一并删除。`)) return;
+    try {
+      await api(`/api/projects/${state.currentProject.id}`, { method: "DELETE" });
+      state.projects = state.projects.filter(pp => pp.id !== state.currentProject.id);
+      if (state.projects.length) await selectProject(state.projects[0]);
+      else clearWorkbench();
+      toast("项目已删除");
+    } catch (e) { toast("删除失败: " + e.message, 6000); }
   }
   async function deleteMediaItem(item) {
     if (!confirm("删除素材「" + item.name + "」？")) return;
@@ -352,10 +453,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // ── 选择素材 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
-    if (state.projectDirty && state.currentItem && state.currentItem.id !== item.id) {
+    if ((state.dirtyItems.size || state.poolDirty) && state.currentItem && state.currentItem.id !== item.id) {
       await saveProjectNow();   // 切换素材前先浮存旧素材项目
+      await savePoolNow();
     }
     state.currentItem = item;
+    state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
     renderMediaList();
 
     // 视频预览
@@ -689,14 +792,26 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (dur > SEG_MAX) issues.push(`过长(>${SEG_MAX}s)`);
     return issues;
   }
+  function allSegs() {
+    const out = [];
+    (state.items || []).forEach(item => {
+      (segsFor(item.id) || []).forEach(seg => out.push({ item, seg }));
+    });
+    return out;
+  }
+  function charSegs(cid) {
+    return allSegs().filter(r => (cid ? r.seg.characterId === cid : !r.seg.characterId));
+  }
   function renderSegments() {
     const tb = $("#seg-tbody");
     const empty = $("#seg-empty");
     tb.innerHTML = "";
-    const segs = state.currentItem ? segsFor(state.currentItem.id) : [];
-    $("#seg-count").textContent = segs.length ? `(${segs.length})` : "";
-    empty.classList.toggle("hidden", segs.length > 0);
-    segs.forEach((seg, i) => {
+    const rows = allSegs();
+    $("#seg-count").textContent = rows.length ? `(${rows.length})` : "";
+    empty.classList.toggle("hidden", rows.length > 0);
+    rows.forEach((row) => {
+      const seg = row.seg, item = row.item;
+      const i = segsFor(item.id).indexOf(seg);
       const issues = segIssues(seg);
       const cls = issues.length ? "bad" : "";
       const tagCls = issues.length ? (issues.some(x => x.includes("空文本")) ? "warn" : "bad") : "ok";
@@ -704,10 +819,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       const ch = charById(seg.characterId);
       const tr = document.createElement("tr");
       tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "");
+      tr.dataset.item = item.id;
       tr.dataset.i = i;
       if (ch) tr.style.borderLeft = "4px solid " + ch.color;
       tr.innerHTML = `
         <td class="seg-num">${String(i + 1).padStart(2, "0")}</td>
+        <td class="seg-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
         <td>${fmtT(seg.start)} ~ ${fmtT(seg.end)}</td>
         <td>${fmtDur(seg.end - seg.start)}</td>
         <td><span class="tag ${tagCls}">${tagTxt}</span></td>
@@ -744,19 +861,21 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     scheduleSaveProject();
     renderSegments();
   }
-  function deleteSegment(i) {
-    const segs = segsFor(state.currentItem.id);
+  function deleteSegment(itemId, i) {
+    const segs = segsFor(itemId);
     const s = segs[i];
     if (s) state.selectedSegs.delete(s.id);
     segs.splice(i, 1);
-    scheduleSaveProject(); renderSegments();
+    scheduleSaveProject(itemId); renderSegments();
   }
-  function jumpToSegment(seg) {
+  async function jumpToSegment(item, seg) {
+    if (state.currentItem && state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     $("#sel-info").textContent = fmtSel(seg);
   }
-  function auditionSegment(seg) {
+  async function auditionSegment(item, seg) {
+    if (state.currentItem && state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.ws.play();
@@ -789,35 +908,58 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       if (ov > bestOv) { bestOv = ov; best = s.label; }
     }
     if (!best) return { characterId: null, speakerLabel: null };
-    const ch = state.characters.find(c => (c.speakerLabels || []).includes(best));
+    const key = (state.currentItem ? state.currentItem.id : "") + ":" + best;
+    const ch = state.characters.find(c => (c.speakerLabels || []).includes(key));
     return { characterId: ch ? ch.id : null, speakerLabel: best };
   }
 
-  async function loadProject(item) {
-    state.characters = []; state.speakerSegs = []; state.selectedSegs = new Set(); state.poolMerge = new Set();
+  async function loadProject(item, force) {
+    if (!force && state.segmentsByItem.has(item.id)) {
+      state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
+      return;
+    }
     try {
       const proj = await api(`/api/items/${item.id}/project`);
-      state.characters = proj.characters || [];
-      state.speakerSegs = proj.speaker_segments || [];
       state.segmentsByItem.set(item.id, proj.segments || []);
+      state.speakerSegsByItem.set(item.id, proj.speaker_segments || []);
     } catch (e) {
       state.segmentsByItem.set(item.id, []);
+      state.speakerSegsByItem.set(item.id, []);
     }
+    state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
   }
 
   let saveTimer = null;
-  function scheduleSaveProject() {
-    state.projectDirty = true;
+  function scheduleSaveProject(itemId) {
+    const id = itemId || (state.currentItem ? state.currentItem.id : null);
+    if (id) state.dirtyItems.add(id);
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(saveProjectNow, 400);
   }
   async function saveProjectNow() {
-    if (!state.currentItem || !state.projectDirty) return;
-    state.projectDirty = false;
+    const ids = Array.from(state.dirtyItems);
+    if (!ids.length) return;
+    state.dirtyItems = new Set();
     try {
-      await api(`/api/items/${state.currentItem.id}/project`, { method: "POST",
+      await Promise.all(ids.map(id => api(`/api/items/${id}/project`, { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characters: state.characters, segments: segsFor(state.currentItem.id) }) });
+        body: JSON.stringify({ segments: segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] }) })));
+    } catch (e) { /* 静默忽略 */ }
+  }
+
+  let poolTimer = null;
+  function scheduleSavePool() {
+    state.poolDirty = true;
+    if (poolTimer) clearTimeout(poolTimer);
+    poolTimer = setTimeout(savePoolNow, 400);
+  }
+  async function savePoolNow() {
+    if (!state.poolDirty || !state.currentProject) return;
+    state.poolDirty = false;
+    try {
+      await api(`/api/projects/${state.currentProject.id}/characters`, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ characters: state.characters }) });
     } catch (e) { /* 静默忽略 */ }
   }
   // ── 角色池子页面 ──
@@ -833,18 +975,20 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
 
   function reassignSegments(segIds, characterId) {
-    const segs = segsFor(state.currentItem.id);
     let n = 0;
-    segs.forEach(s => { if (segIds.includes(s.id)) { s.characterId = characterId || null; n++; } });
-    scheduleSaveProject();
+    (state.items || []).forEach(item => {
+      const segs = segsFor(item.id);
+      let changed = false;
+      segs.forEach(s => { if (segIds.includes(s.id)) { s.characterId = characterId || null; n++; changed = true; } });
+      if (changed) scheduleSaveProject(item.id);
+    });
     renderSegments(); renderPool();
     toast(`已重定向 ${n} 段片段`);
   }
 
   function poolCard(ch) {
     const isU = !ch;
-    const segs = state.currentItem ? segsFor(state.currentItem.id) : [];
-    const mine = isU ? segs.filter(s => !s.characterId) : segs.filter(s => s.characterId === ch.id);
+    const mine = charSegs(ch ? ch.id : null);
     const el = document.createElement("div");
     el.className = "pool-card" + (isU ? " unassigned" : "");
     el.dataset.poolChar = ch ? ch.id : "";
@@ -865,11 +1009,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       <details class="pool-segs">
         <summary>片段（${mine.length}）</summary>
         <div class="pool-seg-list">
-          ${mine.slice(0, 300).map(s => `
-            <div class="pool-seg" draggable="true" data-seg="${s.id}">
-              <span class="ps-time">${fmtT(s.start)}~${fmtT(s.end)}</span>
-              <span class="ps-text">${esc(s.text.slice(0, 30) || "（空）")}</span>
-              <button class="chip ps-play" data-seg="${s.id}" title="试听">▶</button>
+          ${mine.slice(0, 300).map(({ seg, item }) => `
+            <div class="pool-seg" draggable="true" data-seg="${seg.id}" data-item="${item.id}">
+              <span class="ps-time">${fmtT(seg.start)}~${fmtT(seg.end)}</span>
+              <span class="ps-src" title="${esc(item.name)}">${esc(shortName(item.name, 6))}</span>
+              <span class="ps-text">${esc(seg.text.slice(0, 24) || "（空）")}</span>
+              <button class="chip ps-play" data-seg="${seg.id}" data-item="${item.id}" title="试听">▶</button>
             </div>`).join("")}
           ${mine.length > 300 ? `<div class="muted">… 其余 ${mine.length - 300} 段未列出</div>` : ""}
         </div>
@@ -881,42 +1026,46 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const grid = $("#pool-grid");
     if (!grid) return;
     grid.innerHTML = "";
-    $("#pool-item-name").textContent = state.currentItem ? state.currentItem.name : "";
-    const segs = state.currentItem ? segsFor(state.currentItem.id) : [];
-    $("#pool-unassigned-count").textContent = segs.filter(s => !s.characterId).length;
+    $("#pool-item-name").textContent = state.currentProject ? state.currentProject.name : "";
+    $("#pool-unassigned-count").textContent = charSegs(null).length;
     grid.appendChild(poolCard(null));
     state.characters.forEach(ch => grid.appendChild(poolCard(ch)));
     $("#pool-merge-count").textContent = (state.poolMerge || new Set()).size;
   }
 
   function poolAudition(cid) {
-    const segs = segsFor(state.currentItem.id).filter(s => s.characterId === cid);
-    if (!segs.length) return toast("该角色暂无片段");
-    auditionSegment(segs[0]);
+    const rows = charSegs(cid);
+    if (!rows.length) return toast("该角色暂无片段");
+    auditionSegment(rows[0].item, rows[0].seg);
   }
-  function poolPlaySeg(segId) {
-    const seg = segsFor(state.currentItem.id).find(s => s.id === segId);
-    if (seg) auditionSegment(seg);
+  function poolPlaySeg(segId, itemId) {
+    const item = state.items.find(x => x.id === itemId);
+    const seg = item ? segsFor(item.id).find(s => s.id === segId) : null;
+    if (item && seg) auditionSegment(item, seg);
   }
   function poolRename(cid) {
     const ch = charById(cid); if (!ch) return;
     const name = prompt("角色名称：", ch.name);
     if (name == null || !name.trim()) return;
     ch.name = name.trim();
-    scheduleSaveProject(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); renderSegments();
   }
   function poolDelete(cid) {
     const ch = charById(cid); if (!ch) return;
-    const n = segsFor(state.currentItem.id).filter(s => s.characterId === cid).length;
+    const n = charSegs(cid).length;
     if (!confirm(`删除角色「${ch.name}」？其 ${n} 段片段将变为未分配`)) return;
     state.characters = state.characters.filter(c => c.id !== cid);
-    segsFor(state.currentItem.id).forEach(s => { if (s.characterId === cid) s.characterId = null; });
-    scheduleSaveProject(); renderPool(); renderSegments();
+    (state.items || []).forEach(item => {
+      let changed = false;
+      segsFor(item.id).forEach(s => { if (s.characterId === cid) { s.characterId = null; changed = true; } });
+      if (changed) scheduleSaveProject(item.id);
+    });
+    scheduleSavePool(); renderPool(); renderSegments();
   }
   function poolSetColor(cid, color) {
     const ch = charById(cid); if (!ch) return;
     ch.color = color;
-    scheduleSaveProject(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); renderSegments();
   }
   function togglePoolMerge(cid, on) {
     state.poolMerge = state.poolMerge || new Set();
@@ -933,16 +1082,20 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     target.name = name.trim();
     target.speakerLabels = Array.from(new Set(chs.flatMap(c => c.speakerLabels || [])));
     state.characters = state.characters.filter(c => !ids.includes(c.id) || c.id === target.id);
-    segsFor(state.currentItem.id).forEach(s => { if (ids.includes(s.characterId) && s.characterId !== target.id) s.characterId = target.id; });
+    (state.items || []).forEach(item => {
+      let changed = false;
+      segsFor(item.id).forEach(s => { if (ids.includes(s.characterId) && s.characterId !== target.id) { s.characterId = target.id; changed = true; } });
+      if (changed) scheduleSaveProject(item.id);
+    });
     state.poolMerge = new Set();
-    scheduleSaveProject(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); renderSegments();
     toast(`已合并为「${target.name}」`);
   }
   function createPoolCharacter() {
     const name = prompt("新角色名称：", "新角色");
     if (name == null || !name.trim()) return;
     state.characters.push({ id: uid("char"), name: name.trim(), color: paletteNext(), speakerLabels: [], created: Date.now() });
-    scheduleSaveProject(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); renderSegments();
   }
 
   async function doIdentifySpeakers() {
@@ -950,17 +1103,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     toast("开始说话人识别（ECAPA 声纹，首次含模型加载）…");
     try {
       const j = await api(`/api/items/${state.currentItem.id}/speakers/generate`, { method: "POST" });
-      trackTask(j.task_id, (result) => {
-        state.speakerSegs = result.speaker_segments || state.speakerSegs;
-        (result.characters || []).forEach(c => { if (!charById(c.id)) state.characters.push(c); });
-        const labelChar = {};
-        state.characters.forEach(c => (c.speakerLabels || []).forEach(lb => labelChar[lb] = c.id));
-        segsFor(state.currentItem.id).forEach(s => {
-          if (s.speakerLabel && labelChar[s.speakerLabel] && !s.characterId) s.characterId = labelChar[s.speakerLabel];
-        });
-        scheduleSaveProject();
+      trackTask(j.task_id, async (result) => {
+        if (Array.isArray(result.characters)) state.characters = result.characters;
+        await loadProject(state.currentItem, true);
         renderPool(); renderSegments(); renderSubs();
-        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记`);
+        const created = (result.created || []).length;
+        const merged = (result.merged || 0);
+        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记；新增 ${created} 角色，跨素材归并 ${merged} 段`);
       });
     } catch (e) { toast("说话人识别启动失败: " + e.message, 6000); }
   }
@@ -969,11 +1118,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   $("#pool-grid").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
-    const cid = btn.dataset.char, segId = btn.dataset.seg;
+    const cid = btn.dataset.char, segId = btn.dataset.seg, itemId = btn.dataset.item;
     if (btn.classList.contains("pool-aud")) poolAudition(cid);
     else if (btn.classList.contains("pool-rename")) poolRename(cid);
     else if (btn.classList.contains("pool-del")) poolDelete(cid);
-    else if (btn.classList.contains("ps-play")) poolPlaySeg(segId);
+    else if (btn.classList.contains("ps-play")) poolPlaySeg(segId, itemId);
   });
   $("#pool-grid").addEventListener("dblclick", (e) => {
     const nm = e.target.closest(".pool-name");
@@ -983,21 +1132,23 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (e.target.classList.contains("pool-color")) poolSetColor(e.target.dataset.char, e.target.value);
     else if (e.target.classList.contains("pool-merge-cb")) togglePoolMerge(e.target.dataset.char, e.target.checked);
   });
-  let dragSegId = null;
+  let dragSegId = null, dragSegItem = null;
   $("#pool-grid").addEventListener("dragstart", (e) => {
     const seg = e.target.closest(".pool-seg");
     if (!seg) return;
     dragSegId = seg.dataset.seg;
+    dragSegItem = seg.dataset.item;
     e.dataTransfer.setData("text/plain", dragSegId);
   });
   $("#pool-grid").addEventListener("dragover", (e) => { if (e.target.closest(".pool-card")) e.preventDefault(); });
   $("#pool-grid").addEventListener("drop", (e) => {
     const card = e.target.closest(".pool-card");
-    if (!card || !state.currentItem) return;
+    if (!card) return;
     e.preventDefault();
     const sid = dragSegId || e.dataTransfer.getData("text/plain");
-    const seg = segsFor(state.currentItem.id).find(s => s.id === sid);
-    if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(); renderSegments(); renderPool(); }
+    const item = state.items.find(x => x.id === dragSegItem);
+    const seg = item ? segsFor(item.id).find(s => s.id === sid) : null;
+    if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(item.id); renderSegments(); renderPool(); }
   });
 
   // ── 实时字幕区 ────────────────────────────────────────
@@ -1024,7 +1175,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     empty.classList.toggle("hidden", subs.length > 0);
     subs.forEach((s, i) => {
       const lbl = speakerLabelAt((s.start + s.end) / 2);
-      const ch = lbl ? state.characters.find(c => (c.speakerLabels || []).includes(lbl)) : null;
+      const key = state.currentItem ? state.currentItem.id + ":" + lbl : "";
+      const ch = lbl ? state.characters.find(c => (c.speakerLabels || []).includes(key)) : null;
       const tr = document.createElement("tr");
       tr.className = "sub-row" + (i === state.currentSubIdx ? " cur" : "");
       tr.dataset.i = i;
@@ -1101,7 +1253,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   let focusedSeg = null;
   function setSegFocus(tr) {
     $$(".seg-row").forEach(r => r.style.outline = "");
-    if (tr) { tr.style.outline = "1px solid var(--accent)"; focusedSeg = tr.dataset.i; }
+    if (tr) { tr.style.outline = "1px solid var(--accent)"; focusedSeg = { item: tr.dataset.item, i: Number(tr.dataset.i) }; }
     else focusedSeg = null;
   }
 
@@ -1109,23 +1261,26 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   $("#seg-tbody").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
     const tr = e.target.closest("tr.seg-row");
-    if (!tr || !state.currentItem) return;
+    if (!tr) return;
+    const itemId = tr.dataset.item;
     const i = Number(tr.dataset.i);
-    const segs = segsFor(state.currentItem.id);
+    const segs = segsFor(itemId);
     const seg = segs[i];
     if (!seg) return;
     if (btn) {
-      if (btn.classList.contains("seg-aud")) auditionSegment(seg);
-      else if (btn.classList.contains("seg-jump")) jumpToSegment(seg);
-      else if (btn.classList.contains("seg-del")) { deleteSegment(i); return; }
+      if (btn.classList.contains("seg-aud")) { auditionSegment(state.items.find(x => x.id === itemId), seg); return; }
+      else if (btn.classList.contains("seg-jump")) { jumpToSegment(state.items.find(x => x.id === itemId), seg); return; }
+      else if (btn.classList.contains("seg-del")) { deleteSegment(itemId, i); return; }
     }
     e.preventDefault();
+    const rows = allSegs();
+    const flatIdx = rows.findIndex(r => r.seg.id === seg.id);
     if (e.shiftKey && state.selectedSegs.size) {
       let first = 1e9;
-      segs.forEach((s, k) => { if (state.selectedSegs.has(s.id)) first = Math.min(first, k); });
-      const lo = Math.min(first, i), hi = Math.max(first, i);
+      rows.forEach((r, k) => { if (state.selectedSegs.has(r.seg.id)) first = Math.min(first, k); });
+      const lo = Math.min(first, flatIdx), hi = Math.max(first, flatIdx);
       state.selectedSegs = new Set();
-      for (let k = lo; k <= hi; k++) state.selectedSegs.add(segs[k].id);
+      for (let k = lo; k <= hi; k++) state.selectedSegs.add(rows[k].seg.id);
     } else if (e.ctrlKey || e.metaKey) {
       if (state.selectedSegs.has(seg.id)) state.selectedSegs.delete(seg.id);
       else state.selectedSegs.add(seg.id);
@@ -1136,20 +1291,26 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     renderSegments();
   });
   $("#seg-tbody").addEventListener("input", (e) => {
+    const tr = e.target.closest("tr.seg-row");
+    if (!tr) return;
+    const itemId = tr.dataset.item;
     const i = Number(e.target.dataset.i);
-    const segs = segsFor(state.currentItem.id);
+    const segs = segsFor(itemId);
     if (!segs[i]) return;
-    if (e.target.classList.contains("seg-text")) { segs[i].text = e.target.value; scheduleSaveProject(); }
+    if (e.target.classList.contains("seg-text")) { segs[i].text = e.target.value; scheduleSaveProject(itemId); }
     renderSegments();   // 更新状态徽标
   });
   $("#seg-tbody").addEventListener("change", (e) => {
+    const tr = e.target.closest("tr.seg-row");
+    if (!tr) return;
+    const itemId = tr.dataset.item;
     const i = Number(e.target.dataset.i);
-    const segs = segsFor(state.currentItem.id);
+    const segs = segsFor(itemId);
     if (!segs[i]) return;
-    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; scheduleSaveProject(); }
+    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; scheduleSaveProject(itemId); }
     if (e.target.classList.contains("seg-speaker")) {
       segs[i].characterId = e.target.value || null;
-      scheduleSaveProject(); renderSegments();
+      scheduleSaveProject(itemId); renderSegments();
     }
   });
   function showRedirectMenu(x, y, segIds) {
@@ -1172,11 +1333,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideRedirectMenu(); });
   $("#segments-panel").addEventListener("contextmenu", (e) => {
     const tr = e.target.closest("tr.seg-row");
-    if (!tr || !state.currentItem) return;
+    if (!tr) return;
     e.preventDefault();
+    const itemId = tr.dataset.item;
     const i = Number(tr.dataset.i);
-    const segs = segsFor(state.currentItem.id);
-    let ids = Array.from(state.selectedSegs).filter(id => segs.some(s => s.id === id));
+    const segs = segsFor(itemId);
+    let ids = Array.from(state.selectedSegs).filter(id => allSegs().some(r => r.seg.id === id));
     if (!ids.length && segs[i]) ids = [segs[i].id];
     showRedirectMenu(e.clientX, e.clientY, ids);
   });
@@ -1250,6 +1412,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   async function uploadFile(file) {
     const fd = new FormData();
     fd.append("file", file);
+    if (state.currentProject) fd.append("project_id", state.currentProject.id);
     toast(`导入中: ${file.name}`);
     try {
       const j = await api("/api/import", { method: "POST", body: fd });
@@ -1315,7 +1478,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     toast(`解析 ${urls.length} 个链接…`);
     try {
       const j = await api("/api/url/open", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls }) });
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls, project_id: state.currentProject ? state.currentProject.id : undefined }) });
       const results = j.results || [];
       const firstOk = results.find(r => r.ok);
       if (firstOk && firstOk.video_proxy_url) {
@@ -1337,54 +1501,62 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // ── 转写 ───────────────────────────────────────────────
   function openTranscribeModal() {
-    if (!needItem()) return;
-    const segs = segsFor(state.currentItem.id).filter(s => !s.text.trim());
-    if (!segs.length) return toast("片段列表为空或都已填写文本");
+    if (!state.currentProject) return toast("请先选择项目");
+    const n = (state.items || []).reduce((a, item) => a + segsFor(item.id).filter(s => !s.text.trim()).length, 0);
+    if (!n) return toast("片段列表为空或都已填写文本");
     showModal("#modal-transcribe");
   }
   async function doTranscribe() {
-    if (!state.currentItem) return;
-    const segs = segsFor(state.currentItem.id);
-    const todo = segs.map((s, i) => ({ ...s, idx: i })).filter(x => !x.text.trim());
-    if (!todo.length) { hideModal("#modal-transcribe"); return toast("没有需要转写的片段"); }
+    if (!state.currentProject) return;
     const model = $("#tr-model").value;
     hideModal("#modal-transcribe");
-    toast(`转写 ${todo.length} 段（${model}）…`);
-    try {
-      const j = await api("/api/transcribe", { method: "POST",
+    let total = 0;
+    (state.items || []).forEach((item) => {
+      const segs = segsFor(item.id);
+      const todo = segs.map((s, i) => ({ ...s, idx: i })).filter(x => !x.text.trim());
+      if (!todo.length) return;
+      total += todo.length;
+      api("/api/transcribe", { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: state.currentItem.id,
-          segments: todo.map(s => ({ start: s.start, end: s.end })), model }) });
-      trackTask(j.task_id, (result) => {
-        (result.texts || []).forEach((text, k) => { segs[todo[k].idx].text = text; });
-        scheduleSaveProject();
-        renderSegments();
-        toast("转写完成，请人工校对文本");
-      });
-    } catch (e) { toast("转写启动失败: " + e.message); }
+        body: JSON.stringify({ item_id: item.id, segments: todo.map(s => ({ start: s.start, end: s.end })), model }) })
+        .then(j => trackTask(j.task_id, (result) => {
+          const cur = segsFor(item.id);
+          (result.texts || []).forEach((text, k) => { cur[todo[k].idx].text = text; });
+          scheduleSaveProject(item.id);
+          renderSegments();
+        }))
+        .catch(e => toast("转写启动失败: " + e.message));
+    });
+    toast(`转写 ${total} 段（${model}）…`);
   }
 
   // ── 训练集导出 ─────────────────────────────────────────
   function openDatasetModal() {
-    if (!needItem()) return;
-    if (!segsFor(state.currentItem.id).length) return toast("片段列表为空");
+    if (!state.currentProject) return toast("请先选择项目");
+    const n = (state.items || []).reduce((a, item) => a + segsFor(item.id).length, 0);
+    if (!n) return toast("片段列表为空");
     showModal("#modal-dataset");
   }
   async function doDatasetExport() {
-    if (!state.currentItem) return;
-    const segs = segsFor(state.currentItem.id);
+    if (!state.currentProject) return;
     hideModal("#modal-dataset");
+    const clips = [];
+    (state.items || []).forEach(item => {
+      segsFor(item.id).forEach(s => clips.push({
+        item_id: item.id, start: s.start, end: s.end, text: s.text,
+        language: s.language, speaker: (charById(s.characterId) || {}).name || "",
+      }));
+    });
     toast("导出训练集…");
     try {
       const j = await api("/api/dataset/export", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          item_id: state.currentItem.id,
+          project_id: state.currentProject.id,
+          clips,
           speaker: $("#ds-speaker").value.trim() || "speaker",
           language: $("#ds-language").value,
           out_dir: $("#ds-outdir").value.trim() || undefined,
-          segments: segs.map(s => ({ start: s.start, end: s.end, text: s.text,
-            language: s.language, speaker: (charById(s.characterId) || {}).name || "" })),
         }) });
       trackTask(j.task_id, (result) => {
         const skipped = (result.skipped || []).map(s => `  - [跳过] ${s.reason}（${fmtT(s.seg.start)}~${fmtT(s.seg.end)}）`).join("\n") || "  （无跳过）";
@@ -1431,6 +1603,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       "import": importDialog,
       "bilibili": () => showModal("#modal-bilibili"),
       "url-open": () => showModal("#modal-bilibili"),
+      "project-new": createProject,
+      "project-rename": renameProject,
+      "project-delete": deleteProject,
       "pool": openPool,
       "identify-speakers": doIdentifySpeakers,
       "export-selection": openExportModal,
@@ -1491,13 +1666,18 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         }
         case "ArrowUp": case "ArrowDown": e.preventDefault(); adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
-          if (state.currentItem) {
-            const segs = segsFor(state.currentItem.id);
-            if (state.selectedSegs.size) {
-              segs.splice(0, segs.length, ...segs.filter(s => !state.selectedSegs.has(s.id)));
-              state.selectedSegs = new Set();
-              scheduleSaveProject(); renderSegments();
-            } else if (focusedSeg != null) { deleteSegment(Number(focusedSeg)); setSegFocus(null); }
+          if (state.selectedSegs.size) {
+            (state.items || []).forEach(item => {
+              const segs = segsFor(item.id);
+              const before = segs.length;
+              const kept = segs.filter(s => !state.selectedSegs.has(s.id));
+              if (kept.length !== before) { segs.splice(0, segs.length, ...kept); scheduleSaveProject(item.id); }
+            });
+            state.selectedSegs = new Set();
+            renderSegments();
+          } else if (focusedSeg) {
+            deleteSegment(focusedSeg.item, focusedSeg.i);
+            setSegFocus(null);
           }
           break;
       }
@@ -1523,6 +1703,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // ── 事件绑定 ───────────────────────────────────────────
   function bindUI() {
+    const ps = $("#project-select");
+    if (ps) ps.addEventListener("change", () => {
+      const proj = state.projects.find(pp => pp.id === ps.value);
+      if (proj && state.currentProject && proj.id !== state.currentProject.id) selectProject(proj);
+    });
     $("#btn-cancel-task").addEventListener("click", cancelAllTasks);
     $("#btn-import").addEventListener("click", importDialog);
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
@@ -1623,12 +1808,16 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   bindUI();
   initWorkspace();
   setupMMSeek();
-  window.addEventListener("beforeunload", () => { if (state.projectDirty) saveProjectNow(); });
+  window.addEventListener("beforeunload", () => {
+    if (state.dirtyItems.size) saveProjectNow();
+    if (state.poolDirty) savePoolNow();
+  });
   boot();
 
   // 调试/自动化钩子
-  window.__vc = { state, selectItem, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
+  window.__vc = { state, selectItem, selectProject, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
     markForward, unmarkLast, clearMultiRegions,
-    loadProject, saveProjectNow, openPool, closePool, renderPool, doIdentifySpeakers, newSegment,
+    loadProject, saveProjectNow, savePoolNow, openPool, closePool, renderPool,
+    createProject, renameProject, deleteProject, doIdentifySpeakers, newSegment,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };
 })();

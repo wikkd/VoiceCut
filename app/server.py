@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_from_directory
 
 from app import bilibili as bilibili_mod
+from app import db as db_mod
 from app import dataset as dataset_mod
 from app import project as project_mod
 from app import speakers as speakers_mod
@@ -56,6 +58,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             video_url = item.extra["proxy_url"]
         return {
             "id": item.id, "name": item.name, "kind": item.kind,
+            "project_id": item.project_id or "",
             "duration": item.duration, "sample_rate": item.sample_rate,
             "audio_url": f"/api/audio/{item.id}",
             "video_url": video_url,
@@ -72,17 +75,22 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         extra.pop("peaks", None)
         return extra
 
+    def _default_project_id() -> str:
+        return db_mod.ensure_default_project(db_mod.get_conn(cfg.workdir))
+
     def _register_item(*, wav: Path, name: str, kind: str, item_id: str | None = None,
                        source: str = "", preview: Path | None = None,
                        derived_from: str | None = None,
+                       project_id: str | None = None,
                        extra: dict | None = None) -> MediaItem:
         item_id = item_id or store.new_id()
+        project_id = project_id or _default_project_id()
         duration = media_duration(wav)
         peaks = compute_peaks(wav)
         item = MediaItem(
             id=item_id, name=name, wav_path=wav, duration=duration,
             sample_rate=48000, preview_mp4=preview, source=source,
-            derived_from=derived_from, kind=kind,
+            derived_from=derived_from, kind=kind, project_id=project_id,
             extra={**(extra or {}), "peaks": peaks},
         )
         store.add(item)
@@ -128,9 +136,91 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             "models": {"whisper": ["medium", "large-v3"], "demucs": "htdemucs"},
         })
 
+    @app.get("/api/projects")
+    def api_projects() -> object:
+        conn = db_mod.get_conn(cfg.workdir)
+        out = []
+        for r in db_mod.fetch_project_records(conn):
+            try:
+                extra = json.loads(r["extra"] or "{}")
+            except Exception:
+                extra = {}
+            out.append({
+                "id": r["id"], "name": r["name"], "created": r["created"],
+                "updated": r["updated"],
+                "item_count": db_mod.count_items_in_project(conn, r["id"]),
+                "character_count": len(extra.get("characters") or []),
+            })
+        return jsonify(out)
+
+    @app.post("/api/projects")
+    def api_projects_create() -> object:
+        body = request.get_json(force=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            name = "\u65b0\u9879\u76ee"  # 新项目
+        pid = f"p-{uuid.uuid4().hex[:10]}"
+        now = time.time()
+        conn = db_mod.get_conn(cfg.workdir)
+        db_mod.insert_project(conn, pid, name, now, now, {})
+        return jsonify({"id": pid, "name": name, "created": now, "updated": now,
+                        "item_count": 0, "character_count": 0})
+
+    @app.get("/api/projects/<project_id>")
+    def api_project_record_get(project_id: str) -> object:
+        conn = db_mod.get_conn(cfg.workdir)
+        rec = db_mod.fetch_project_record(conn, project_id)
+        if rec is None:
+            return jsonify({"error": "project not found"}), 404
+        pool = project_mod.load_pool(cfg.workdir, project_id)
+        return jsonify({
+            "id": rec["id"], "name": rec["name"], "created": rec["created"],
+            "updated": rec["updated"],
+            "characters": pool["characters"],
+            "items": [_item_json(i) for i in store.by_project(project_id)],
+        })
+
+    @app.post("/api/projects/<project_id>/rename")
+    def api_project_rename(project_id: str) -> object:
+        body = request.get_json(force=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "\u540d\u79f0\u4e3a\u7a7a"}), 400  # 名称为空
+        conn = db_mod.get_conn(cfg.workdir)
+        if db_mod.fetch_project_record(conn, project_id) is None:
+            return jsonify({"error": "project not found"}), 404
+        db_mod.rename_project_record(conn, project_id, name)
+        return jsonify({"ok": True})
+
+    @app.delete("/api/projects/<project_id>")
+    def api_project_delete(project_id: str) -> object:
+        conn = db_mod.get_conn(cfg.workdir)
+        if db_mod.fetch_project_record(conn, project_id) is None:
+            return jsonify({"error": "project not found"}), 404
+        if db_mod.count_items_in_project(conn, project_id):
+            return jsonify({"error": "\u9879\u76ee\u975e\u7a7a\uff0c\u8bf7\u5148\u79fb\u9664\u7d20\u6750"}), 400
+        db_mod.delete_project_record(conn, project_id)
+        return jsonify({"ok": True})
+
+    @app.get("/api/projects/<project_id>/characters")
+    def api_pool_get(project_id: str) -> object:
+        pool = project_mod.load_pool(cfg.workdir, project_id)
+        return jsonify({"characters": pool["characters"]})
+
+    @app.post("/api/projects/<project_id>/characters")
+    def api_pool_save(project_id: str) -> object:
+        body = request.get_json(force=True) or {}
+        chars = body.get("characters")
+        if not isinstance(chars, list):
+            return jsonify({"error": "characters must be a list"}), 400
+        project_mod.save_pool(cfg.workdir, project_id, chars)
+        return jsonify({"ok": True})
+
     @app.get("/api/items")
     def list_items() -> object:
-        return jsonify([_item_json(i) for i in store.all()])
+        project_id = request.args.get("project_id") or None
+        items = store.by_project(project_id) if project_id else store.all()
+        return jsonify([_item_json(i) for i in items])
 
     @app.delete("/api/items/<item_id>")
     def delete_item(item_id: str) -> object:
@@ -184,10 +274,12 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         upload_dir.mkdir(parents=True, exist_ok=True)
         raw_path = upload_dir / (uuid.uuid4().hex + ext)
         f.save(str(raw_path))
-        tid = tasks.submit(_import_worker, cfg, store, raw_path, filename)
+        project_id = request.form.get("project_id") or ""
+        tid = tasks.submit(_import_worker, cfg, store, raw_path, filename, project_id)
         return jsonify({"task_id": tid, "name": filename})
 
-    def _import_worker(cfg_: AppConfig, store_: MediaStore, raw_path: Path, filename: str) -> dict:
+    def _import_worker(cfg_: AppConfig, store_: MediaStore, raw_path: Path, filename: str,
+                       project_id: str = "") -> dict:
         raw_path = Path(raw_path)
         stem = Path(filename).stem or "voicecut"
         ext = raw_path.suffix.lower()
@@ -212,7 +304,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             except Exception:  # noqa: BLE001
                 subs_file = None
         item = _register_item(item_id=item_id, wav=wav, preview=preview, name=stem, kind=kind,
-                              source=str(raw_path))
+                              source=str(raw_path), project_id=project_id or None)
         if subs_file:
             item.extra["subs_file"] = str(subs_file)
             store_.persist(item)
@@ -372,7 +464,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         out = items_dir / f"{item_id}.wav"
         denoise_mod.denoise_wav(src_item.wav_path, out, stationary=True, prop_decrease=0.75)
         item = _register_item(item_id=item_id, wav=out, name=f"{src_item.name}_降噪", kind="denoised",
-                              source=str(out), derived_from=src_item.id)
+                              source=str(out), derived_from=src_item.id,
+                              project_id=src_item.project_id or None)
         return {"item_id": item.id, "item": _item_json(item)}
 
     @app.post("/api/separate")
@@ -396,7 +489,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             wav = items_dir / f"{item_id}.wav"
             extract_audio(path, wav, sample_rate=48000, channels=1)  # 统一工作格式
             return _register_item(item_id=item_id, wav=wav, name=f"{src_item.name}_{label}", kind=kind,
-                                  source=str(wav), derived_from=src_item.id)
+                                  source=str(wav), derived_from=src_item.id,
+                                  project_id=src_item.project_id or None)
 
         vocal = _reg(Path(res["vocals"]), "人声", "vocal")
         inst = _reg(Path(res["no_vocals"]), "伴奏", "instrumental")
@@ -415,7 +509,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         out = items_dir / f"{item_id}.wav"
         trim_silence(src_item.wav_path, out, sample_rate=48000)
         item = _register_item(item_id=item_id, wav=out, name=f"{src_item.name}_去静音", kind="trimmed",
-                              source=str(out), derived_from=src_item.id)
+                              source=str(out), derived_from=src_item.id,
+                              project_id=src_item.project_id or None)
         return {"item_id": item.id, "item": _item_json(item)}
 
     # ── 转写 / 训练集 ─────────────────────────────────────────
@@ -447,13 +542,36 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     @app.post("/api/dataset/export")
     def api_dataset_export() -> object:
         body = request.get_json(force=True) or {}
+        speaker = body.get("speaker") or "speaker"
+        language = body.get("language") or "JP"
+        out_dir = body.get("out_dir")
+
+        if body.get("project_id"):
+            clips = body.get("clips") or []
+            if not clips:
+                return jsonify({"error": "无片段"}), 400
+            sources: dict[str, str | Path] = {
+                i.id: i.wav_path for i in store.by_project(body["project_id"])
+            }
+            ds_segs = [
+                dataset_mod.DatasetSegment(
+                    item_id=(s.get("item_id") or ""),
+                    start=float(s["start"]), end=float(s["end"]),
+                    text=(s.get("text") or "").strip(),
+                    language=(s.get("language") or language),
+                    speaker=(s.get("speaker") or speaker),
+                )
+                for s in clips
+            ]
+            out_dir = out_dir or str(cfg.workdir / "datasets" / f"{body['project_id']}_{int(time.time())}")
+            tid = tasks.submit(_dataset_worker, sources, ds_segs, Path(out_dir))
+            return jsonify({"task_id": tid})
+
         item = store.require(body.get("item_id"))
         segs = body.get("segments") or []
         if not segs:
             return jsonify({"error": "无片段"}), 400
-        speaker = body.get("speaker") or "speaker"
-        language = body.get("language") or "JP"
-        out_dir = body.get("out_dir") or str(cfg.workdir / "datasets" / f"{item.id}_{int(time.time())}")
+        out_dir = out_dir or str(cfg.workdir / "datasets" / f"{item.id}_{int(time.time())}")
         ds_segs = [
             dataset_mod.DatasetSegment(
                 start=float(s["start"]), end=float(s["end"]),
@@ -463,24 +581,24 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             )
             for s in segs
         ]
-        tid = tasks.submit(_dataset_worker, item, ds_segs, Path(out_dir))
+        tid = tasks.submit(_dataset_worker, item.wav_path, ds_segs, Path(out_dir))
         return jsonify({"task_id": tid})
 
-    def _dataset_worker(item: MediaItem, ds_segs: list, out_dir: Path) -> dict:
+    def _dataset_worker(sources, ds_segs: list, out_dir: Path) -> dict:
         tid = tasks.current_task_id()
-        return dataset_mod.export_dataset(item.wav_path, ds_segs, out_dir,
+        return dataset_mod.export_dataset(sources, ds_segs, out_dir,
                                           tasks=tasks, task_id=tid)
 
     # ── B 站 ─────────────────────────────────────────────────
 
     # ── 网络 URL 导入（多平台，yt-dlp 解析） ──
 
-    def _open_url(url: str) -> dict:
+    def _open_url(url: str, project_id: str = "") -> dict:
         try:
             job = bilibili_mod.create_job(url)
         except RuntimeError as exc:
             return {"url": url, "ok": False, "error": str(exc)}
-        tid = tasks.submit(_bilibili_worker, cfg, store, job)
+        tid = tasks.submit(_bilibili_worker, cfg, store, job, project_id)
         return {"url": url, "ok": True, "job_id": job["id"], "title": job["title"],
                 "video_proxy_url": f"/api/bilibili/proxy/{job['id']}", "task_id": tid}
 
@@ -499,7 +617,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         urls = _split_urls(body.get("urls"))
         if not urls:
             return jsonify({"error": "缺少链接"}), 400
-        return jsonify({"results": [_open_url(u) for u in urls]})
+        project_id = body.get("project_id") or ""
+        return jsonify({"results": [_open_url(u, project_id) for u in urls]})
 
     @app.post("/api/bilibili/open")
     def api_bilibili_open() -> object:  # 旧入口别名
@@ -507,12 +626,14 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         urls = _split_urls(body.get("url") or body.get("urls"))
         if not urls:
             return jsonify({"error": "缺少链接"}), 400
-        r = _open_url(urls[0])
+        project_id = body.get("project_id") or ""
+        r = _open_url(urls[0], project_id)
         if not r["ok"]:
             return jsonify({"error": r["error"]}), 400
         return jsonify({k: r[k] for k in ("job_id", "title", "video_proxy_url", "task_id")})
 
-    def _bilibili_worker(cfg_: AppConfig, store_: MediaStore, job: dict) -> dict:
+    def _bilibili_worker(cfg_: AppConfig, store_: MediaStore, job: dict,
+                         project_id: str = "") -> dict:
         tid = tasks.current_task_id()
         cache = cfg_.workdir / "bilibili"
         cache.mkdir(parents=True, exist_ok=True)
@@ -535,7 +656,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         wav = items_dir / f"{item_id}.wav"
         extract_audio(src_file, wav, sample_rate=48000, channels=1)
         item = _register_item(item_id=item_id, wav=wav, name=job["title"], kind="url",
-                              source=job["url"],
+                              source=job["url"], project_id=project_id or None,
                               extra={"proxy_url": f"/api/bilibili/proxy/{job['id']}",
                                      "bilibili_job": job["id"]})
         log.info("url import ok: %s -> %s", job.get("title"), item.id)
@@ -577,8 +698,6 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         store.require(item_id)
         body = request.get_json(force=True) or {}
         proj = project_mod.load_project(cfg.workdir, item_id)
-        if "characters" in body:
-            proj["characters"] = body["characters"] or []
         if "segments" in body:
             proj["segments"] = body["segments"] or []
         if "speaker_segments" in body:
@@ -622,34 +741,46 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             progress_cb=lambda p: tasks.update(tid, progress=0.3 + p * 0.6,
                                                message=f"说话人声纹聚类 {p * 100:.0f}%"),
         )
-        proj = project_mod.load_project(cfg_.workdir, item.id)
         speaker_segments = res["speaker_segments"]
-        existing = {}
-        for c in proj["characters"]:
-            for lb in (c.get("speakerLabels") or []):
-                existing[lb] = c["id"]
-        created = []
-        for lb in sorted({s["label"] for s in speaker_segments if s.get("label")}):
-            if lb in existing:
-                continue
-            cid = project_mod.new_uid("char")
-            proj["characters"].append({
-                "id": cid, "name": lb, "color": project_mod.next_color(),
-                "speakerLabels": [lb], "created": time.time(),
-            })
-            existing[lb] = cid
-            created.append(cid)
-        char_of_label = {lb: cid for c in proj["characters"] for lb in (c.get("speakerLabels") or [])}
+        project_id = item.project_id or _default_project_id()
+        pool = project_mod.load_pool(cfg_.workdir, project_id)
+        label_embeds = res.get("label_embeddings") or {}
+        if res.get("quality") == "ecapa" and label_embeds:
+            assignments, chars, created = speakers_mod.match_labels_to_pool(
+                item.id, label_embeds, pool["characters"])
+            merged = max(0, len(assignments) - len(created))
+        else:
+            # MFCC fallback / no embeddings: one project character per label
+            chars = pool["characters"]
+            assignments = {}
+            created = []
+            for lb in sorted({s["label"] for s in speaker_segments if s.get("label")}):
+                key = f"{item.id}:{lb}"
+                existing = next((c for c in chars if key in (c.get("speakerLabels") or [])), None)
+                if existing:
+                    assignments[lb] = existing["id"]
+                    continue
+                cid = project_mod.new_uid("char")
+                chars.append({
+                    "id": cid, "name": lb, "color": project_mod.next_color(),
+                    "speakerLabels": [key], "created": time.time(),
+                })
+                assignments[lb] = cid
+                created.append(cid)
+            merged = 0
+        project_mod.save_pool(cfg_.workdir, project_id, chars)
+        char_of_label = {lb: cid for lb, cid in assignments.items()}
+        proj = project_mod.load_project(cfg_.workdir, item.id)
         for seg in proj["segments"]:
             lb = seg.get("speakerLabel")
-            if lb and char_of_label.get(lb) and not seg.get("characterId"):
+            if lb and not seg.get("characterId") and lb in char_of_label:
                 seg["characterId"] = char_of_label[lb]
         proj["speaker_segments"] = speaker_segments
         project_mod.save_project(cfg_.workdir, item.id, proj)
         return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
                 "n_speakers": res["n_speakers"], "quality": res["quality"],
                 "speaker_segments": speaker_segments,
-                "characters": proj["characters"], "created": created}
+                "characters": chars, "created": created, "merged": merged}
 
     # ── 素材重命名 ──
 

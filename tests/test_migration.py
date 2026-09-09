@@ -38,9 +38,13 @@ def test_migrate_legacy_layout(tmp_path: Path) -> None:
     assert r1["preview_mp4"] is not None and r1["preview_mp4"].endswith("m0001.preview.mp4")
     assert json.loads(r1["extra"])["subs_file"].endswith("m0001.srt")
     assert r1["id"].startswith("m-")
+    assert r1["project_id"].startswith("p-")
     proj_raw = db.fetch_project(conn, r1["id"])
     assert proj_raw is not None
-    assert json.loads(proj_raw)["characters"][0]["name"] == "A"
+    # per-item blob no longer stores characters (project-level pool owns them)
+    assert "characters" not in json.loads(proj_raw)
+    pool = json.loads(db.fetch_project_record(conn, r1["project_id"])["extra"])
+    assert pool["characters"][0]["name"] == "A"
     r3 = by_name["m0003"]
     assert db.fetch_project(conn, r3["id"]) is None
 

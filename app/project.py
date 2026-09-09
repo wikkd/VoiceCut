@@ -78,3 +78,35 @@ def save_project(workdir: Path, item_id: str, data: dict) -> dict:
 def delete_project(workdir: Path, item_id: str) -> None:
     conn = db.get_conn(workdir)
     db.delete_project_row(conn, item_id)
+
+# ---- project-level shared character pool -------------------------
+
+def default_pool() -> dict:
+    """Empty project character pool."""
+    return {"characters": []}
+
+
+def load_pool(workdir: Path, project_id: str) -> dict:
+    """Load the project-level shared character pool (empty dict on missing)."""
+    conn = db.get_conn(workdir)
+    rec = db.fetch_project_record(conn, project_id)
+    if rec is None:
+        return default_pool()
+    try:
+        extra = json.loads(rec["extra"] or "{}")
+    except Exception:
+        extra = {}
+    if not isinstance(extra, dict):
+        extra = {}
+    chars = extra.get("characters")
+    if not isinstance(chars, list):
+        chars = []
+    return {"characters": chars}
+
+
+def save_pool(workdir: Path, project_id: str, characters: list) -> dict:
+    """Persist the project-level character pool; returns {"characters": [...]}."""
+    conn = db.get_conn(workdir)
+    chars = list(characters or [])
+    db.update_project_extra(conn, project_id, {"characters": chars})
+    return {"characters": chars}

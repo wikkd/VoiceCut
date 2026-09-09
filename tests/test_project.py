@@ -58,3 +58,18 @@ def test_delete_project(tmp_path: Path) -> None:
 def test_next_color_distinct() -> None:
     colors = [pr.next_color() for _ in range(10)]
     assert len(set(colors)) == 10
+
+def test_pool_roundtrip(tmp_path: Path) -> None:
+    from app import db
+    pid = db.ensure_default_project(db.get_conn(tmp_path))
+    chars = [{"id": "c1", "name": "A", "color": "#e5484d",
+              "speakerLabels": ["m1:\u8bf4\u8bdd\u4eba1"]}]
+    pr.save_pool(tmp_path, pid, chars)
+    got = pr.load_pool(tmp_path, pid)
+    assert got["characters"][0]["name"] == "A"
+    pr.save_pool(tmp_path, pid, [])
+    assert pr.load_pool(tmp_path, pid)["characters"] == []
+
+
+def test_load_pool_missing_returns_default(tmp_path: Path) -> None:
+    assert pr.load_pool(tmp_path, "p-none")["characters"] == []

@@ -32,6 +32,7 @@ class MediaItem:
     wav_path: Path
     duration: float
     sample_rate: int
+    project_id: str = ""
     source: str = ""
     preview_mp4: Path | None = None
     derived_from: str | None = None
@@ -43,6 +44,7 @@ class MediaItem:
 def _to_row(item: MediaItem) -> dict:
     return {
         "id": item.id,
+        "project_id": item.project_id or "",
         "name": item.name,
         "kind": item.kind,
         "wav_path": str(item.wav_path),
@@ -59,6 +61,7 @@ def _to_row(item: MediaItem) -> dict:
 def _from_row(row: dict) -> MediaItem:
     return MediaItem(
         id=row["id"],
+        project_id=row.get("project_id") or "",
         name=row["name"],
         wav_path=Path(row["wav_path"]),
         duration=float(row["duration"]),
@@ -102,6 +105,18 @@ class MediaStore:
     def all(self) -> list[MediaItem]:
         with self._lock:
             return list(self._items.values())
+
+    def by_project(self, project_id: str) -> list[MediaItem]:
+        with self._lock:
+            return [i for i in self._items.values() if i.project_id == project_id]
+
+    def set_project(self, item_id: str, project_id: str) -> MediaItem | None:
+        with self._lock:
+            item = self._items.get(item_id)
+            if item:
+                item.project_id = project_id
+                db.insert_item(self._conn, _to_row(item))
+            return item
 
     def remove(self, item_id: str) -> None:
         with self._lock:

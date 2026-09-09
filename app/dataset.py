@@ -26,6 +26,7 @@ class DatasetSegment:
     start: float
     end: float
     text: str = ""
+    item_id: str = ""
     language: str = "JP"
     speaker: str = "speaker"
     note: str = ""                      # 主观标记: clean / bgm / reverb
@@ -34,7 +35,7 @@ class DatasetSegment:
 
 
 def export_dataset(
-    src_wav: str | Path,
+    sources: str | Path | dict[str, str | Path],
     segments: list[DatasetSegment],
     out_dir: str | Path,
     *,
@@ -54,7 +55,20 @@ def export_dataset(
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    src_wav = Path(src_wav)
+
+    if isinstance(sources, dict):
+        def _src(seg: DatasetSegment) -> Path:
+            if not seg.item_id:
+                raise ValueError("multi-source export requires item_id per segment")
+            try:
+                return Path(sources[seg.item_id])
+            except KeyError:
+                raise KeyError("missing source for item %s" % seg.item_id) from None
+    else:
+        single = Path(sources)
+
+        def _src(seg: DatasetSegment) -> Path:
+            return single
 
     written: list[dict] = []
     skipped: list[dict] = []
@@ -82,10 +96,10 @@ def export_dataset(
         # 1) 切片段 → 2) 去头尾静音 → 3) 响度标准化 → 4) 落盘正式文件
         tmp_trim = out_dir / f".tmp_cut_{num:03d}.wav"
         if trim:
-            export_segment_trimmed(src_wav, tmp_trim, seg.start, seg.end,
+            export_segment_trimmed(_src(seg), tmp_trim, seg.start, seg.end,
                                    sample_rate=sample_rate)
         else:
-            export_segment(src_wav, tmp_trim, seg.start, seg.end, sample_rate=sample_rate)
+            export_segment(_src(seg), tmp_trim, seg.start, seg.end, sample_rate=sample_rate)
 
         final = tmp_trim
         if normalize:

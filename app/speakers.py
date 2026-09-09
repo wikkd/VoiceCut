@@ -11,9 +11,12 @@ corrects via the character pool.
 """
 from __future__ import annotations
 
+import base64
 import math
 import os
 import sys
+import time
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -206,10 +209,116 @@ def generate_speakers(
                     "label": label_of.get(i)})
     if progress_cb:
         progress_cb(1.0)
+    label_embeddings = _label_embeddings(valid_idx, clusters, label_of, embeds)
     return {
         "speaker_segments": out,
         "quality": quality,
         "total": total,
         "labeled": len(valid_idx),
         "n_speakers": n_speakers,
+        "label_embeddings": label_embeddings,
     }
+
+
+def _label_embeddings(valid_idx, clusters, label_of, embeds) -> dict:
+    """Mean (normalized) representative embedding per detected label."""
+    sums: dict[str, np.ndarray] = {}
+    counts: dict[str, int] = {}
+    for i, c in zip(valid_idx, clusters):
+        lb = label_of.get(i)
+        e = embeds[i]
+        if lb is None or e is None:
+            continue
+        if lb not in sums:
+            sums[lb] = np.asarray(e, dtype=np.float64)
+            counts[lb] = 1
+        else:
+            sums[lb] = sums[lb] + np.asarray(e, dtype=np.float64)
+            counts[lb] += 1
+    out: dict[str, np.ndarray] = {}
+    for lb, s in sums.items():
+        mean = s / max(1, counts[lb])
+        norm = float(np.linalg.norm(mean)) + 1e-9
+        out[lb] = mean / norm
+    return out
+
+
+def embedding_to_b64(arr) -> str:
+    a = np.asarray(arr, dtype=np.float32)
+    return base64.b64encode(a.tobytes()).decode("ascii")
+
+
+def embedding_from_b64(raw) -> np.ndarray | None:
+    if not raw:
+        return None
+    try:
+        return np.frombuffer(base64.b64decode(raw), dtype=np.float32)
+    except Exception:
+        return None
+
+
+def _cos(a, b) -> float:
+    na = float(np.linalg.norm(a)) + 1e-9
+    nb = float(np.linalg.norm(b)) + 1e-9
+    return float(np.dot(a, b) / (na * nb))
+
+
+def match_labels_to_pool(item_id, label_embeddings, characters, threshold=0.82):
+    """Map detected labels of one item onto a project character pool.
+
+    - A label already present as "<item_id>:<label>" on a character is reused.
+    - Otherwise the label embedding is matched against characters carrying a
+      representative ``embedding``; cosine >= threshold merges (running average).
+    - Otherwise a new project character is created.
+
+    Returns (assignments, characters, created):
+      assignments: {label: character_id}
+      characters : updated pool (new list; caller persists it)
+      created    : [character_id, ...] for newly created characters
+    """
+    from app import project as project_mod
+    characters = [dict(c) for c in characters]
+    assignments: dict[str, str] = {}
+    created: list[str] = []
+    for label, emb in sorted((label_embeddings or {}).items()):
+        if emb is None:
+            continue
+        key = f"{item_id}:{label}"
+        emb = np.asarray(emb, dtype=np.float32)
+        target = None
+        for c in characters:
+            if key in (c.get("speakerLabels") or []):
+                target = c
+                break
+        if target is None:
+            best, best_sim = None, -1.0
+            for c in characters:
+                ce = embedding_from_b64(c.get("embedding"))
+                if ce is None:
+                    continue
+                sim = _cos(emb, ce)
+                if sim > best_sim:
+                    best, best_sim = c, sim
+            if best is not None and best_sim >= threshold:
+                target = best
+        if target is not None:
+            assignments[label] = target["id"]
+            labels = target.get("speakerLabels") or []
+            if key not in labels:
+                labels.append(key)
+            target["speakerLabels"] = labels
+            cnt = int(target.get("emb_count") or 1)
+            old = embedding_from_b64(target.get("embedding"))
+            if old is not None:
+                target["embedding"] = embedding_to_b64((old * cnt + emb) / (cnt + 1))
+            target["emb_count"] = cnt + 1
+        else:
+            cid = f"char_{uuid.uuid4().hex[:10]}"
+            characters.append({
+                "id": cid, "name": label, "color": project_mod.next_color(),
+                "speakerLabels": [key], "embedding": embedding_to_b64(emb),
+                "emb_count": 1, "created": time.time(),
+            })
+            assignments[label] = cid
+            created.append(cid)
+    return assignments, characters, created

@@ -367,3 +367,10 @@ tr.seg-row.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .pool-seg .ps-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .pool-seg .ps-play { padding: 0 8px; }
 .pool-seg:active { cursor: grabbing; }
+
+/* ---- 项目下拉 / 片段来源列 ---- */
+#project-select { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; max-width: 160px; }
+#toolbar .chip { white-space: nowrap; }
+.seg-src { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.ps-src { color: var(--muted); font-size: 10px; white-space: nowrap; max-width: 46px; overflow: hidden; text-overflow: ellipsis; }
+

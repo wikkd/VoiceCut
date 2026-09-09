@@ -82,3 +82,72 @@ def test_generate_labels_ordered_by_first_appearance(monkeypatch, tmp_path: Path
     res = speakers.generate_speakers(str(wav), subs)
     assert res["speaker_segments"][0]["label"] == "说话人1"
     assert res["speaker_segments"][1]["label"] == "说话人2"
+
+def test_label_embeddings_returned(monkeypatch, tmp_path: Path) -> None:
+    wav = tmp_path / "t.wav"
+    _two_tone_wav(wav)
+    subs = [{"start": 0.0, "end": 1.0}, {"start": 1.0, "end": 2.0}]
+
+    def fake_emb(mono, sr, start, end):
+        return np.array([1.0, 0.0, 0.0]) if (start + end) / 2 < 1 else np.array([0.0, 1.0, 0.0])
+
+    monkeypatch.setattr(speakers, "_ecapa_embedding", fake_emb)
+    res = speakers.generate_speakers(str(wav), subs)
+    assert set(res["label_embeddings"].keys()) == {"\u8bf4\u8bdd\u4eba1", "\u8bf4\u8bdd\u4eba2"}
+    for v in res["label_embeddings"].values():
+        assert abs(float(np.linalg.norm(v)) - 1.0) < 1e-6
+
+
+def test_embedding_roundtrip() -> None:
+    arr = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+    b = speakers.embedding_to_b64(arr)
+    out = speakers.embedding_from_b64(b)
+    assert out is not None and np.allclose(out, arr)
+    assert speakers.embedding_from_b64("bad!!") is None
+    assert speakers.embedding_from_b64("") is None
+
+
+def test_match_labels_merges_same_voice() -> None:
+    base = np.array([1.0, 0.0, 0.0])
+    chars = [{"id": "c1", "name": "A", "speakerLabels": ["i1:\u8bf4\u8bdd\u4eba1"],
+              "embedding": speakers.embedding_to_b64(base), "emb_count": 1}]
+    same = np.array([0.9, 0.1, 0.0])
+    assignments, chars2, created = speakers.match_labels_to_pool(
+        "i2", {"\u8bf4\u8bdd\u4eba1": same}, chars, threshold=0.82)
+    assert assignments["\u8bf4\u8bdd\u4eba1"] == "c1"
+    assert created == []
+    assert "i2:\u8bf4\u8bdd\u4eba1" in chars2[0]["speakerLabels"]
+    assert chars2[0]["emb_count"] == 2
+
+
+def test_match_labels_creates_new_for_different_voice() -> None:
+    base = np.array([1.0, 0.0, 0.0])
+    chars = [{"id": "c1", "name": "A", "speakerLabels": [],
+              "embedding": speakers.embedding_to_b64(base), "emb_count": 1}]
+    other = np.array([0.0, 1.0, 0.0])
+    assignments, chars2, created = speakers.match_labels_to_pool(
+        "i2", {"\u8bf4\u8bdd\u4eba2": other}, chars, threshold=0.82)
+    assert assignments["\u8bf4\u8bdd\u4eba2"] == created[0]
+    assert created and len(chars2) == 2
+    assert "i2:\u8bf4\u8bdd\u4eba2" in chars2[1]["speakerLabels"]
+
+
+def test_match_labels_threshold_boundary() -> None:
+    base = np.array([1.0, 0.0, 0.0])
+    low = np.array([0.8, 0.6, 0.0])  # cosine 0.8 < 0.82 -> new character
+    chars = [{"id": "c1", "name": "A", "speakerLabels": [],
+              "embedding": speakers.embedding_to_b64(base), "emb_count": 1}]
+    assignments, chars2, created = speakers.match_labels_to_pool(
+        "i", {"x": low}, chars, threshold=0.82)
+    assert assignments["x"] == created[0]
+    assert len(chars2) == 2
+
+
+def test_match_labels_reuses_existing_label() -> None:
+    base = np.array([1.0, 0.0, 0.0])
+    chars = [{"id": "c1", "name": "A", "speakerLabels": ["i1:\u8bf4\u8bdd\u4eba1"],
+              "embedding": speakers.embedding_to_b64(base), "emb_count": 1}]
+    assignments, chars2, created = speakers.match_labels_to_pool(
+        "i1", {"\u8bf4\u8bdd\u4eba1": base}, chars, threshold=0.82)
+    assert assignments["\u8bf4\u8bdd\u4eba1"] == "c1"
+    assert created == []

@@ -18,6 +18,10 @@
         <button data-act="url-open">从 URL 导入…</button>
         <div class="menu-sep"></div>
         <button data-act="export-selection">导出选区 <kbd>E</kbd></button>
+        <div class="menu-sep"></div>
+        <button data-act="project-new">新建项目…</button>
+        <button data-act="project-rename">重命名项目…</button>
+        <button data-act="project-delete">删除项目…</button>
       </div>
     </div>
     <div class="menu" data-menu="audio">
@@ -76,6 +80,7 @@
     <button id="btn-pool" class="btn">🎭 角色池</button>
     <button id="btn-export-dataset" class="btn">📦 导出训练集</button>
     <span class="spacer"></span>
+    <label class="chip" title="当前项目">项目 <select id="project-select"></select></label>
   </div>
 
   <!-- ③ 工作区：3×3 网格 / 分隔条 / 面板换位 / 布局记忆 -->
@@ -165,6 +170,7 @@
             <thead>
               <tr>
                 <th style="width:38px">#</th>
+                <th style="width:70px">来源</th>
                 <th style="width:130px">起止</th>
                 <th style="width:64px">时长</th>
                 <th style="width:70px">状态</th>

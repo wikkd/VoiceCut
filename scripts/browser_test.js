@@ -157,7 +157,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       li.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }));
       const mediaMenuVisible = !document.querySelector('#media-menu').classList.contains('hidden');
       document.querySelector('#media-menu').classList.add('hidden');
-      vc.state.projectDirty = true;
+      vc.state.dirtyItems.add(vc.state.currentItem.id);
       await vc.saveProjectNow();
       vc.state.ws.setTime(10);
       await new Promise(r => setTimeout(r, 300));
@@ -167,10 +167,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const bb = document.querySelector('#bb-url');
       const bbIsTextarea = !!bb && bb.tagName === 'TEXTAREA';
       const cancelBtn = !!document.querySelector('#btn-cancel-task');
+      const hasProjectSelect = !!document.querySelector('#project-select');
+      const projectSelectOpts = document.querySelectorAll('#project-select option').length;
+      const projectName = vc.state.currentProject ? vc.state.currentProject.name : null;
+      const srcCells = document.querySelectorAll('#seg-tbody .seg-src').length;
+      const poolTitle = document.querySelector('#pool-item-name').textContent;
       return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
-               mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: segs.length };
+               mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: segs.length,
+               hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
+
+    // 项目式：新建空项目 → 切换 → 素材/角色池隔离 → 删除
+    const newProj = await (await fetch("http://127.0.0.1:8765/api/projects", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "test-proj" }) })).json();
+    const rJ = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      await vc.selectProject(${JSON.stringify({ id: newProj.id, name: newProj.name })});
+      await new Promise(r => setTimeout(r, 1200));
+      const emptyItems = vc.state.items.length === 0;
+      const emptyChars = vc.state.characters.length === 0;
+      const selValue = document.querySelector('#project-select').value;
+      return { ok: true, emptyItems, emptyChars, selValue };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("PROJ:", JSON.stringify(rJ.result && rJ.result.result && rJ.result.result.value));
+    await fetch(`http://127.0.0.1:8765/api/projects/${newProj.id}`, { method: "DELETE" });
 
     // 项目持久化往返：刷新后片段从服务端恢复
     await send("Page.reload", { ignoreCache: true });

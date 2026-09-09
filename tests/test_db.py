@@ -66,3 +66,66 @@ def test_project_roundtrip_via_db(tmp_path: Path) -> None:
     got = pr.load_project(tmp_path, "m-abc123")
     assert got["segments"][0]["text"] == "hi"
     assert pr.load_project(tmp_path, "m-none")["characters"] == []
+
+def test_projects_crud_and_default(tmp_path: Path) -> None:
+    conn = db.get_conn(tmp_path)
+    pid = db.ensure_default_project(conn)
+    assert pid.startswith("p-")
+    recs = db.fetch_project_records(conn)
+    assert [r["id"] for r in recs] == [pid]
+    db.insert_project(conn, "p-x", "proj", 1.0, 1.0, {"characters": []})
+    db.rename_project_record(conn, "p-x", "renamed")
+    assert db.fetch_project_record(conn, "p-x")["name"] == "renamed"
+    db.delete_project_record(conn, "p-x")
+    assert db.fetch_project_record(conn, "p-x") is None
+
+
+def test_items_filter_by_project_and_assign(tmp_path: Path) -> None:
+    store = MediaStore(tmp_path)
+    pid = db.ensure_default_project(db.get_conn(tmp_path))
+    it1 = MediaItem(id=store.new_id(), name="a", wav_path=tmp_path / "a.wav",
+                    duration=1.0, sample_rate=48000, project_id=pid)
+    it2 = MediaItem(id=store.new_id(), name="b", wav_path=tmp_path / "b.wav",
+                    duration=1.0, sample_rate=48000, project_id="p-other")
+    store.add(it1)
+    store.add(it2)
+    assert [i.id for i in store.by_project(pid)] == [it1.id]
+    assert [i.id for i in store.by_project("p-other")] == [it2.id]
+    store.set_project(it2.id, pid)
+    assert len(store.by_project(pid)) == 2
+    assert db.fetch_item(db.get_conn(tmp_path), it2.id)["project_id"] == pid
+
+
+def test_v1_to_v2_migration_pools_characters(tmp_path: Path) -> None:
+    import sqlite3
+    path = tmp_path / "voicecut.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE items (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'audio',
+            wav_path TEXT NOT NULL, preview_mp4 TEXT, source TEXT, derived_from TEXT,
+            duration REAL NOT NULL DEFAULT 0, sample_rate INTEGER NOT NULL DEFAULT 48000,
+            created REAL NOT NULL, extra TEXT NOT NULL DEFAULT '{}');
+        CREATE TABLE projects (item_id TEXT PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}');
+    """)
+    conn.execute("INSERT INTO items (id, name, kind, wav_path, created) VALUES ('m-1','a','audio','x.wav',1)")
+    conn.execute("INSERT INTO projects (item_id, data) VALUES ('m-1', ?)", (
+        json.dumps({"characters": [{"id": "c1", "name": "A",
+                                    "speakerLabels": ["\u8bf4\u8bdd\u4eba1"]}],
+                    "segments": [], "speaker_segments": []}),))
+    conn.commit()
+    conn.close()
+    db.reset_conns()
+    conn2 = db.get_conn(tmp_path)
+    proj_raw = db.fetch_project(conn2, "m-1")
+    assert proj_raw is not None
+    assert "characters" not in json.loads(proj_raw)
+    pid = db.ensure_default_project(conn2)
+    pool = json.loads(db.fetch_project_record(conn2, pid)["extra"])
+    assert pool["characters"][0]["speakerLabels"] == ["m-1:\u8bf4\u8bdd\u4eba1"]
+    assert db.fetch_item(conn2, "m-1")["project_id"] == pid
+    # idempotent: re-connect must not re-pool or drop
+    db.reset_conns()
+    conn3 = db.get_conn(tmp_path)
+    pool2 = json.loads(db.fetch_project_record(conn3, pid)["extra"])
+    assert len(pool2["characters"]) == 1

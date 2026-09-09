@@ -49,3 +49,27 @@ def test_export_dataset_cancel(sample_wav: Path, tmp_path: Path) -> None:
     out = export_dataset(sample_wav, segs, tmp_path / "ds3",
                          tasks=_Tasks(False), task_id="t1")
     assert out["count"] == 1
+
+def test_export_dataset_multi_source(sample_wav: Path, tmp_path: Path) -> None:
+    sources = {"i1": sample_wav, "i2": sample_wav}
+    segs = [
+        DatasetSegment(item_id="i1", start=0.2, end=1.5, text="hello", language="JP", speaker="s1"),
+        DatasetSegment(item_id="i2", start=1.6, end=2.6, text="world", language="JP", speaker="s2"),
+    ]
+    out = export_dataset(sources, segs, tmp_path / "dsm")
+    assert out["count"] == 2
+    lines = (tmp_path / "dsm" / "list.txt").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert lines[0].split("|")[1:3] == ["s1", "JP"]
+    assert lines[1].split("|")[1:3] == ["s2", "JP"]
+    assert sorted(f.name for f in (tmp_path / "dsm").glob("*.wav")) == ["001.wav", "002.wav"]
+
+
+def test_export_dataset_multi_source_missing_item(tmp_path: Path) -> None:
+    import pytest as _pytest
+    segs = [DatasetSegment(item_id="i1", start=0.2, end=1.5, text="hello")]
+    with _pytest.raises(KeyError):
+        export_dataset({}, segs, tmp_path / "dsx")
+    segs2 = [DatasetSegment(start=0.2, end=1.5, text="hello")]
+    with _pytest.raises(ValueError):
+        export_dataset({}, segs2, tmp_path / "dsy")
