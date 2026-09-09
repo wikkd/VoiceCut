@@ -3,8 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import math
+
 import numpy as np
 import pytest
+import soundfile as sf
 
 from app.audio_ops import (
     audio_metrics,
@@ -63,3 +66,43 @@ def test_validate_dataset_clip(sample_wav: Path) -> None:
     r2 = validate_dataset_clip(short, min_dur=1.0)
     assert r2["ok"] is False
     assert any("过短" in i for i in r2["issues"])
+
+
+def test_compute_peaks_streaming_matches_full_read(tmp_path: Path, sample_wav: Path) -> None:
+    """流式分块峰值与整段读取的旧语义完全一致（长素材内存安全）。"""
+    from app.audio_ops import read_wav
+    from app.ffmpeg_util import export_segment
+
+    long_wav = tmp_path / "long.wav"
+    export_segment(sample_wav, long_wav, 0.0, 10.0, sample_rate=48000)
+    data, _ = read_wav(long_wav)
+    n = data.shape[0]
+    max_points = 1000
+    block = math.ceil(n / max_points)
+    expected = []
+    for i in range(0, n, block):
+        seg = data[i : i + block]
+        if seg.size:
+            expected.append([float(seg.min()), float(seg.max())])
+
+    got = compute_peaks(long_wav, max_points=max_points)
+    assert len(got) == len(expected)
+    for a, b in zip(got, expected):
+        assert a[0] == pytest.approx(b[0], abs=1e-6)
+        assert a[1] == pytest.approx(b[1], abs=1e-6)
+
+
+def test_compute_peaks_stereo_downmix(tmp_path: Path) -> None:
+    """多声道输入流式下混后峰值在合理区间。"""
+    sr = 48000
+    t = np.linspace(0, 1, sr)
+    stereo = np.stack(
+        [np.sin(2 * np.pi * 440 * t) * 0.5, np.sin(2 * np.pi * 440 * t) * 0.2],
+        axis=1).astype(np.float32)
+    p = tmp_path / "stereo.wav"
+    sf.write(str(p), stereo, sr)
+    peaks = compute_peaks(p, max_points=100)
+    assert 1 <= len(peaks) <= 100
+    hi = max(pk[1] for pk in peaks)
+    assert 0.2 < hi <= 0.5
+

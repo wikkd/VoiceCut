@@ -24,19 +24,23 @@ def read_wav(path: str | Path) -> tuple[np.ndarray, int]:
 def compute_peaks(path: str | Path, max_points: int = PEAK_POINTS) -> list[list[float]]:
     """计算波形 min/max 峰值对，供前端渲染。
 
-    返回 [[min, max], ...]，长度 ≤ max_points。
+    流式分块读取（逐块取 min/max），避免整文件载入内存造成尖峰；
+    返回 [[min, max], ...]，长度 ≤ max_points，与整段读取语义一致。
     """
-    data, _ = read_wav(path)
-    n = data.shape[0]
-    if n == 0:
-        return []
-    block = math.ceil(n / max_points)
-    peaks: list[list[float]] = []
-    for i in range(0, n, block):
-        seg = data[i : i + block]
-        if seg.size:
+    with sf.SoundFile(str(path), mode="r") as sfh:
+        n = int(sfh.frames)
+        if n <= 0:
+            return []
+        block = math.ceil(n / max_points)
+        peaks: list[list[float]] = []
+        while True:
+            seg = sfh.read(block, dtype="float32", always_2d=False)
+            if seg.size == 0:
+                break
+            if seg.ndim == 2:
+                seg = seg.mean(axis=1)
             peaks.append([float(seg.min()), float(seg.max())])
-    return peaks
+        return peaks
 
 
 # ── 质量指标（GPT-SoVITS 数据校验用）──────────────────────────

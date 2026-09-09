@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 from app import speakers
@@ -352,3 +353,21 @@ def test_generate_project_progress_and_skip_empty(monkeypatch, tmp_path: Path) -
     assert len(calls) >= 2
     assert res["items"][1]["total"] == 0 and res["items"][1]["labeled"] == 0
     assert res["n_speakers"] == 1
+
+
+def test_read_mono16k_decodes_via_ffmpeg(tmp_path: Path) -> None:
+    """read_mono16k 经 ffmpeg 输出 16k 单声道，时长/幅度与源一致。"""
+    sr = 48000
+    n = sr * 2
+    tone = (np.sin(2 * np.pi * 440 * np.arange(n) / sr) * 0.125).astype(np.float32)
+    wav = tmp_path / "src48k.wav"
+    sf.write(str(wav), tone, sr)
+
+    mono, out_sr = speakers.read_mono16k(wav)
+    assert out_sr == 16000
+    assert mono.dtype == np.float32
+    assert mono.ndim == 1
+    assert mono.shape[0] == pytest.approx(2 * 16000, abs=1600)
+    assert np.isfinite(mono).all()
+    assert float(np.max(np.abs(mono))) > 0.05  # 440Hz 正弦被保留
+

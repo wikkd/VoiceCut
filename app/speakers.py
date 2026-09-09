@@ -100,17 +100,31 @@ def _load_embedder():
         _EMBEDDER = _attempt()
     return _EMBEDDER
 def read_mono16k(wav_path):
-    """Read WAV -> (mono float32 at 16k, 16000)."""
-    import soundfile as sf
-    import torch
-    import torchaudio.functional as F
+    """Decode WAV -> (mono float32 at 16k, 16000) via ffmpeg.
 
-    wav, sr = sf.read(str(wav_path), dtype="float32", always_2d=True)
-    mono = wav.mean(axis=1)
-    if sr != TARGET_SR:
-        t = torch.from_numpy(mono.copy()).unsqueeze(0)
-        t = F.resample(t, sr, TARGET_SR)
-        mono = t.squeeze(0).numpy()
+    Decode+resample in a single streaming pass so the source (e.g. 48kHz)
+    is never held in RAM whole; only the 16kHz mono copy is loaded.
+    """
+    import tempfile
+    import uuid as _uuid
+
+    import soundfile as sf
+
+    from app.ffmpeg_util import run_ffmpeg
+
+    tmp = Path(tempfile.gettempdir()) / f"vc_mono16k_{_uuid.uuid4().hex[:8]}.wav"
+    try:
+        run_ffmpeg([
+            "-y", "-i", str(wav_path),
+            "-vn", "-ac", "1", "-ar", str(TARGET_SR),
+            "-f", "wav", str(tmp),
+        ])
+        mono, sr = sf.read(str(tmp), dtype="float32", always_2d=False)
+    finally:
+        tmp.unlink(missing_ok=True)
+    mono = np.asarray(mono, dtype=np.float32)
+    if mono.ndim == 2:
+        mono = mono.mean(axis=1).astype(np.float32)
     return mono, TARGET_SR
 
 

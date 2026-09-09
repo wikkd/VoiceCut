@@ -983,37 +983,65 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
 
   let saveTimer = null;
+  let saveInFlight = false;
+  const dirtyVer = new Map();          // itemId -> 自增版本：避免覆盖保存期间产生的新改动
+  function markDirty(id) {
+    state.dirtyItems.add(id);
+    dirtyVer.set(id, (dirtyVer.get(id) || 0) + 1);
+  }
   function scheduleSaveProject(itemId) {
     const id = itemId || (state.currentItem ? state.currentItem.id : null);
-    if (id) state.dirtyItems.add(id);
+    if (id) markDirty(id);
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(saveProjectNow, 400);
   }
   async function saveProjectNow() {
     const ids = Array.from(state.dirtyItems);
-    if (!ids.length) return;
-    state.dirtyItems = new Set();
+    if (!ids.length || saveInFlight) return;
+    const verAt = new Map(ids.map(id => [id, dirtyVer.get(id) || 0]));
+    saveInFlight = true;
     try {
       await Promise.all(ids.map(id => api(`/api/items/${id}/project`, { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ segments: segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] }) })));
-    } catch (e) { /* 静默忽略 */ }
+      // 仅当保存期间没有新的改动时才清除脏标记，避免静默丢改动
+      ids.forEach(id => {
+        if ((dirtyVer.get(id) || 0) === verAt.get(id)) {
+          state.dirtyItems.delete(id);
+          dirtyVer.delete(id);
+        }
+      });
+    } catch (e) {
+      toast("保存失败，改动已保留待重试: " + e.message, 6000);
+    } finally {
+      saveInFlight = false;
+    }
   }
 
   let poolTimer = null;
+  let poolInFlight = false;
+  let poolVer = 0;
   function scheduleSavePool() {
     state.poolDirty = true;
+    poolVer++;
     if (poolTimer) clearTimeout(poolTimer);
     poolTimer = setTimeout(savePoolNow, 400);
   }
   async function savePoolNow() {
-    if (!state.poolDirty || !state.currentProject) return;
-    state.poolDirty = false;
+    if (!state.poolDirty || !state.currentProject || poolInFlight) return;
+    const projectId = state.currentProject.id;
+    const v = poolVer;
+    poolInFlight = true;
     try {
-      await api(`/api/projects/${state.currentProject.id}/characters`, { method: "POST",
+      await api(`/api/projects/${projectId}/characters`, { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ characters: state.characters }) });
-    } catch (e) { /* 静默忽略 */ }
+      if (poolVer === v) state.poolDirty = false;
+    } catch (e) {
+      toast("角色池保存失败，改动已保留待重试: " + e.message, 6000);
+    } finally {
+      poolInFlight = false;
+    }
   }
   // ── 撤销 / 重做（片段 + 角色池，快照式，刷新即清空） ──
   const UNDO_MAX = 50;
@@ -1036,8 +1064,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     state.characters = snap.characters || [];
     state.selectedSegs = new Set();
     state.poolMerge = new Set();
-    state.segmentsByItem.forEach((_, id) => state.dirtyItems.add(id));
+    state.segmentsByItem.forEach((_, id) => markDirty(id));
     state.poolDirty = true;
+    poolVer++;
     renderSegments();
     renderPool();
     saveProjectNow();
@@ -2281,9 +2310,20 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       loadTraining(false);
     }
   }, 8000);
+  function beaconSave() {
+    try {
+      Array.from(state.dirtyItems).forEach(id => {
+        const payload = JSON.stringify({ segments: segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] });
+        navigator.sendBeacon(`/api/items/${id}/project`, new Blob([payload], { type: "application/json" }));
+      });
+      if (state.poolDirty && state.currentProject) {
+        const payload = JSON.stringify({ characters: state.characters });
+        navigator.sendBeacon(`/api/projects/${state.currentProject.id}/characters`, new Blob([payload], { type: "application/json" }));
+      }
+    } catch (e) { /* 尽力而为 */ }
+  }
   window.addEventListener("beforeunload", () => {
-    if (state.dirtyItems.size) saveProjectNow();
-    if (state.poolDirty) savePoolNow();
+    if (state.dirtyItems.size || state.poolDirty) beaconSave();
   });
   boot();
 
