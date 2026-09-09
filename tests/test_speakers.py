@@ -279,3 +279,76 @@ def test_cluster_adaptive_merges_noise() -> None:
     labels = speakers._cluster_labels(X)
     k = len(set(labels))
     assert 2 <= k <= 8, f"expected a sane cluster count, got {k}"
+
+
+# ── 项目级联合聚类：同一说话人跨素材保持同一标签 ──
+
+def _fake_emb_abc(mono, sr, start, end):
+    mid = (start + end) / 2
+    if mid < 1.0:
+        return np.array([1.0, 0.0, 0.0])   # A
+    if mid < 2.0:
+        return np.array([0.0, 1.0, 0.0])   # B
+    return np.array([0.0, 0.0, 1.0])       # C
+
+
+def _write_tone_wav(path: Path) -> None:
+    sr = 16000
+    n = sr * 4
+    t = np.arange(n) / sr
+    sf.write(str(path), (np.sin(2 * np.pi * 220 * t) * 0.3).astype(np.float32), sr)
+
+
+def test_generate_project_shared_speaker_across_sources(monkeypatch, tmp_path: Path) -> None:
+    """同一角色在素材 1 和素材 2 都出现时，项目级聚类应给同一说话人标签。"""
+    w1 = tmp_path / "a.wav"; w2 = tmp_path / "b.wav"
+    _write_tone_wav(w1); _write_tone_wav(w2)
+    monkeypatch.setattr(speakers, "_ecapa_embedding", _fake_emb_abc)
+    sources = [
+        {"wav_path": str(w1), "subs": [{"start": 0.0, "end": 1.0}, {"start": 1.0, "end": 2.0}]},   # A, B
+        {"wav_path": str(w2), "subs": [{"start": 0.0, "end": 1.0}, {"start": 2.0, "end": 3.0}]},   # A, C
+    ]
+    res = speakers.generate_speakers_project(sources)
+    assert res["quality"] == "ecapa"
+    assert res["n_speakers"] == 3
+    assert len(res["label_embeddings"]) == 3
+    assert len(res["items"]) == 2
+    # A 在两个素材里都是「说话人1」，不会拆成两个角色
+    assert res["items"][0]["sub_labels"][0]["label"] == "说话人1"
+    assert res["items"][1]["sub_labels"][0]["label"] == "说话人1"
+    assert res["items"][0]["sub_labels"][1]["label"] == "说话人2"   # B
+    assert res["items"][1]["sub_labels"][1]["label"] == "说话人3"   # C
+    # 说话人1 的片段同时出现在两个素材
+    s0 = [s for s in res["items"][0]["speaker_segments"] if s["label"] == "说话人1"]
+    s1 = [s for s in res["items"][1]["speaker_segments"] if s["label"] == "说话人1"]
+    assert s0 and s1
+    assert all(x["mixed"] is False for it in res["items"] for x in it["sub_labels"])
+
+
+def test_generate_project_single_source_matches_wrapper(monkeypatch, tmp_path: Path) -> None:
+    """单素材的项目级分析与原 generate_speakers 行为一致。"""
+    w = tmp_path / "one.wav"
+    _write_tone_wav(w)
+    monkeypatch.setattr(speakers, "_ecapa_embedding", _fake_emb_abc)
+    subs = [{"start": 0.0, "end": 1.0}, {"start": 1.0, "end": 2.0}]
+    res = speakers.generate_speakers_project([{"wav_path": str(w), "subs": subs}])
+    it = res["items"][0]
+    assert it["total"] == 2 and it["labeled"] == 2
+    assert len(it["speaker_segments"]) == 2
+    assert res["n_speakers"] == 2
+
+
+def test_generate_project_progress_and_skip_empty(monkeypatch, tmp_path: Path) -> None:
+    """进度回调被调用，且完全没有窗口的素材不会崩。"""
+    w1 = tmp_path / "a.wav"; w2 = tmp_path / "b.wav"
+    _write_tone_wav(w1); _write_tone_wav(w2)
+    monkeypatch.setattr(speakers, "_ecapa_embedding", _fake_emb_abc)
+    calls = []
+    sources = [
+        {"wav_path": str(w1), "subs": [{"start": 0.0, "end": 1.0}]},
+        {"wav_path": str(w2), "subs": []},
+    ]
+    res = speakers.generate_speakers_project(sources, progress_cb=calls.append)
+    assert len(calls) >= 2
+    assert res["items"][1]["total"] == 0 and res["items"][1]["labeled"] == 0
+    assert res["n_speakers"] == 1

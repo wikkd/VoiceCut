@@ -298,89 +298,124 @@ def stale_characters(item_id: str, characters: list) -> list:
     return out
 
 
-def generate_speakers(
-    wav_path,
-    subs,
-    *,
-    progress_cb=None,
-):
-    """Label speaker segments from whisper subtitles.
+def _collect_source(emb_fn, mono, sr, subs, base, total, progress_cb=None):
+    """Compute per-subtitle windows + a stable subtitle-level averaged embedding."""
+    acc = {}            # sub_idx -> [(ws, we, emb)]
+    sub_embs = [None] * len(subs)
+    for i, s in enumerate(subs):
+        if progress_cb and total:
+            progress_cb(0.1 + 0.7 * (base + i) / max(1, total))
+        vecs = []
+        for ws, we in _window_ranges(s["start"], s["end"]):
+            emb = emb_fn(mono, sr, ws, we)
+            if emb is not None:
+                vecs.append((ws, we, emb))
+        if vecs:
+            acc[i] = vecs
+            sub_embs[i] = np.mean(np.stack([v[2] for v in vecs]), axis=0)
+    return acc, sub_embs
 
-    Robust two-level pipeline that avoids both under- and over-fragmentation:
 
-      1. compute short sliding-window ECAPA embeddings inside each subtitle,
-      2. AVERAGE the windows per subtitle into one stable subtitle embedding
-         (short-window ECAPA on BGM-laden anime audio is too noisy to cluster
-         directly -- it used to produce one label per window, e.g. 999 roles
-         for a single video),
-      3. cluster the stable subtitle embeddings with an adaptive cosine cutoff
-         -> a sane number of speakers (default ~3-15),
-      4. vote each subtitle's windows against the speaker centroids: a clean
-         subtitle yields one speaker segment; a genuinely two-speaker subtitle
-         (whisper often merges a dialogue line) is split at window level and
-         flagged ``mixed`` so it stays unassigned for manual correction.
+def generate_speakers_project(sources, *, progress_cb=None):
+    """Joint speaker analysis across ALL items of a project.
 
-    Returns {"speaker_segments": [{start,end,label}], "quality", "total",
-             "labeled", "mixed", "n_speakers", "label_embeddings",
-             "sub_labels": [{label,mixed}]}.
+    ``sources``: list of {"wav_path": str, "subs": [dict]}.  Per-subtitle window
+    embeddings are computed and AVERAGED per subtitle, then ALL subtitle
+    embeddings across the whole project are clustered TOGETHER into one unified
+    speaker set.  Each item's subtitles are assigned to these shared speakers,
+    so the same person keeps a single label across every video (previously each
+    video was clustered independently and only loosely merged afterwards via a
+    similarity threshold, which could both split one person across videos and
+    merge two similar voices).
+
+    Returns {"quality", "n_speakers", "label_embeddings": {label: centroid},
+             "items": [{speaker_segments, sub_labels, total, labeled, mixed}]}
+    where ``items`` is parallel to ``sources``.
     """
     _init_runtime()
-    mono, sr = read_mono16k(wav_path)
-    total = len(subs)
+    total_all = sum(len(s["subs"]) for s in sources)
 
-    def _collect(emb_fn):
-        win = []
-        for i, s in enumerate(subs):
-            if progress_cb and total:
-                progress_cb(0.1 + 0.7 * i / max(1, total))
-            for ws, we in _window_ranges(s["start"], s["end"]):
-                emb = emb_fn(mono, sr, ws, we)
-                if emb is not None:
-                    win.append((i, ws, we, emb))
-        return win
+    def _collect_all(emb_fn):
+        out = []
+        base = 0
+        for src in sources:
+            mono, sr = read_mono16k(src["wav_path"])
+            acc, sub_embs = _collect_source(emb_fn, mono, sr, src["subs"], base,
+                                            total_all, progress_cb)
+            out.append((acc, sub_embs))
+            base += len(src["subs"])
+        return out
 
     quality = "ecapa"
-    windows: list = []
     try:
-        windows = _collect(_ecapa_embedding)
+        collected = _collect_all(_ecapa_embedding)
     except Exception:  # noqa: BLE001
         quality = "mfcc"
-        windows = _collect(_mfcc_embedding)
+        collected = _collect_all(_mfcc_embedding)
 
-    # subtitle-level averaged embeddings (stable) -> cluster speakers;
-    # ``acc`` keeps (ws, we, emb) per subtitle for later window voting.
-    acc: dict[int, list] = {}
-    for i, ws, we, e in windows:
-        acc.setdefault(i, []).append((ws, we, e))
-    sub_embs = [None] * total
-    for i, vecs in acc.items():
-        sub_embs[i] = np.mean(np.stack([v[2] for v in vecs]), axis=0)
+    # gather every subtitle-level embedding in the project (with its source)
+    all_embeds = []
+    meta = []  # parallel: (src_idx, sub_idx)
+    for si, (_acc, sub_embs) in enumerate(collected):
+        for i, e in enumerate(sub_embs):
+            if e is not None:
+                all_embeds.append(e)
+                meta.append((si, i))
 
-    valid = [i for i in range(total) if sub_embs[i] is not None]
-    clusters = _cluster_labels([sub_embs[i] for i in valid]) if valid else []
+    clusters = _cluster_labels(all_embeds) if all_embeds else []
 
-    # renumber cluster ids by first appearance (time order)
+    # renumber cluster ids by first appearance across the project (project order,
+    # then subtitle start time), so 说话人1..N are globally consistent
     order: dict[int, int] = {}
-    for j, i in enumerate(sorted(valid, key=lambda i: (subs[i]["start"], subs[i]["end"]))):
-        c = clusters[j]
+    for k in sorted(range(len(meta)),
+                    key=lambda k: (meta[k][0], sources[meta[k][0]]["subs"][meta[k][1]]["start"])):
+        c = clusters[k]
         order.setdefault(c, len(order))
     n_speakers = len(order)
-    label_of_sub = {
-        i: "\u8bf4\u8bdd\u4eba%d" % (order[c] + 1) for i, c in zip(valid, clusters)
+    label_of_global = ["\u8bf4\u8bdd\u4eba%d" % (order[c] + 1) for c in clusters]
+
+    # unified speaker centroids (normalized) for cross-project matching
+    label_embeddings: dict[str, np.ndarray] = {}
+    sums: dict[str, list] = {}
+    for k, _ in enumerate(meta):
+        sums.setdefault(label_of_global[k], []).append(all_embeds[k])
+    for lb, vecs in sums.items():
+        m = np.mean(np.stack(vecs), axis=0)
+        label_embeddings[lb] = m / (float(np.linalg.norm(m)) + 1e-9)
+
+    # per-source subtitle assignment + mixed detection
+    items = []
+    for si in range(len(sources)):
+        acc, _sub_embs = collected[si]
+        subs = sources[si]["subs"]
+        label_of_sub: dict[int, str] = {}
+        for k, (s2, i) in enumerate(meta):
+            if s2 == si:
+                label_of_sub[i] = label_of_global[k]
+        speaker_segments, sub_labels, mixed_count = _assign_source(
+            subs, acc, label_of_sub, label_embeddings)
+        labeled = sum(1 for x in sub_labels if x["label"])
+        items.append({
+            "speaker_segments": speaker_segments,
+            "sub_labels": sub_labels,
+            "total": len(subs), "labeled": labeled, "mixed": mixed_count,
+        })
+
+    if progress_cb:
+        progress_cb(1.0)
+    return {
+        "quality": quality,
+        "n_speakers": n_speakers,
+        "label_embeddings": label_embeddings,
+        "items": items,
     }
 
-    # speaker centroids (normalized) -> label embeddings for cross-material matching
-    label_embeddings: dict[str, np.ndarray] = {}
-    for lb, cid in label_of_sub.items():
-        m = sub_embs[lb]
-        norm = float(np.linalg.norm(m)) + 1e-9
-        label_embeddings.setdefault(cid, np.zeros_like(m))
-        label_embeddings[cid] = label_embeddings[cid] + m / norm
-    for cid in label_embeddings:
-        m = label_embeddings[cid]
-        label_embeddings[cid] = m / (float(np.linalg.norm(m)) + 1e-9)
 
-    def _nearest_lb(e: np.ndarray) -> str:
+def _assign_source(subs, acc, label_of_sub, label_embeddings):
+    """Vote each subtitle's windows against the shared speaker centroids -> the
+    item's speaker_segments + per-subtitle labels (mixed subtitles are split at
+    window level and flagged for manual correction)."""
+    def _nearest_lb(e: np.ndarray):
         best, best_sim = None, -1.0
         for cid, cemb in label_embeddings.items():
             sim = _cos(e, cemb)
@@ -388,11 +423,10 @@ def generate_speakers(
                 best, best_sim = cid, sim
         return best
 
-    # per-subtitle window votes -> speaker_segments + mixed flag
     speaker_segments: list = []
     sub_labels: list = []
     mixed_count = 0
-    for i in range(total):
+    for i in range(len(subs)):
         s = subs[i]
         cid = label_of_sub.get(i)
         vecs = acc.get(i, [])
@@ -426,20 +460,24 @@ def generate_speakers(
             speaker_segments.append({"start": round(float(s["start"]), 3),
                                      "end": round(float(s["end"]), 3), "label": dom})
         sub_labels.append({"label": dom, "mixed": bool(mixed)})
-
     speaker_segments.sort(key=lambda x: (x["start"], x["end"]))
-    labeled = sum(1 for x in sub_labels if x["label"])
-    if progress_cb:
-        progress_cb(1.0)
+    return speaker_segments, sub_labels, mixed_count
+
+
+def generate_speakers(wav_path, subs, *, progress_cb=None):
+    """Single-item convenience wrapper over the joint project analysis."""
+    res = generate_speakers_project(
+        [{"wav_path": wav_path, "subs": subs}], progress_cb=progress_cb)
+    it = res["items"][0]
     return {
-        "speaker_segments": speaker_segments,
-        "quality": quality,
-        "total": total,
-        "labeled": labeled,
-        "mixed": mixed_count,
-        "n_speakers": n_speakers,
-        "label_embeddings": label_embeddings,
-        "sub_labels": sub_labels,
+        "speaker_segments": it["speaker_segments"],
+        "quality": res["quality"],
+        "total": it["total"],
+        "labeled": it["labeled"],
+        "mixed": it["mixed"],
+        "n_speakers": res["n_speakers"],
+        "label_embeddings": res["label_embeddings"],
+        "sub_labels": it["sub_labels"],
     }
 
 

@@ -1199,23 +1199,24 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
 
   async function doIdentifySpeakers() {
-    if (!needItem()) return;
-    toast("开始说话人识别（ECAPA 声纹，首次含模型加载）…");
+    if (!state.currentProject) return toast("请先选择项目");
+    toast("开始项目级说话人识别（ECAPA 声纹，将把项目内全部素材联合聚类，首次含模型加载）…");
     try {
-      const j = await api(`/api/items/${state.currentItem.id}/speakers/generate`, { method: "POST" });
+      const j = await api(`/api/projects/${state.currentProject.id}/speakers/generate`, { method: "POST" });
       trackTask(j.task_id, async (result) => {
         if (Array.isArray(result.characters)) state.characters = result.characters;
-        await loadProject(state.currentItem, true);
+        await loadAllItemData();
         renderPool(); renderSegments(); renderSubs();
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
-        const mixed = result.mixed_segments || result.mixed || 0;
+        const mixed = result.mixed || 0;
         const cleaned = result.cleaned || 0;
-        let msg = `说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
+        const itemN = (result.items || []).length;
+        let msg = `项目说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
         if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
         toast(msg);
       });
-    } catch (e) { toast("说话人识别启动失败: " + e.message, 6000); }
+    } catch (e) { toast("项目说话人识别启动失败: " + e.message, 6000); }
   }
 
   // 角色池页面事件
@@ -2023,7 +2024,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (!box) return;
     box.innerHTML = "";
     if (!train.roles.length) {
-      box.innerHTML = '<div class="muted pad">项目里还没有角色。先在「剪辑」页对素材执行「识别说话人」，再回到这里训练。</div>';
+      box.innerHTML = '<div class="muted pad">项目里还没有角色。先导入素材并在「剪辑」页执行「识别说话人」（项目级分析），再回到这里训练。</div>';
       return;
     }
     train.roles.forEach(r => {

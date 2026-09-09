@@ -848,6 +848,124 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 "characters": chars, "created": created, "merged": merged,
                 "cleaned": cleaned}
 
+
+    @app.post("/api/projects/<project_id>/speakers/generate")
+    def api_project_speakers_generate(project_id: str) -> object:
+        """项目级说话人识别：把项目内全部素材的字幕声纹放在一起联合聚类，
+        同一个人跨素材保持同一个角色，而不是每个视频各自聚类后再匹配。"""
+        if db_mod.fetch_project_record(db_mod.get_conn(cfg.workdir), project_id) is None:
+            return jsonify({"error": "project not found"}), 404
+        tid = tasks.submit(_project_speakers_worker, cfg, store, project_id, gpu=True)
+        return jsonify({"task_id": tid})
+
+    def _project_speakers_worker(cfg_: AppConfig, store_: MediaStore, project_id: str) -> dict:
+        tid = tasks.current_task_id()
+        items = [it for it in store_.by_project(project_id)
+                 if it.wav_path and Path(it.wav_path).exists()]
+        if not items:
+            raise RuntimeError("项目内没有可分析的素材")
+        # 1) 每个素材准备字幕（缺字幕先 whisper 识别）
+        sources: list = []
+        for idx, item in enumerate(items):
+            if tasks.cancelled(tid):
+                raise TaskCancelled()
+            tasks.update(tid, progress=0.05 + 0.2 * idx / len(items),
+                         message=f"准备素材 {idx + 1}/{len(items)} …")
+            subs = _load_subs(item)
+            if not subs:
+                subs = transcribe_mod.transcribe_timed(
+                    item.wav_path, language="ja", model="medium",
+                    progress_cb=lambda p: tasks.update(tid, progress=p * 0.2,
+                                                       message=f"识别字幕 {p * 100:.0f}%"))
+                if subs:
+                    subs_dir = cfg_.workdir / "subs"
+                    subs_dir.mkdir(parents=True, exist_ok=True)
+                    path = subtitles_mod.write_srt(subs_dir / f"{item.id}.srt", subs)
+                    item.extra["subs_file"] = str(path)
+                    store_.persist(item)
+            if subs:
+                sources.append({"item": item, "subs": subs})
+        if not sources:
+            raise RuntimeError("未识别到语音内容，无法区分说话人")
+        # 2) 项目级联合聚类（同一说话人跨素材保持同一标签）
+        res = speakers_mod.generate_speakers_project(
+            [{"wav_path": s["item"].wav_path, "subs": s["subs"]} for s in sources],
+            progress_cb=lambda p: tasks.update(tid, progress=0.3 + p * 0.55,
+                                               message=f"项目声纹聚类 {p * 100:.0f}%"),
+        )
+        # 3) 角色池：先清理各素材旧版本垃圾角色，再把统一标签并入项目池
+        pool = project_mod.load_pool(cfg_.workdir, project_id)
+        chars = pool["characters"]
+        cleaned = 0
+        stale_ids: set = set()
+        for s in sources:
+            stale = speakers_mod.stale_characters(s["item"].id, chars)
+            stale_ids |= {c["id"] for c in stale}
+        if stale_ids:
+            cleaned = len(stale_ids)
+            chars = [c for c in chars if c["id"] not in stale_ids]
+            for it in items:
+                proj_tmp = project_mod.load_project(cfg_.workdir, it.id)
+                changed = False
+                for seg in proj_tmp["segments"]:
+                    if seg.get("characterId") in stale_ids:
+                        seg["characterId"] = None
+                        seg["speakerLabel"] = None
+                        changed = True
+                if changed:
+                    project_mod.save_project(cfg_.workdir, it.id, proj_tmp)
+        label_embeds = res.get("label_embeddings") or {}
+        if res.get("quality") == "ecapa" and label_embeds:
+            assignments, chars, created = speakers_mod.match_labels_to_pool(
+                project_id, label_embeds, chars)
+            merged = max(0, len(assignments) - len(created))
+        else:
+            # MFCC fallback / no embeddings: one project character per label
+            chars = chars
+            assignments = {}
+            created = []
+            for lb in sorted(label_embeds or {}):
+                key = f"{project_id}:{lb}"
+                existing = next((c for c in chars if key in (c.get("speakerLabels") or [])), None)
+                if existing:
+                    assignments[lb] = existing["id"]
+                    continue
+                cid = project_mod.new_uid("char")
+                chars.append({
+                    "id": cid, "name": lb, "color": project_mod.next_color(),
+                    "speakerLabels": [key], "created": time.time(),
+                })
+                assignments[lb] = cid
+                created.append(cid)
+            merged = 0
+        project_mod.save_pool(cfg_.workdir, project_id, chars)
+        char_of_label = {lb: cid for lb, cid in assignments.items()}
+        # 4) 逐素材写回 speaker_segments 并重绑定片段
+        total_segs = 0
+        total_labeled = 0
+        total_mixed = 0
+        items_out = []
+        for si, s in enumerate(sources):
+            if tasks.cancelled(tid):
+                raise TaskCancelled()
+            spk_segs = res["items"][si]["speaker_segments"]
+            proj = project_mod.load_project(cfg_.workdir, s["item"].id)
+            proj["segments"], mixed_segs = speakers_mod.bind_segments(
+                proj["segments"], spk_segs, char_of_label)
+            proj["speaker_segments"] = spk_segs
+            project_mod.save_project(cfg_.workdir, s["item"].id, proj)
+            total_segs += len(spk_segs)
+            total_labeled += res["items"][si]["labeled"]
+            total_mixed += res["items"][si]["mixed"]
+            items_out.append({"id": s["item"].id, "count": len(spk_segs),
+                              "mixed": res["items"][si]["mixed"]})
+        return {"count": total_segs,
+                "total": sum(i["total"] for i in res["items"]),
+                "labeled": total_labeled, "mixed": total_mixed,
+                "n_speakers": res["n_speakers"], "quality": res["quality"],
+                "characters": chars, "created": created, "merged": merged,
+                "cleaned": cleaned, "items": items_out}
+
     # ── 训练交付（GPT-SoVITS 管线） ──────────────
     _training_tasks: dict[str, str] = {}  # role_id -> task_id
 
