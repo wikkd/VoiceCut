@@ -285,3 +285,83 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 .menu-items button.panel-on::before { content: "✓ "; color: var(--accent); }
 .menu-items button.panel-off::before { content: "\00a0\00a0"; }
 
+
+/* ── M4 素材/重定向 上下文菜单 ── */
+.context-menu {
+  position: fixed; z-index: 300; min-width: 160px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px; box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  display: flex; flex-direction: column;
+}
+.context-menu button {
+  text-align: left; padding: 7px 10px; border-radius: 6px; font-size: 13px;
+  background: transparent; color: var(--text); border: none; cursor: pointer;
+}
+.context-menu button:hover { background: var(--accent-dim); }
+.context-menu button.danger { color: var(--danger); }
+.context-menu button:disabled { opacity: 0.5; cursor: default; }
+
+/* ── M6 总览条播放头 ── */
+#minimap-wrap { position: relative; height: 46px; margin-top: 6px; flex-shrink: 0; cursor: pointer; }
+#minimap-wrap #minimap { height: 46px; }
+#mm-cursor {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px;
+  background: #ff5b5b; box-shadow: 0 0 4px rgba(255,91,91,0.8); pointer-events: none;
+}
+#mm-time {
+  position: absolute; top: 2px; left: 6px; padding: 0 5px; font-size: 10px; line-height: 14px;
+  background: rgba(0,0,0,0.65); color: #ffd0d0; border-radius: 4px; white-space: nowrap;
+}
+
+/* ── M1/M3 说话人徽标 ── */
+.spk-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+  background: var(--panel-3); color: #fff; max-width: 90px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+#sub-table td.sub-speaker { width: 76px; }
+
+/* ── M3 片段行多选 ── */
+tr.seg-row.sel td { background: var(--accent-dim) !important; }
+tr.seg-row.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
+/* ── M2 角色池子页面 ── */
+#pool-view {
+  position: fixed; inset: 0; z-index: 200; background: var(--bg);
+  display: flex; flex-direction: column;
+}
+#pool-header {
+  display: flex; align-items: center; gap: 10px; padding: 10px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#pool-header .spacer { flex: 1; }
+.pool-title { font-size: 15px; font-weight: 600; }
+.pool-title b { color: var(--accent); font-weight: 600; }
+#pool-body { flex: 1; overflow: auto; padding: 12px 16px; }
+#pool-unassigned-bar { margin-bottom: 10px; color: var(--muted); font-size: 12px; }
+#pool-unassigned-bar b { color: var(--warn); }
+#pool-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;
+}
+.pool-card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;
+  border-left: 5px solid var(--pc, var(--accent)); min-height: 140px;
+}
+.pool-card.unassigned { border-left-color: var(--muted); opacity: 0.92; }
+.pool-head { display: flex; align-items: center; gap: 8px; }
+.pool-head input[type="color"] { width: 22px; height: 22px; border: none; background: none; cursor: pointer; padding: 0; }
+.pool-name { font-weight: 600; font-size: 14px; flex: 1; cursor: text; word-break: break-all; }
+.pool-count { color: var(--muted); font-size: 12px; }
+.pool-labels { font-size: 11px; color: var(--muted); word-break: break-all; }
+.pool-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pool-segs summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+.pool-seg-list { max-height: 200px; overflow: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.pool-seg {
+  display: flex; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 6px;
+  background: var(--panel-2); cursor: grab; font-size: 12px;
+}
+.pool-seg .ps-time { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pool-seg .ps-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.pool-seg .ps-play { padding: 0 8px; }
+.pool-seg:active { cursor: grabbing; }

@@ -10,3 +10,4 @@ noisereduce>=3.0
 demucs>=4.0
 yt-dlp>=2025.1
 faster-whisper>=1.0
+speechbrain>=0.5

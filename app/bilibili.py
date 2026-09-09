@@ -22,6 +22,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 REFERER = "https://www.bilibili.com/"
 
+
+def referer_for(url: str) -> str:
+    """Derive a Referer for a given URL host (multi-platform support)."""
+    from urllib.parse import urlparse
+    host = urlparse(url).netloc or ""
+    return f"https://{host}/" if host else REFERER
+
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
@@ -83,7 +90,7 @@ def create_job(url: str) -> dict:
         "video_ext": info["video"]["ext"] if info["video"] else None,
         "audio_url": info["audio"]["url"] if info["audio"] else None,
         "audio_ext": info["audio"]["ext"] if info["audio"] else None,
-        "referer": REFERER,
+        "referer": referer_for(url),
         "status": "resolved",
         "error": None,
     }

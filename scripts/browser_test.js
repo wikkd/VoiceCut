@@ -138,6 +138,53 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const m1 = v(rM1), m2 = v(rM2);
     console.log("MULTI:", JSON.stringify({ selected: longSel, marks: m1, afterUndo: m2, ok: !!(longSel && longSel.ok && m1 && m1.n === 2 && m2 === 1) }));
 
+    // M1-M6 前端功能：角色池、说话人下拉、总览条播放头、右键菜单、URL 弹窗
+    const rF = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      vc.openPool();
+      const poolVisible = !document.querySelector('#pool-view').classList.contains('hidden');
+      const poolCards = document.querySelectorAll('#pool-grid .pool-card').length;
+      const segs = vc.state.segmentsByItem.get(vc.state.currentItem.id);
+      segs.push(vc.newSegment(0, 5, "test"));
+      vc.renderSegments();
+      const spkSel = document.querySelector('#seg-tbody .seg-speaker');
+      const spkOptions = spkSel ? spkSel.options.length : 0;
+      const segRow = document.querySelector('#seg-tbody tr.seg-row');
+      segRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+      const redirVisible = !document.querySelector('#redirect-menu').classList.contains('hidden');
+      document.querySelector('#redirect-menu').classList.add('hidden');
+      const li = document.querySelector('#media-list li');
+      li.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 80 }));
+      const mediaMenuVisible = !document.querySelector('#media-menu').classList.contains('hidden');
+      document.querySelector('#media-menu').classList.add('hidden');
+      vc.state.projectDirty = true;
+      await vc.saveProjectNow();
+      vc.state.ws.setTime(10);
+      await new Promise(r => setTimeout(r, 300));
+      const mm = document.querySelector('#mm-cursor');
+      const mmLeft = mm ? getComputedStyle(mm).left : null;
+      const mmTime = document.querySelector('#mm-time').textContent;
+      const bb = document.querySelector('#bb-url');
+      const bbIsTextarea = !!bb && bb.tagName === 'TEXTAREA';
+      return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
+               mmLeft, mmTime, bbIsTextarea, segCount: segs.length };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
+
+    // 项目持久化往返：刷新后片段从服务端恢复
+    await send("Page.reload", { ignoreCache: true });
+    await sleep(3500);
+    const rP = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const it = vc.state.items.find(x => x.name === 'long_test');
+      if (!it) return { ok: false };
+      await vc.selectItem(it);
+      await new Promise(r => setTimeout(r, 2500));
+      const segs = vc.state.segmentsByItem.get(it.id) || [];
+      return { ok: true, segCount: segs.length, charCount: vc.state.characters.length };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("PERSIST:", JSON.stringify(rP.result && rP.result.result && rP.result.result.value));
+
     // 布局持久化往返：隐藏 字幕 → 刷新 → 仍隐藏 → 恢复默认
     const rH = await send("Runtime.evaluate", { expression: `(() => {
       const vc = window.__vc;

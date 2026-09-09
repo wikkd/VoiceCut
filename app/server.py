@@ -13,6 +13,8 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from app import bilibili as bilibili_mod
 from app import dataset as dataset_mod
+from app import project as project_mod
+from app import speakers as speakers_mod
 from app import denoise as denoise_mod
 from app import separate as separate_mod
 from app import subtitles as subtitles_mod
@@ -48,7 +50,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     def _item_json(item: MediaItem) -> dict:
         video_url = f"/api/video/{item.id}" if item.preview_mp4 else None
-        if item.kind == "bilibili" and item.extra.get("proxy_url"):
+        if item.extra.get("proxy_url"):
             video_url = item.extra["proxy_url"]
         return {
             "id": item.id, "name": item.name, "kind": item.kind,
@@ -143,6 +145,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                     p.unlink()
             except OSError:
                 pass
+        project_mod.delete_project(cfg.workdir, item.id)
 
     @app.get("/api/tasks")
     def list_tasks() -> object:
@@ -304,7 +307,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
         # 输出目录: 本地素材→源文件目录; B站/派生→workdir/exports
         src = Path(item.source) if item.source else None
-        if src and src.exists() and item.kind != "bilibili":
+        if src and src.exists():
             out_dir = src.parent
         else:
             out_dir = cfg.workdir / "exports"
@@ -457,23 +460,44 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     # ── B 站 ─────────────────────────────────────────────────
 
-    @app.post("/api/bilibili/open")
-    def api_bilibili_open() -> object:
-        body = request.get_json(force=True) or {}
-        url = (body.get("url") or "").strip()
-        if not url:
-            return jsonify({"error": "缺少链接"}), 400
+    # ── 网络 URL 导入（多平台，yt-dlp 解析） ──
+
+    def _open_url(url: str) -> dict:
         try:
             job = bilibili_mod.create_job(url)
         except RuntimeError as exc:
-            return jsonify({"error": str(exc)}), 400
+            return {"url": url, "ok": False, "error": str(exc)}
         tid = tasks.submit(_bilibili_worker, cfg, store, job)
-        return jsonify({
-            "job_id": job["id"],
-            "title": job["title"],
-            "video_proxy_url": f"/api/bilibili/proxy/{job['id']}",
-            "task_id": tid,
-        })
+        return {"url": url, "ok": True, "job_id": job["id"], "title": job["title"],
+                "video_proxy_url": f"/api/bilibili/proxy/{job['id']}", "task_id": tid}
+
+    def _split_urls(raw) -> list:
+        if isinstance(raw, str):
+            return [u.strip() for u in raw.replace("\r", "\n").split("\n") if u.strip()]
+        out = []
+        for u in (raw or []):
+            if isinstance(u, str) and u.strip():
+                out.append(u.strip())
+        return out
+
+    @app.post("/api/url/open")
+    def api_url_open() -> object:
+        body = request.get_json(force=True) or {}
+        urls = _split_urls(body.get("urls"))
+        if not urls:
+            return jsonify({"error": "缺少链接"}), 400
+        return jsonify({"results": [_open_url(u) for u in urls]})
+
+    @app.post("/api/bilibili/open")
+    def api_bilibili_open() -> object:  # 旧入口别名
+        body = request.get_json(force=True) or {}
+        urls = _split_urls(body.get("url") or body.get("urls"))
+        if not urls:
+            return jsonify({"error": "缺少链接"}), 400
+        r = _open_url(urls[0])
+        if not r["ok"]:
+            return jsonify({"error": r["error"]}), 400
+        return jsonify({k: r[k] for k in ("job_id", "title", "video_proxy_url", "task_id")})
 
     def _bilibili_worker(cfg_: AppConfig, store_: MediaStore, job: dict) -> dict:
         tid = tasks.current_task_id()
@@ -497,7 +521,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         new_id = store_.new_id()
         wav = items_dir / f"{new_id}.wav"
         extract_audio(src_file, wav, sample_rate=48000, channels=1)
-        item = _register_item(wav=wav, name=job["title"], kind="bilibili",
+        item = _register_item(wav=wav, name=job["title"], kind="url",
                               source=job["url"],
                               extra={"proxy_url": f"/api/bilibili/proxy/{job['id']}",
                                      "bilibili_job": job["id"]})
@@ -526,5 +550,102 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         for k, v in headers.items():
             resp.headers[k] = v
         return resp
+
+    # ── 角色池 / 片段持久化（每素材 project.json） ──
+
+    @app.get("/api/items/<item_id>/project")
+    def api_project_get(item_id: str) -> object:
+        store.require(item_id)
+        return jsonify(project_mod.load_project(cfg.workdir, item_id))
+
+    @app.post("/api/items/<item_id>/project")
+    def api_project_save(item_id: str) -> object:
+        store.require(item_id)
+        body = request.get_json(force=True) or {}
+        proj = project_mod.load_project(cfg.workdir, item_id)
+        if "characters" in body:
+            proj["characters"] = body["characters"] or []
+        if "segments" in body:
+            proj["segments"] = body["segments"] or []
+        if "speaker_segments" in body:
+            proj["speaker_segments"] = body["speaker_segments"] or []
+        project_mod.save_project(cfg.workdir, item_id, proj)
+        return jsonify({"ok": True})
+
+    @app.get("/api/items/<item_id>/speakers")
+    def api_speakers_get(item_id: str) -> object:
+        store.require(item_id)
+        proj = project_mod.load_project(cfg.workdir, item_id)
+        return jsonify({"speaker_segments": proj["speaker_segments"],
+                        "characters": proj["characters"]})
+
+    @app.post("/api/items/<item_id>/speakers/generate")
+    def api_speakers_generate(item_id: str) -> object:
+        store.require(item_id)
+        tid = tasks.submit(_speakers_worker, cfg, store, item_id)
+        return jsonify({"task_id": tid})
+
+    def _speakers_worker(cfg_: AppConfig, store_: MediaStore, item_id: str) -> dict:
+        tid = tasks.current_task_id()
+        item = store_.require(item_id)
+        subs = _load_subs(item)
+        if not subs:
+            tasks.update(tid, progress=0.05, message="未找到字幕，先执行 Whisper 识别…")
+            subs = transcribe_mod.transcribe_timed(
+                item.wav_path, language="ja", model="medium",
+                progress_cb=lambda p: tasks.update(tid, progress=p * 0.3,
+                                                   message=f"识别字幕 {p * 100:.0f}%"))
+            if subs:
+                subs_dir = cfg_.workdir / "subs"
+                subs_dir.mkdir(parents=True, exist_ok=True)
+                path = subtitles_mod.write_srt(subs_dir / f"{item.id}.srt", subs)
+                item.extra["subs_file"] = str(path)
+        if not subs:
+            raise RuntimeError("未识别到语音内容，无法区分说话人")
+        res = speakers_mod.generate_speakers(
+            item.wav_path, subs,
+            progress_cb=lambda p: tasks.update(tid, progress=0.3 + p * 0.6,
+                                               message=f"说话人声纹聚类 {p * 100:.0f}%"),
+        )
+        proj = project_mod.load_project(cfg_.workdir, item.id)
+        speaker_segments = res["speaker_segments"]
+        existing = {}
+        for c in proj["characters"]:
+            for lb in (c.get("speakerLabels") or []):
+                existing[lb] = c["id"]
+        created = []
+        for lb in sorted({s["label"] for s in speaker_segments if s.get("label")}):
+            if lb in existing:
+                continue
+            cid = project_mod.new_uid("char")
+            proj["characters"].append({
+                "id": cid, "name": lb, "color": project_mod.next_color(),
+                "speakerLabels": [lb], "created": time.time(),
+            })
+            existing[lb] = cid
+            created.append(cid)
+        char_of_label = {lb: cid for c in proj["characters"] for lb in (c.get("speakerLabels") or [])}
+        for seg in proj["segments"]:
+            lb = seg.get("speakerLabel")
+            if lb and char_of_label.get(lb) and not seg.get("characterId"):
+                seg["characterId"] = char_of_label[lb]
+        proj["speaker_segments"] = speaker_segments
+        project_mod.save_project(cfg_.workdir, item.id, proj)
+        return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
+                "n_speakers": res["n_speakers"], "quality": res["quality"],
+                "speaker_segments": speaker_segments,
+                "characters": proj["characters"], "created": created}
+
+    # ── 素材重命名 ──
+
+    @app.post("/api/items/<item_id>/rename")
+    def api_item_rename(item_id: str) -> object:
+        body = request.get_json(force=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "名称为空"}), 400
+        item = store.require(item_id)
+        item.name = name
+        return jsonify(_item_json(item))
 
     return app

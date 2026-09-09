@@ -29,6 +29,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     ctrlMarking: false,        // 正在通过 Ctrl+→ 添加标记（不替换旧选区）
     auditionSeq: null,         // 多选顺序试听队列
     auditionIdx: 0,
+    characters: [],            // 当前素材角色池 [{id,name,color,speakerLabels,created}]
+    speakerSegs: [],           // 当前素材说话人分段 [{start,end,label}]
+    selectedSegs: new Set(),   // 片段列表多选行索引
+    poolMerge: new Set(),      // 角色池合并勾选集
+    projectDirty: false,       // 片段/角色有改动待保存
     subs: [],                 // 实时字幕 [{start,end,text}]
     currentSubIdx: -1,        // 当前播放头命中的字幕行索引
     bootErr: null,
@@ -267,18 +272,50 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       li.dataset.id = item.id;
       if (state.currentItem && state.currentItem.id === item.id) li.classList.add("active");
       const kindMap = { video: "视频", audio: "音频", denoised: "降噪", vocal: "人声",
-                        instrumental: "伴奏", trimmed: "去静音", bilibili: "B站" };
+                        instrumental: "伴奏", trimmed: "去静音", bilibili: "B站", url: "网络" };
       li.innerHTML = `<div class="m-name">${esc(item.name)}</div>
         <div class="m-meta"><span class="m-badge">${kindMap[item.kind] || item.kind}</span>
         <span>${fmtDur(item.duration)}</span>
         <button class="m-del" title="删除素材">✕</button></div>`;
       li.addEventListener("click", () => selectItem(item));
+      li.addEventListener("contextmenu", (e) => { e.preventDefault(); showMediaMenu(e.clientX, e.clientY, item); });
       li.querySelector(".m-del").addEventListener("click", (e) => {
         e.stopPropagation();
         deleteMediaItem(item);
       });
       ul.appendChild(li);
     });
+  }
+  // 素材右键菜单：删除 / 重命名 / 添加到工作区
+  function showMediaMenu(x, y, item) {
+    const menu = $("#media-menu");
+    menu.style.left = x + "px"; menu.style.top = y + "px";
+    const btnDel = menu.querySelector(".mm-del");
+    const btnRen = menu.querySelector(".mm-rename");
+    const btnAdd = menu.querySelector(".mm-add");
+    btnDel.onclick = () => { hideMediaMenu(); deleteMediaItem(item); };
+    btnRen.onclick = async () => { hideMediaMenu(); await renameMediaItem(item); };
+    btnAdd.onclick = () => {
+      hideMediaMenu();
+      if (state.currentItem && state.currentItem.id === item.id) toast("该素材已在当前工作区");
+      else selectItem(item);
+    };
+    const isCurrent = !!(state.currentItem && state.currentItem.id === item.id);
+    btnAdd.disabled = isCurrent;
+    btnAdd.textContent = isCurrent ? "已在工作区" : "添加到工作区";
+    menu.classList.remove("hidden");
+  }
+  function hideMediaMenu() { const m = $("#media-menu"); if (m) m.classList.add("hidden"); }
+  document.addEventListener("click", hideMediaMenu);
+  document.addEventListener("contextmenu", (e) => { if (!e.target.closest("#media-list li")) hideMediaMenu(); });
+  async function renameMediaItem(item) {
+    const name = prompt("重命名素材：", item.name);
+    if (name == null || !name.trim()) return;
+    try {
+      await api(`/api/items/${item.id}/rename`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
+    } catch (e) { toast("重命名失败: " + e.message, 6000); }
+    await refreshItems();
   }
   function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
@@ -315,6 +352,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // ── 选择素材 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
+    if (state.projectDirty && state.currentItem && state.currentItem.id !== item.id) {
+      await saveProjectNow();   // 切换素材前先浮存旧素材项目
+    }
     state.currentItem = item;
     renderMediaList();
 
@@ -334,6 +374,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (!peaks) {
       try { const pj = await api(item.peaks_url); peaks = pj.peaks; item.peaks = peaks; } catch (e) { peaks = []; }
     }
+    await loadProject(item);
     loadWavesurfer(item, peaks);
     renderSegments();
     updateTransport();
@@ -363,6 +404,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const minimap = Minimap.create({
       container: "#minimap", height: 44,
       waveColor: "#3a3a55", progressColor: "#6c9cff",
+      interact: false,   // 总览条的点击/拖动由本页面操作（M6 播放头）
     });
 
     const ws = WaveSurfer.create({
@@ -428,8 +470,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       loopCheck(t);
       updateCurrentSub(t);
       auditionCheck(t);
+      updateMMCursor(t);
     });
-    ws.on("ready", () => updateTransport());
+    ws.on("ready", () => { updateTransport(); updateMMCursor(0); });
     ws.on("error", (e) => toast("播放错误: " + (e && e.message ? e.message : e)));
   }
 
@@ -481,6 +524,44 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function updateTransport() {
     if (!state.currentItem) { $("#dur-info").textContent = "—"; return; }
     $("#dur-info").textContent = fmtDur(state.currentItem.duration);
+  }
+
+  // ── 总览条播放头（M6） ──
+  function updateMMCursor(t) {
+    const w = document.querySelector("#minimap-wrap");
+    const c = document.querySelector("#mm-cursor");
+    if (!w || !c) return;
+    if (!state.ws || !state.currentItem) { c.classList.add("hidden"); return; }
+    const cur = (t == null ? state.ws.getCurrentTime() : t);
+    const dur = state.currentItem.duration || 1;
+    const x = Math.max(0, Math.min(1, cur / dur));
+    c.classList.remove("hidden");
+    c.style.left = (x * 100) + "%";
+    const tt = document.querySelector("#mm-time");
+    if (tt) tt.textContent = fmtT(cur);
+  }
+  function mmSeekFromEvent(e) {
+    if (!state.ws || !state.currentItem) return;
+    const w = document.querySelector("#minimap-wrap");
+    if (!w) return;
+    const r = w.getBoundingClientRect();
+    if (r.width <= 0) return;
+    const f = clampN((e.clientX - r.left) / r.width, 0, 1);
+    state.ws.setTime(f * state.currentItem.duration);
+  }
+  let mmDragging = false;
+  function mmSeekDown(e) { mmDragging = true; mmSeekFromEvent(e); try { document.querySelector("#minimap-wrap").setPointerCapture(e.pointerId); } catch (err) {} }
+  function mmSeekMove(e) { if (mmDragging) mmSeekFromEvent(e); }
+  function mmSeekUp(e) { mmDragging = false; try { document.querySelector("#minimap-wrap").releasePointerCapture(e.pointerId); } catch (err) {} }
+  function setupMMSeek() {
+    const w = document.querySelector("#minimap-wrap");
+    if (!w || w.dataset.mm) return;
+    w.dataset.mm = "1";
+    w.addEventListener("pointerdown", mmSeekDown);
+    w.addEventListener("pointermove", mmSeekMove);
+    w.addEventListener("pointerup", mmSeekUp);
+    w.addEventListener("pointercancel", mmSeekUp);
+    window.addEventListener("resize", () => updateMMCursor(state.ws ? state.ws.getCurrentTime() : 0));
   }
   function updateSelUI() {
     const n = state.multiRegions.length;
@@ -620,9 +701,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       const cls = issues.length ? "bad" : "";
       const tagCls = issues.length ? (issues.some(x => x.includes("空文本")) ? "warn" : "bad") : "ok";
       const tagTxt = issues.length ? issues.join("，") : "合规";
+      const ch = charById(seg.characterId);
       const tr = document.createElement("tr");
-      tr.className = "seg-row" + (cls ? " " + cls : "");
+      tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "");
       tr.dataset.i = i;
+      if (ch) tr.style.borderLeft = "4px solid " + ch.color;
       tr.innerHTML = `
         <td class="seg-num">${String(i + 1).padStart(2, "0")}</td>
         <td>${fmtT(seg.start)} ~ ${fmtT(seg.end)}</td>
@@ -633,7 +716,10 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         <td><select class="seg-lang" data-i="${i}">
           ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
         </select></td>
-        <td><input type="text" class="seg-speaker" data-i="${i}" value="${esc(seg.speaker || "speaker")}"></td>
+        <td><select class="seg-speaker" data-i="${i}">
+          <option value="">未分配</option>
+          ${state.characters.map(c => `<option value="${esc(c.id)}" ${seg.characterId === c.id ? "selected" : ""} style="color:${esc(c.color)}">${esc(c.name)}</option>`).join("")}
+        </select></td>
         <td class="row-actions">
           <button class="chip seg-jump" data-i="${i}">跳转</button>
           <button class="chip danger seg-del" data-i="${i}">删除</button>
@@ -648,17 +734,22 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const segs = segsFor(state.currentItem.id);
     const list = state.multiRegions.length >= 2 ? state.multiRegions : [];
     if (list.length) {
-      list.forEach((m) => segs.push({ start: m.start, end: m.end, text: "", language: "JP", speaker: "speaker" }));
+      list.forEach((m) => segs.push(newSegment(m.start, m.end)));
+      scheduleSaveProject();
       renderSegments();
       toast(`已加入片段 ${list.length} 条`);
       return;
     }
-    segs.push({ start: state.selection.start, end: state.selection.end, text: "", language: "JP", speaker: "speaker" });
+    segs.push(newSegment(state.selection.start, state.selection.end));
+    scheduleSaveProject();
     renderSegments();
   }
   function deleteSegment(i) {
     const segs = segsFor(state.currentItem.id);
-    segs.splice(i, 1); renderSegments();
+    const s = segs[i];
+    if (s) state.selectedSegs.delete(s.id);
+    segs.splice(i, 1);
+    scheduleSaveProject(); renderSegments();
   }
   function jumpToSegment(seg) {
     if (!state.ws) return;
@@ -671,6 +762,244 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     state.ws.play();
     state.auditioning = { start: seg.start, end: seg.end };
   }
+
+  // ── 角色池 / 说话人自动匹配 ──
+  let segCounter = 0;
+  function uid(prefix) { return prefix + "_" + Date.now().toString(36) + "_" + (++segCounter).toString(36); }
+
+  const CHAR_PALETTE = ["#e5484d", "#f76808", "#f5d90a", "#46a758", "#3e63dd", "#8e4ec6", "#12a594", "#e93d82", "#00a2c7", "#ffb224"];
+  function paletteNext() { return CHAR_PALETTE[state.characters.length % CHAR_PALETTE.length]; }
+  function charById(id) { return state.characters.find(c => c.id === id) || null; }
+
+  function newSegment(start, end, text, language) {
+    const sp = autoCharacterFor(start, end);
+    return { id: uid("s"), start, end, text: text || "", language: language || "JP",
+             speakerLabel: sp.speakerLabel, characterId: sp.characterId };
+  }
+
+  function speakerLabelAt(t) {
+    for (const s of state.speakerSegs) if (s.label && t >= s.start && t < s.end) return s.label;
+    return null;
+  }
+  function autoCharacterFor(start, end) {
+    let best = null, bestOv = 0;
+    for (const s of state.speakerSegs) {
+      if (!s.label) continue;
+      const ov = Math.min(end, s.end) - Math.max(start, s.start);
+      if (ov > bestOv) { bestOv = ov; best = s.label; }
+    }
+    if (!best) return { characterId: null, speakerLabel: null };
+    const ch = state.characters.find(c => (c.speakerLabels || []).includes(best));
+    return { characterId: ch ? ch.id : null, speakerLabel: best };
+  }
+
+  async function loadProject(item) {
+    state.characters = []; state.speakerSegs = []; state.selectedSegs = new Set(); state.poolMerge = new Set();
+    try {
+      const proj = await api(`/api/items/${item.id}/project`);
+      state.characters = proj.characters || [];
+      state.speakerSegs = proj.speaker_segments || [];
+      state.segmentsByItem.set(item.id, proj.segments || []);
+    } catch (e) {
+      state.segmentsByItem.set(item.id, []);
+    }
+  }
+
+  let saveTimer = null;
+  function scheduleSaveProject() {
+    state.projectDirty = true;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveProjectNow, 400);
+  }
+  async function saveProjectNow() {
+    if (!state.currentItem || !state.projectDirty) return;
+    state.projectDirty = false;
+    try {
+      await api(`/api/items/${state.currentItem.id}/project`, { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ characters: state.characters, segments: segsFor(state.currentItem.id) }) });
+    } catch (e) { /* 静默忽略 */ }
+  }
+  // ── 角色池子页面 ──
+  function openPool() {
+    if (!needItem()) return;
+    state.poolOpen = true;
+    $("#pool-view").classList.remove("hidden");
+    renderPool();
+  }
+  function closePool() {
+    state.poolOpen = false;
+    $("#pool-view").classList.add("hidden");
+  }
+
+  function reassignSegments(segIds, characterId) {
+    const segs = segsFor(state.currentItem.id);
+    let n = 0;
+    segs.forEach(s => { if (segIds.includes(s.id)) { s.characterId = characterId || null; n++; } });
+    scheduleSaveProject();
+    renderSegments(); renderPool();
+    toast(`已重定向 ${n} 段片段`);
+  }
+
+  function poolCard(ch) {
+    const isU = !ch;
+    const segs = state.currentItem ? segsFor(state.currentItem.id) : [];
+    const mine = isU ? segs.filter(s => !s.characterId) : segs.filter(s => s.characterId === ch.id);
+    const el = document.createElement("div");
+    el.className = "pool-card" + (isU ? " unassigned" : "");
+    el.dataset.poolChar = ch ? ch.id : "";
+    el.style.setProperty("--pc", ch ? ch.color : "var(--muted)");
+    el.innerHTML = `
+      <div class="pool-head">
+        ${ch ? `<input type="checkbox" class="pool-merge-cb" data-char="${ch.id}" title="勾选后可「合并选中角色」">` : "<span class='pool-nb'></span>"}
+        ${ch ? `<input type="color" class="pool-color" data-char="${ch.id}" value="${esc(ch.color)}" title="修改颜色">` : ""}
+        <span class="pool-name">${isU ? "未分配" : esc(ch.name)}</span>
+        <span class="pool-count">${mine.length} 段</span>
+      </div>
+      ${ch && (ch.speakerLabels || []).length ? `<div class="pool-labels">自动标签: ${ch.speakerLabels.map(esc).join("、")}</div>` : ""}
+      <div class="pool-actions">
+        ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">▶ 试听</button>
+          <button class="chip pool-rename" data-char="${ch.id}">重命名</button>
+          <button class="chip pool-del danger" data-char="${ch.id}">删除</button>`}
+      </div>
+      <details class="pool-segs">
+        <summary>片段（${mine.length}）</summary>
+        <div class="pool-seg-list">
+          ${mine.slice(0, 300).map(s => `
+            <div class="pool-seg" draggable="true" data-seg="${s.id}">
+              <span class="ps-time">${fmtT(s.start)}~${fmtT(s.end)}</span>
+              <span class="ps-text">${esc(s.text.slice(0, 30) || "（空）")}</span>
+              <button class="chip ps-play" data-seg="${s.id}" title="试听">▶</button>
+            </div>`).join("")}
+          ${mine.length > 300 ? `<div class="muted">… 其余 ${mine.length - 300} 段未列出</div>` : ""}
+        </div>
+      </details>`;
+    return el;
+  }
+
+  function renderPool() {
+    const grid = $("#pool-grid");
+    if (!grid) return;
+    grid.innerHTML = "";
+    $("#pool-item-name").textContent = state.currentItem ? state.currentItem.name : "";
+    const segs = state.currentItem ? segsFor(state.currentItem.id) : [];
+    $("#pool-unassigned-count").textContent = segs.filter(s => !s.characterId).length;
+    grid.appendChild(poolCard(null));
+    state.characters.forEach(ch => grid.appendChild(poolCard(ch)));
+    $("#pool-merge-count").textContent = (state.poolMerge || new Set()).size;
+  }
+
+  function poolAudition(cid) {
+    const segs = segsFor(state.currentItem.id).filter(s => s.characterId === cid);
+    if (!segs.length) return toast("该角色暂无片段");
+    auditionSegment(segs[0]);
+  }
+  function poolPlaySeg(segId) {
+    const seg = segsFor(state.currentItem.id).find(s => s.id === segId);
+    if (seg) auditionSegment(seg);
+  }
+  function poolRename(cid) {
+    const ch = charById(cid); if (!ch) return;
+    const name = prompt("角色名称：", ch.name);
+    if (name == null || !name.trim()) return;
+    ch.name = name.trim();
+    scheduleSaveProject(); renderPool(); renderSegments();
+  }
+  function poolDelete(cid) {
+    const ch = charById(cid); if (!ch) return;
+    const n = segsFor(state.currentItem.id).filter(s => s.characterId === cid).length;
+    if (!confirm(`删除角色「${ch.name}」？其 ${n} 段片段将变为未分配`)) return;
+    state.characters = state.characters.filter(c => c.id !== cid);
+    segsFor(state.currentItem.id).forEach(s => { if (s.characterId === cid) s.characterId = null; });
+    scheduleSaveProject(); renderPool(); renderSegments();
+  }
+  function poolSetColor(cid, color) {
+    const ch = charById(cid); if (!ch) return;
+    ch.color = color;
+    scheduleSaveProject(); renderPool(); renderSegments();
+  }
+  function togglePoolMerge(cid, on) {
+    state.poolMerge = state.poolMerge || new Set();
+    if (on) state.poolMerge.add(cid); else state.poolMerge.delete(cid);
+    $("#pool-merge-count").textContent = state.poolMerge.size;
+  }
+  function mergePoolSelected() {
+    const ids = Array.from(state.poolMerge || []);
+    const chs = ids.map(charById).filter(Boolean);
+    if (chs.length < 2) return toast("请至少勾选 2 个角色");
+    const name = prompt("合并后角色名：", chs.map(c => c.name).join("+"));
+    if (name == null || !name.trim()) return;
+    const target = chs[0];
+    target.name = name.trim();
+    target.speakerLabels = Array.from(new Set(chs.flatMap(c => c.speakerLabels || [])));
+    state.characters = state.characters.filter(c => !ids.includes(c.id) || c.id === target.id);
+    segsFor(state.currentItem.id).forEach(s => { if (ids.includes(s.characterId) && s.characterId !== target.id) s.characterId = target.id; });
+    state.poolMerge = new Set();
+    scheduleSaveProject(); renderPool(); renderSegments();
+    toast(`已合并为「${target.name}」`);
+  }
+  function createPoolCharacter() {
+    const name = prompt("新角色名称：", "新角色");
+    if (name == null || !name.trim()) return;
+    state.characters.push({ id: uid("char"), name: name.trim(), color: paletteNext(), speakerLabels: [], created: Date.now() });
+    scheduleSaveProject(); renderPool(); renderSegments();
+  }
+
+  async function doIdentifySpeakers() {
+    if (!needItem()) return;
+    toast("开始说话人识别（ECAPA 声纹，首次含模型加载）…");
+    try {
+      const j = await api(`/api/items/${state.currentItem.id}/speakers/generate`, { method: "POST" });
+      trackTask(j.task_id, (result) => {
+        state.speakerSegs = result.speaker_segments || state.speakerSegs;
+        (result.characters || []).forEach(c => { if (!charById(c.id)) state.characters.push(c); });
+        const labelChar = {};
+        state.characters.forEach(c => (c.speakerLabels || []).forEach(lb => labelChar[lb] = c.id));
+        segsFor(state.currentItem.id).forEach(s => {
+          if (s.speakerLabel && labelChar[s.speakerLabel] && !s.characterId) s.characterId = labelChar[s.speakerLabel];
+        });
+        scheduleSaveProject();
+        renderPool(); renderSegments(); renderSubs();
+        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记`);
+      });
+    } catch (e) { toast("说话人识别启动失败: " + e.message, 6000); }
+  }
+
+  // 角色池页面事件
+  $("#pool-grid").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const cid = btn.dataset.char, segId = btn.dataset.seg;
+    if (btn.classList.contains("pool-aud")) poolAudition(cid);
+    else if (btn.classList.contains("pool-rename")) poolRename(cid);
+    else if (btn.classList.contains("pool-del")) poolDelete(cid);
+    else if (btn.classList.contains("ps-play")) poolPlaySeg(segId);
+  });
+  $("#pool-grid").addEventListener("dblclick", (e) => {
+    const nm = e.target.closest(".pool-name");
+    if (nm) poolRename(nm.closest(".pool-card").dataset.poolChar);
+  });
+  $("#pool-grid").addEventListener("change", (e) => {
+    if (e.target.classList.contains("pool-color")) poolSetColor(e.target.dataset.char, e.target.value);
+    else if (e.target.classList.contains("pool-merge-cb")) togglePoolMerge(e.target.dataset.char, e.target.checked);
+  });
+  let dragSegId = null;
+  $("#pool-grid").addEventListener("dragstart", (e) => {
+    const seg = e.target.closest(".pool-seg");
+    if (!seg) return;
+    dragSegId = seg.dataset.seg;
+    e.dataTransfer.setData("text/plain", dragSegId);
+  });
+  $("#pool-grid").addEventListener("dragover", (e) => { if (e.target.closest(".pool-card")) e.preventDefault(); });
+  $("#pool-grid").addEventListener("drop", (e) => {
+    const card = e.target.closest(".pool-card");
+    if (!card || !state.currentItem) return;
+    e.preventDefault();
+    const sid = dragSegId || e.dataTransfer.getData("text/plain");
+    const seg = segsFor(state.currentItem.id).find(s => s.id === sid);
+    if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(); renderSegments(); renderPool(); }
+  });
+
   // ── 实时字幕区 ────────────────────────────────────────
   function currentSubAt(t) {
     for (let i = 0; i < state.subs.length; i++) {
@@ -694,12 +1023,15 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#sub-count").textContent = subs.length ? `(${subs.length})` : "";
     empty.classList.toggle("hidden", subs.length > 0);
     subs.forEach((s, i) => {
+      const lbl = speakerLabelAt((s.start + s.end) / 2);
+      const ch = lbl ? state.characters.find(c => (c.speakerLabels || []).includes(lbl)) : null;
       const tr = document.createElement("tr");
       tr.className = "sub-row" + (i === state.currentSubIdx ? " cur" : "");
       tr.dataset.i = i;
       tr.innerHTML = `
         <td>${fmtT(s.start)} ~ ${fmtT(s.end)}</td>
         <td class="sub-text">${esc(s.text)}</td>
+        <td class="sub-speaker">${ch ? `<span class="spk-badge" style="background:${esc(ch.color)}">${esc(ch.name)}</span>` : (lbl ? `<span class="spk-badge">${esc(lbl)}</span>` : "")}</td>
         <td class="sub-act">
           <button class="chip sub-sel" data-i="${i}">选区</button>
           <button class="chip primary sub-add" data-i="${i}">加片段</button>
@@ -718,7 +1050,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const s = state.subs[i];
     if (!s) return;
     const segs = segsFor(state.currentItem.id);
-    segs.push({ start: s.start, end: s.end, text: s.text || "", language: "JP", speaker: "speaker" });
+    segs.push(newSegment(s.start, s.end, s.text || ""));
+    scheduleSaveProject();
     renderSegments();
     toast("已加入片段：" + ((s.text || "").slice(0, 24) || "（空文本）"));
   }
@@ -727,7 +1060,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     if (state.currentSubIdx >= 0 && state.subs[state.currentSubIdx]) { addSubToSegments(state.currentSubIdx); return; }
     if (state.selection) {
       const segs = segsFor(state.currentItem.id);
-      segs.push({ start: state.selection.start, end: state.selection.end, text: "", language: "JP", speaker: "speaker" });
+      segs.push(newSegment(state.selection.start, state.selection.end));
+      scheduleSaveProject();
       renderSegments();
       toast("已加入片段（选区）");
       return;
@@ -771,31 +1105,80 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     else focusedSeg = null;
   }
 
+  // 片段列表：点击/多选（Shift 区间、Ctrl 追加），右键重定向角色
   $("#seg-tbody").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
-    if (!btn) return;
-    const i = Number(btn.dataset.i);
+    const tr = e.target.closest("tr.seg-row");
+    if (!tr || !state.currentItem) return;
+    const i = Number(tr.dataset.i);
     const segs = segsFor(state.currentItem.id);
-    if (btn.classList.contains("seg-aud")) auditionSegment(segs[i]);
-    else if (btn.classList.contains("seg-jump")) jumpToSegment(segs[i]);
-    else if (btn.classList.contains("seg-del")) deleteSegment(i);
+    const seg = segs[i];
+    if (!seg) return;
+    if (btn) {
+      if (btn.classList.contains("seg-aud")) auditionSegment(seg);
+      else if (btn.classList.contains("seg-jump")) jumpToSegment(seg);
+      else if (btn.classList.contains("seg-del")) { deleteSegment(i); return; }
+    }
+    e.preventDefault();
+    if (e.shiftKey && state.selectedSegs.size) {
+      let first = 1e9;
+      segs.forEach((s, k) => { if (state.selectedSegs.has(s.id)) first = Math.min(first, k); });
+      const lo = Math.min(first, i), hi = Math.max(first, i);
+      state.selectedSegs = new Set();
+      for (let k = lo; k <= hi; k++) state.selectedSegs.add(segs[k].id);
+    } else if (e.ctrlKey || e.metaKey) {
+      if (state.selectedSegs.has(seg.id)) state.selectedSegs.delete(seg.id);
+      else state.selectedSegs.add(seg.id);
+    } else {
+      state.selectedSegs = new Set([seg.id]);
+    }
+    setSegFocus(tr);
+    renderSegments();
   });
   $("#seg-tbody").addEventListener("input", (e) => {
     const i = Number(e.target.dataset.i);
     const segs = segsFor(state.currentItem.id);
     if (!segs[i]) return;
-    if (e.target.classList.contains("seg-text")) segs[i].text = e.target.value;
-    if (e.target.classList.contains("seg-speaker")) segs[i].speaker = e.target.value;
+    if (e.target.classList.contains("seg-text")) { segs[i].text = e.target.value; scheduleSaveProject(); }
     renderSegments();   // 更新状态徽标
   });
   $("#seg-tbody").addEventListener("change", (e) => {
     const i = Number(e.target.dataset.i);
     const segs = segsFor(state.currentItem.id);
-    if (e.target.classList.contains("seg-lang") && segs[i]) segs[i].language = e.target.value;
+    if (!segs[i]) return;
+    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; scheduleSaveProject(); }
+    if (e.target.classList.contains("seg-speaker")) {
+      segs[i].characterId = e.target.value || null;
+      scheduleSaveProject(); renderSegments();
+    }
   });
-  $("#seg-tbody").addEventListener("click", (e) => {
+  function showRedirectMenu(x, y, segIds) {
+    const menu = $("#redirect-menu");
+    menu.innerHTML = "";
+    menu.style.left = x + "px"; menu.style.top = y + "px";
+    const mk = (label, val, color) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      if (color) b.style.color = color;
+      b.addEventListener("click", () => { hideRedirectMenu(); reassignSegments(segIds, val); });
+      return b;
+    };
+    menu.appendChild(mk("未分配", "", ""));
+    state.characters.forEach(c => menu.appendChild(mk(c.name, c.id, c.color)));
+    menu.classList.remove("hidden");
+  }
+  function hideRedirectMenu() { const m = $("#redirect-menu"); if (m) m.classList.add("hidden"); }
+  document.addEventListener("click", hideRedirectMenu);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideRedirectMenu(); });
+  $("#segments-panel").addEventListener("contextmenu", (e) => {
     const tr = e.target.closest("tr.seg-row");
-    if (tr) setSegFocus(tr);
+    if (!tr || !state.currentItem) return;
+    e.preventDefault();
+    const i = Number(tr.dataset.i);
+    const segs = segsFor(state.currentItem.id);
+    let ids = Array.from(state.selectedSegs).filter(id => segs.some(s => s.id === id));
+    if (!ids.length && segs[i]) ids = [segs[i].id];
+    showRedirectMenu(e.clientX, e.clientY, ids);
   });
 
   // ── 任务跟踪 ───────────────────────────────────────────
@@ -912,22 +1295,33 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
 
   // ── B 站 ───────────────────────────────────────────────
-  async function doBilibiliOpen() {
-    const url = $("#bb-url").value.trim();
-    if (!url) return toast("请输入 B 站链接");
+  // ── 网络 URL 导入（多平台 / 批量） ──
+  async function doUrlOpen() {
+    const raw = $("#bb-url").value.trim();
+    const urls = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    if (!urls.length) return toast("请输入至少一个视频链接");
     hideModal("#modal-bilibili");
-    toast("解析 B 站视频…");
+    toast(`解析 ${urls.length} 个链接…`);
     try {
-      const j = await api("/api/bilibili/open", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
-      // 立即用代理流播放视频
-      const v = $("#video-preview");
-      $("#video-panel").classList.remove("no-video");
-      v.src = j.video_proxy_url;
-      v.load(); v.play().catch(() => {});
-      $("#dur-info").textContent = "获取中…";
-      trackTask(j.task_id, (r) => selectResultItem(r));
-    } catch (e) { toast("B 站打开失败: " + e.message, 6000); }
+      const j = await api("/api/url/open", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls }) });
+      const results = j.results || [];
+      const firstOk = results.find(r => r.ok);
+      if (firstOk && firstOk.video_proxy_url) {
+        // 立即用代理流播放第一个视频预览
+        const v = $("#video-preview");
+        $("#video-panel").classList.remove("no-video");
+        v.src = firstOk.video_proxy_url;
+        v.load(); v.play().catch(() => {});
+        $("#dur-info").textContent = "获取中…";
+      }
+      let ok = 0, fail = 0;
+      results.forEach(r => {
+        if (r.ok) { ok++; trackTask(r.task_id, (res) => selectResultItem(res)); }
+        else { fail++; toast(`解析失败: ${r.url} — ${r.error}`, 6000); }
+      });
+      toast(`已提交 ${ok} 个链接，${fail} 个失败`);
+    } catch (e) { toast("URL 导入失败: " + e.message, 6000); }
   }
 
   // ── 转写 ───────────────────────────────────────────────
@@ -952,6 +1346,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
           segments: todo.map(s => ({ start: s.start, end: s.end })), model }) });
       trackTask(j.task_id, (result) => {
         (result.texts || []).forEach((text, k) => { segs[todo[k].idx].text = text; });
+        scheduleSaveProject();
         renderSegments();
         toast("转写完成，请人工校对文本");
       });
@@ -978,7 +1373,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
           language: $("#ds-language").value,
           out_dir: $("#ds-outdir").value.trim() || undefined,
           segments: segs.map(s => ({ start: s.start, end: s.end, text: s.text,
-            language: s.language, speaker: s.speaker })),
+            language: s.language, speaker: (charById(s.characterId) || {}).name || "" })),
         }) });
       trackTask(j.task_id, (result) => {
         const skipped = (result.skipped || []).map(s => `  - [跳过] ${s.reason}（${fmtT(s.seg.start)}~${fmtT(s.seg.end)}）`).join("\n") || "  （无跳过）";
@@ -1024,6 +1419,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const actions = {
       "import": importDialog,
       "bilibili": () => showModal("#modal-bilibili"),
+      "url-open": () => showModal("#modal-bilibili"),
+      "pool": openPool,
+      "identify-speakers": doIdentifySpeakers,
       "export-selection": openExportModal,
       "denoise": doDenoise,
       "separate": doSeparate,
@@ -1035,7 +1433,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       "zoom-out": zoomOut,
       "fit": () => zoomSet(0),
       "zoom-sel": () => { if (state.selection) { zoomSet(0); state.ws.setTime(state.selection.start); } },
-      "toggle-minimap": () => $("#minimap").classList.toggle("hidden"),
+      "toggle-minimap": () => $("#minimap-wrap").classList.toggle("hidden"),
       "panel-toggle": (b) => togglePanel(b.dataset.panel),
       "layout-reset": resetLayout,
       "help": () => showModal("#modal-help"),
@@ -1082,7 +1480,14 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         }
         case "ArrowUp": case "ArrowDown": e.preventDefault(); adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
-          if (focusedSeg != null && state.currentItem) { deleteSegment(Number(focusedSeg)); setSegFocus(null); }
+          if (state.currentItem) {
+            const segs = segsFor(state.currentItem.id);
+            if (state.selectedSegs.size) {
+              segs.splice(0, segs.length, ...segs.filter(s => !state.selectedSegs.has(s.id)));
+              state.selectedSegs = new Set();
+              scheduleSaveProject(); renderSegments();
+            } else if (focusedSeg != null) { deleteSegment(Number(focusedSeg)); setSegFocus(null); }
+          }
           break;
       }
     });
@@ -1116,15 +1521,26 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#btn-loop").addEventListener("click", toggleLoop);
     $("#btn-play-selection").addEventListener("click", playSelection);
     $("#btn-export-selection").addEventListener("click", openExportModal);
-    $("#minimap-toggle").addEventListener("change", (e) => $("#minimap").classList.toggle("hidden", !e.target.checked));
+    $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !e.target.checked));
     $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
-      if (confirm("清空当前素材的全部片段？")) { segsFor(state.currentItem.id).length = 0; renderSegments(); }
+      if (confirm("清空当前素材的全部片段？")) {
+        segsFor(state.currentItem.id).length = 0;
+        state.selectedSegs = new Set();
+        scheduleSaveProject(); renderSegments();
+      }
     });
     $("#btn-transcribe").addEventListener("click", openTranscribeModal);
+    $("#btn-pool").addEventListener("click", openPool);
+    $("#btn-identify-speakers").addEventListener("click", doIdentifySpeakers);
+    $("#pool-back").addEventListener("click", closePool);
+    $("#pool-close").addEventListener("click", closePool);
+    $("#pool-new").addEventListener("click", createPoolCharacter);
+    $("#pool-merge").addEventListener("click", mergePoolSelected);
+    $("#pool-identify").addEventListener("click", doIdentifySpeakers);
 
-    $("#bb-open").addEventListener("click", doBilibiliOpen);
+    $("#bb-open").addEventListener("click", doUrlOpen);
     $("#tr-start").addEventListener("click", doTranscribe);
     $("#ds-start").addEventListener("click", doDatasetExport);
     $("#ex-start").addEventListener("click", doExportSelection);
@@ -1149,7 +1565,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $$(".modal-mask").forEach((mask) => mask.addEventListener("click", (e) => {
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
     }));
-    $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter") doBilibiliOpen(); });
+    $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doUrlOpen(); } });
     // 实时字幕
     $("#btn-sub-open").addEventListener("click", () => $("#sub-file").click());
     $("#btn-sub-generate").addEventListener("click", generateSubs);
@@ -1194,10 +1610,13 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   setupDrop();
   bindUI();
   initWorkspace();
+  setupMMSeek();
+  window.addEventListener("beforeunload", () => { if (state.projectDirty) saveProjectNow(); });
   boot();
 
   // 调试/自动化钩子
   window.__vc = { state, selectItem, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
     markForward, unmarkLast, clearMultiRegions,
+    loadProject, saveProjectNow, openPool, closePool, renderPool, doIdentifySpeakers, newSegment,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };
 })();

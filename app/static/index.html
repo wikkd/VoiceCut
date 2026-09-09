@@ -15,7 +15,7 @@
       <button class="menu-title">文件</button>
       <div class="menu-items">
         <button data-act="import">导入文件… <kbd>Ctrl+O</kbd></button>
-        <button data-act="bilibili">从 B 站打开…</button>
+        <button data-act="url-open">从 URL 导入…</button>
         <div class="menu-sep"></div>
         <button data-act="export-selection">导出选区 <kbd>E</kbd></button>
       </div>
@@ -71,7 +71,9 @@
   <!-- ② 高频工具栏 -->
   <div id="toolbar">
     <button id="btn-import" class="btn primary">📂 导入文件</button>
-    <button id="btn-bilibili" class="btn">🔗 从 B 站打开</button>
+    <button id="btn-bilibili" class="btn">🔗 从 URL 导入</button>
+    <button id="btn-identify-speakers" class="btn">👥 识别说话人</button>
+    <button id="btn-pool" class="btn">🎭 角色池</button>
     <button id="btn-export-dataset" class="btn">📦 导出训练集</button>
     <span class="spacer"></span>
   </div>
@@ -109,7 +111,10 @@
       <div class="panel-body wave-body">
         <div id="timeline"></div>
         <div id="waveform"></div>
-        <div id="minimap"></div>
+        <div id="minimap-wrap">
+          <div id="minimap"></div>
+          <div id="mm-cursor" class="hidden"><span id="mm-time"></span></div>
+        </div>
         <div id="empty-state" class="muted">导入文件后在此显示波形</div>
       </div>
     </section>
@@ -132,7 +137,7 @@
         <div id="sub-scroll">
           <table id="sub-table">
             <thead>
-              <tr><th style="width:110px">起止</th><th>文本</th><th style="width:90px">操作</th></tr>
+              <tr><th style="width:110px">起止</th><th>文本</th><th style="width:76px">说话人</th><th style="width:90px">操作</th></tr>
             </thead>
             <tbody id="sub-tbody"></tbody>
           </table>
@@ -212,12 +217,37 @@
     <span id="boot-state">连接后端…</span>
   </footer>
 
+  <!-- 上下文菜单 -->
+  <div id="media-menu" class="context-menu hidden">
+    <button class="mm-add">添加到工作区</button>
+    <button class="mm-rename">重命名…</button>
+    <button class="mm-del danger">删除…</button>
+  </div>
+  <div id="redirect-menu" class="context-menu hidden"></div>
+
+  <!-- 角色池子页面 -->
+  <section id="pool-view" class="hidden">
+    <header id="pool-header">
+      <button id="pool-back" class="btn">← 返回</button>
+      <span class="pool-title">角色池 · <b id="pool-item-name"></b></span>
+      <span class="spacer"></span>
+      <button id="pool-identify" class="btn">👥 识别说话人</button>
+      <button id="pool-new" class="btn">＋ 新建角色</button>
+      <button id="pool-merge" class="btn">合并选中 <b id="pool-merge-count">0</b></button>
+      <button id="pool-close" class="btn" title="关闭">×</button>
+    </header>
+    <div id="pool-body">
+      <div id="pool-unassigned-bar">未分配片段：<b id="pool-unassigned-count">0</b></div>
+      <div id="pool-grid"></div>
+    </div>
+  </section>
+
   <!-- ⑥ 弹窗 -->
   <div id="modal-bilibili" class="modal-mask hidden">
     <div class="modal">
-      <h3>从 B 站打开</h3>
-      <p class="muted">免登录直链（通常 360p/480p）。页面内直接播放，音频后台获取后即可剪辑。</p>
-      <input id="bb-url" type="text" placeholder="https://www.bilibili.com/video/BV…">
+      <h3>从 URL 导入</h3>
+      <p class="muted">支持 B 站 / YouTube / 腾讯 / 优酷 / 爱奇艺 / Vimeo / 抖音 / 快手等（每行一个，可批量）。免登录通常仅低清晰度；需登录 / DRM 的内容会明确报错。</p>
+      <textarea id="bb-url" rows="5" placeholder="https://www.bilibili.com/video/BV…&#10;https://www.youtube.com/watch?v=…"></textarea>
       <div class="modal-actions">
         <button class="btn" data-close>取消</button>
         <button class="btn primary" id="bb-open">打开</button>
