@@ -166,8 +166,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const mmTime = document.querySelector('#mm-time').textContent;
       const bb = document.querySelector('#bb-url');
       const bbIsTextarea = !!bb && bb.tagName === 'TEXTAREA';
+      const cancelBtn = !!document.querySelector('#btn-cancel-task');
       return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
-               mmLeft, mmTime, bbIsTextarea, segCount: segs.length };
+               mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: segs.length };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
 

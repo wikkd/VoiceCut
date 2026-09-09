@@ -22,6 +22,7 @@ from app import transcribe as transcribe_mod
 from app.audio_ops import compute_peaks
 from app.config import AppConfig
 from app.ffmpeg_util import export_segment, extract_audio, media_duration, remux_preview, trim_silence
+from app.log import get_logger
 from app.media_store import MediaItem, MediaStore
 from app.streaming import stream_file
 from app.tasks import TaskManager
@@ -41,7 +42,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     app.config["VC_CFG"] = cfg
     app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024  # 4GB 上传上限
 
-    store = MediaStore()
+    log = get_logger()
+    store = MediaStore(cfg.workdir)
     tasks = TaskManager()
     app.extensions["vc_store"] = store
     app.extensions["vc_tasks"] = tasks
@@ -61,16 +63,24 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             "subs_url": f"/api/subtitles/{item.id}",
             "derived_from": item.derived_from,
             "source": item.source,
-            "extra": item.extra,
+            "extra": _item_extra(item),
         }
 
-    def _register_item(*, wav: Path, name: str, kind: str, source: str = "",
-                       preview: Path | None = None, derived_from: str | None = None,
+    def _item_extra(item: MediaItem) -> dict:
+        """Item extra without the heavy peaks payload (fetched via peaks_url)."""
+        extra = dict(item.extra)
+        extra.pop("peaks", None)
+        return extra
+
+    def _register_item(*, wav: Path, name: str, kind: str, item_id: str | None = None,
+                       source: str = "", preview: Path | None = None,
+                       derived_from: str | None = None,
                        extra: dict | None = None) -> MediaItem:
+        item_id = item_id or store.new_id()
         duration = media_duration(wav)
         peaks = compute_peaks(wav)
         item = MediaItem(
-            id=store.new_id(), name=name, wav_path=wav, duration=duration,
+            id=item_id, name=name, wav_path=wav, duration=duration,
             sample_rate=48000, preview_mp4=preview, source=source,
             derived_from=derived_from, kind=kind,
             extra={**(extra or {}), "peaks": peaks},
@@ -156,6 +166,11 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         t = tasks.get(task_id)
         return jsonify(t) if t else (jsonify({"error": "not found"}), 404)
 
+    @app.post("/api/tasks/<task_id>/cancel")
+    def cancel_task(task_id: str) -> object:
+        ok = tasks.cancel(task_id)
+        return jsonify({"ok": ok})
+
     # ── 导入 ─────────────────────────────────────────────────
 
     @app.post("/api/import")
@@ -180,26 +195,28 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         items_dir = cfg_.workdir / "items"
         items_dir.mkdir(parents=True, exist_ok=True)
 
-        new_id = store_.new_id()
-        wav = items_dir / f"{new_id}.wav"
+        item_id = store_.new_id()
+        wav = items_dir / f"{item_id}.wav"
         extract_audio(raw_path, wav, sample_rate=48000, channels=1)
         preview = None
         if kind == "video":
             try:
-                preview = remux_preview(raw_path, items_dir / f"{new_id}.preview.mp4")
+                preview = remux_preview(raw_path, items_dir / f"{item_id}.preview.mp4")
             except Exception:  # noqa: BLE001
                 preview = None
         subs_file = None
         if kind == "video":
             try:
                 subs_file = subtitles_mod.extract_embedded_subtitles(
-                    raw_path, items_dir / f"{new_id}.srt")
+                    raw_path, items_dir / f"{item_id}.srt")
             except Exception:  # noqa: BLE001
                 subs_file = None
-        item = _register_item(wav=wav, preview=preview, name=stem, kind=kind,
+        item = _register_item(item_id=item_id, wav=wav, preview=preview, name=stem, kind=kind,
                               source=str(raw_path))
         if subs_file:
             item.extra["subs_file"] = str(subs_file)
+            store_.persist(item)
+        log.info("imported %s -> %s (%s)", filename, item.id, kind)
         return {"item_id": item.id, "item": _item_json(item)}
 
     # ── 流式 ─────────────────────────────────────────────────
@@ -258,6 +275,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         if not subs:
             return jsonify({"error": "字幕为空或无法解析"}), 400
         item.extra["subs_file"] = str(path)
+        store.persist(item)
         return jsonify({"count": len(subs), "subs": [s.to_dict() for s in subs]})
 
     @app.post("/api/subtitles/<item_id>/generate")
@@ -267,7 +285,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         model = (body.get("model") or "medium").lower()
         if model not in ("tiny", "base", "small", "medium", "large-v3"):
             return jsonify({"error": "未知模型"}), 400
-        tid = tasks.submit(_subs_generate_worker, cfg, store, item, model)
+        tid = tasks.submit(_subs_generate_worker, cfg, store, item, model, gpu=True)
         return jsonify({"task_id": tid})
 
     def _subs_generate_worker(cfg_: AppConfig, store_: MediaStore, item: MediaItem,
@@ -283,6 +301,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             subs_dir.mkdir(parents=True, exist_ok=True)
             path = subtitles_mod.write_srt(subs_dir / f"{item.id}.srt", subs)
             item.extra["subs_file"] = str(path)
+            store_.persist(item)
         return {"count": len(subs), "subs": subs, "kept_existing": not subs}
 
     # ── 导出 ─────────────────────────────────────────────────
@@ -349,17 +368,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     def _denoise_worker(cfg_: AppConfig, store_: MediaStore, src_item: MediaItem) -> dict:
         items_dir = cfg_.workdir / "items"
         items_dir.mkdir(parents=True, exist_ok=True)
-        new_id = store_.new_id()
-        out = items_dir / f"{new_id}.wav"
+        item_id = store_.new_id()
+        out = items_dir / f"{item_id}.wav"
         denoise_mod.denoise_wav(src_item.wav_path, out, stationary=True, prop_decrease=0.75)
-        item = _register_item(wav=out, name=f"{src_item.name}_降噪", kind="denoised",
+        item = _register_item(item_id=item_id, wav=out, name=f"{src_item.name}_降噪", kind="denoised",
                               source=str(out), derived_from=src_item.id)
         return {"item_id": item.id, "item": _item_json(item)}
 
     @app.post("/api/separate")
     def api_separate() -> object:
         item = store.require(request.get_json(force=True).get("item_id"))
-        tid = tasks.submit(_separate_worker, cfg, store, item)
+        tid = tasks.submit(_separate_worker, cfg, store, item, gpu=True)
         return jsonify({"task_id": tid})
 
     def _separate_worker(cfg_: AppConfig, store_: MediaStore, src_item: MediaItem) -> dict:
@@ -373,10 +392,10 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         items_dir.mkdir(parents=True, exist_ok=True)
 
         def _reg(path: Path, label: str, kind: str) -> MediaItem:
-            new_id = store_.new_id()
-            wav = items_dir / f"{new_id}.wav"
+            item_id = store_.new_id()
+            wav = items_dir / f"{item_id}.wav"
             extract_audio(path, wav, sample_rate=48000, channels=1)  # 统一工作格式
-            return _register_item(wav=wav, name=f"{src_item.name}_{label}", kind=kind,
+            return _register_item(item_id=item_id, wav=wav, name=f"{src_item.name}_{label}", kind=kind,
                                   source=str(wav), derived_from=src_item.id)
 
         vocal = _reg(Path(res["vocals"]), "人声", "vocal")
@@ -392,10 +411,10 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     def _trim_worker(cfg_: AppConfig, store_: MediaStore, src_item: MediaItem) -> dict:
         items_dir = cfg_.workdir / "items"
         items_dir.mkdir(parents=True, exist_ok=True)
-        new_id = store_.new_id()
-        out = items_dir / f"{new_id}.wav"
+        item_id = store_.new_id()
+        out = items_dir / f"{item_id}.wav"
         trim_silence(src_item.wav_path, out, sample_rate=48000)
-        item = _register_item(wav=out, name=f"{src_item.name}_去静音", kind="trimmed",
+        item = _register_item(item_id=item_id, wav=out, name=f"{src_item.name}_去静音", kind="trimmed",
                               source=str(out), derived_from=src_item.id)
         return {"item_id": item.id, "item": _item_json(item)}
 
@@ -411,26 +430,18 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             return jsonify({"error": "仅支持 medium / large-v3"}), 400
         if not segs:
             return jsonify({"error": "无片段"}), 400
-        tid = tasks.submit(_transcribe_worker, cfg, store, item, segs, model)
+        tid = tasks.submit(_transcribe_worker, cfg, store, item, segs, model, gpu=True)
         return jsonify({"task_id": tid})
 
     def _transcribe_worker(cfg_: AppConfig, store_: MediaStore, item: MediaItem,
                            segs: list, model: str) -> dict:
-        d = cfg_.workdir / "transcribe" / item.id
-        d.mkdir(parents=True, exist_ok=True)
         tid = tasks.current_task_id()
-        total = len(segs)
-        texts: list[str] = []
-        for i, s in enumerate(segs):
-            if tasks:
-                tasks.update(tid, progress=i / total if total else 1.0,
-                             message=f"转写 {i + 1}/{total}: {Path(item.name).stem}")
-            tmp = d / f"{i:03d}.wav"
-            export_segment(item.wav_path, tmp, float(s["start"]), float(s["end"]),
-                           sample_rate=16000)
-            texts.append(transcribe_mod.transcribe_file(tmp, language="ja", model=model))
-        if tasks:
-            tasks.update(tid, progress=1.0, message="转写完成")
+        clips = [(float(s["start"]), float(s["end"])) for s in segs]
+        texts = transcribe_mod.transcribe_clips_full(
+            item.wav_path, clips, language="ja", model=model,
+            progress_cb=lambda p: tasks.update(tid, progress=p, message=f"transcribe {p*100:.0f}%"),
+            cancelled_cb=lambda: tasks.cancelled(tid),
+        )
         return {"texts": texts}
 
     @app.post("/api/dataset/export")
@@ -456,7 +467,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         return jsonify({"task_id": tid})
 
     def _dataset_worker(item: MediaItem, ds_segs: list, out_dir: Path) -> dict:
-        return dataset_mod.export_dataset(item.wav_path, ds_segs, out_dir)
+        tid = tasks.current_task_id()
+        return dataset_mod.export_dataset(item.wav_path, ds_segs, out_dir,
+                                          tasks=tasks, task_id=tid)
 
     # ── B 站 ─────────────────────────────────────────────────
 
@@ -518,13 +531,14 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
         items_dir = cfg_.workdir / "items"
         items_dir.mkdir(parents=True, exist_ok=True)
-        new_id = store_.new_id()
-        wav = items_dir / f"{new_id}.wav"
+        item_id = store_.new_id()
+        wav = items_dir / f"{item_id}.wav"
         extract_audio(src_file, wav, sample_rate=48000, channels=1)
-        item = _register_item(wav=wav, name=job["title"], kind="url",
+        item = _register_item(item_id=item_id, wav=wav, name=job["title"], kind="url",
                               source=job["url"],
                               extra={"proxy_url": f"/api/bilibili/proxy/{job['id']}",
                                      "bilibili_job": job["id"]})
+        log.info("url import ok: %s -> %s", job.get("title"), item.id)
         return {"item_id": item.id, "item": _item_json(item)}
 
     @app.get("/api/bilibili/proxy/<job_id>")
@@ -582,7 +596,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     @app.post("/api/items/<item_id>/speakers/generate")
     def api_speakers_generate(item_id: str) -> object:
         store.require(item_id)
-        tid = tasks.submit(_speakers_worker, cfg, store, item_id)
+        tid = tasks.submit(_speakers_worker, cfg, store, item_id, gpu=True)
         return jsonify({"task_id": tid})
 
     def _speakers_worker(cfg_: AppConfig, store_: MediaStore, item_id: str) -> dict:
@@ -600,6 +614,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 subs_dir.mkdir(parents=True, exist_ok=True)
                 path = subtitles_mod.write_srt(subs_dir / f"{item.id}.srt", subs)
                 item.extra["subs_file"] = str(path)
+                store_.persist(item)
         if not subs:
             raise RuntimeError("未识别到语音内容，无法区分说话人")
         res = speakers_mod.generate_speakers(
@@ -646,6 +661,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             return jsonify({"error": "名称为空"}), 400
         item = store.require(item_id)
         item.name = name
+        store.persist(item)
         return jsonify(_item_json(item))
 
     return app

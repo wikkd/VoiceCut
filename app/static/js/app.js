@@ -1208,6 +1208,9 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         } else if (t.status === "error") {
           state.activeTasks.delete(tid);
           toast("任务失败: " + (t.message || "未知错误"), 6000);
+        } else if (t.status === "cancelled") {
+          state.activeTasks.delete(tid);
+          toast("任务已取消");
         }
       } catch (e) { /* 网络抖动忽略 */ }
     }
@@ -1215,16 +1218,24 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
   function updateStatusbar() {
     const wrap = $("#task-bar-wrap"), bar = $("#task-bar"), info = $("#task-info");
+    const cancelBtn = $("#btn-cancel-task");
     if (!state.activeTasks.size) {
       wrap.classList.add("hidden");
+      if (cancelBtn) cancelBtn.classList.add("hidden");
       if (!toastTimer) info.textContent = "就绪";
       return;
     }
     wrap.classList.remove("hidden");
+    if (cancelBtn) cancelBtn.classList.remove("hidden");
     const arr = Array.from(state.activeTasks.values());
     const avg = arr.reduce((a, b) => a + b.progress, 0) / arr.length;
     bar.style.width = (avg * 100).toFixed(0) + "%";
     info.textContent = arr.map(a => a.msg).join(" · ");
+  }
+  function cancelAllTasks() {
+    Array.from(state.activeTasks.keys()).forEach((tid) => {
+      api(`/api/tasks/${tid}/cancel`, { method: "POST" }).catch(() => {});
+    });
   }
   function selectResultItem(result) {
     if (!result) return;
@@ -1512,6 +1523,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
   // ── 事件绑定 ───────────────────────────────────────────
   function bindUI() {
+    $("#btn-cancel-task").addEventListener("click", cancelAllTasks);
     $("#btn-import").addEventListener("click", importDialog);
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
     $("#btn-export-dataset").addEventListener("click", openDatasetModal);

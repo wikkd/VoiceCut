@@ -1,17 +1,21 @@
 """Per-item project state persistence (characters, segments, speaker segments).
 
-Stored as JSON under workdir/projects/<item_id>.json so the character pool,
-segments and speaker labels survive page refresh / app restart.
-Data shapes (all client-facing, stored as plain dicts):
-  Character  = {id, name, color, speakerLabels: [..], created}
-  Segment    = {id, start, end, text, language, speakerLabel, characterId, note?}
-  speaker_segment = {start, end, label}
+Stored in the SQLite DB (workdir/voicecut.db, table ``projects``) so the
+character pool / segments / speaker labels survive page refresh and restarts.
+The legacy JSON files under workdir/projects/ are migrated once by app.db.
+
+Client-facing data shapes (plain dicts):
+  Character        = {id, name, color, speakerLabels: [...], created}
+  Segment          = {id, start, end, text, language, speakerLabel, characterId, note?}
+  speaker_segment  = {start, end, label}
 """
 from __future__ import annotations
 
 import json
 import uuid
 from pathlib import Path
+
+from app import db
 
 PROJECT_VERSION = 1
 
@@ -44,15 +48,17 @@ def default_project() -> dict:
 
 
 def project_path(workdir: Path, item_id: str) -> Path:
+    """Legacy JSON path (unused after migration; kept for back-compat/tests)."""
     return Path(workdir) / "projects" / f"{item_id}.json"
 
 
 def load_project(workdir: Path, item_id: str) -> dict:
-    p = project_path(workdir, item_id)
-    if not p.exists():
+    conn = db.get_conn(workdir)
+    raw = db.fetch_project(conn, item_id)
+    if raw is None:
         return default_project()
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        data = json.loads(raw)
         if not isinstance(data, dict):
             return default_project()
         data.setdefault("characters", [])
@@ -64,16 +70,11 @@ def load_project(workdir: Path, item_id: str) -> dict:
 
 
 def save_project(workdir: Path, item_id: str, data: dict) -> dict:
-    p = project_path(workdir, item_id)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    conn = db.get_conn(workdir)
+    db.upsert_project(conn, item_id, json.dumps(data, ensure_ascii=False, indent=1))
     return data
 
 
 def delete_project(workdir: Path, item_id: str) -> None:
-    try:
-        p = project_path(workdir, item_id)
-        if p.exists():
-            p.unlink()
-    except OSError:
-        pass
+    conn = db.get_conn(workdir)
+    db.delete_project_row(conn, item_id)

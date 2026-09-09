@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from app.tasks import TaskManager
+from app.tasks import TaskCancelled, TaskManager
 
 
 def demucs_path() -> str:
@@ -48,6 +48,10 @@ def run_separation(
     pattern = re.compile(r"(\d+)\s*/\s*(\d+)\s*\|")
     assert proc.stdout is not None
     for line in proc.stdout:
+        if tasks and task_id and tasks.cancelled(task_id):
+            proc.kill()
+            proc.wait()
+            raise TaskCancelled()
         if tasks and task_id:
             m = pattern.search(line)
             if m:

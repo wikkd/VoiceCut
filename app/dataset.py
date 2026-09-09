@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.audio_ops import normalize_loudness, validate_dataset_clip
-from app.ffmpeg_util import export_segment, trim_silence
+from app.ffmpeg_util import export_segment, export_segment_trimmed
+from app.tasks import TaskCancelled
 
 
 @dataclass
@@ -43,6 +44,8 @@ def export_dataset(
     trim: bool = True,
     normalize: bool = True,
     min_dur: float = 0.8,
+    tasks=None,
+    task_id: str | None = None,
 ) -> dict:
     """把片段列表导出为 GPT-SoVITS 标准目录。
 
@@ -56,8 +59,14 @@ def export_dataset(
     written: list[dict] = []
     skipped: list[dict] = []
     num = 0
+    total = len(segments)
 
     for seg in segments:
+        if tasks and task_id and tasks.cancelled(task_id):
+            raise TaskCancelled()
+        if tasks and task_id:
+            tasks.update(task_id, progress=num / total if total else 1.0,
+                         message=f"dataset export {num}/{total}")
         text = seg.text.strip()
         if not text:
             skipped.append({"reason": "空文本", "seg": seg})
@@ -71,13 +80,12 @@ def export_dataset(
         txt_path = out_dir / f"{num:03d}.txt"
 
         # 1) 切片段 → 2) 去头尾静音 → 3) 响度标准化 → 4) 落盘正式文件
-        tmp_cut = out_dir / f".tmp_cut_{num:03d}.wav"
-        export_segment(src_wav, tmp_cut, seg.start, seg.end, sample_rate=sample_rate)
-
-        tmp_trim = tmp_cut
+        tmp_trim = out_dir / f".tmp_cut_{num:03d}.wav"
         if trim:
-            tmp_trim = out_dir / f".tmp_trim_{num:03d}.wav"
-            trim_silence(tmp_cut, tmp_trim, sample_rate=sample_rate)
+            export_segment_trimmed(src_wav, tmp_trim, seg.start, seg.end,
+                                   sample_rate=sample_rate)
+        else:
+            export_segment(src_wav, tmp_trim, seg.start, seg.end, sample_rate=sample_rate)
 
         final = tmp_trim
         if normalize:
@@ -91,6 +99,11 @@ def export_dataset(
 
         shutil.move(str(final), str(wav_path))
         txt_path.write_text(text + "\n", encoding="utf-8")
+        for tmp in out_dir.glob(f".tmp_*_{num:03d}.wav"):
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
         written.append({
             "index": num, "wav": wav_path.name, "txt": txt_path.name,

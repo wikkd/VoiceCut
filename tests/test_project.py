@@ -39,18 +39,20 @@ def test_load_missing_returns_default(tmp_path: Path) -> None:
 
 
 def test_load_corrupt_returns_default(tmp_path: Path) -> None:
-    p = pr.project_path(tmp_path, "mX")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("{ not json", encoding="utf-8")
+    from app import db
+    conn = db.get_conn(tmp_path)
+    db.upsert_project(conn, "mX", "{ not json")
     p = pr.load_project(tmp_path, "mX")
     assert p["characters"] == []
 
 
 def test_delete_project(tmp_path: Path) -> None:
+    from app import db
     pr.save_project(tmp_path, "mX", pr.default_project())
-    assert pr.project_path(tmp_path, "mX").exists()
+    conn = db.get_conn(tmp_path)
+    assert db.fetch_project(conn, "mX") is not None
     pr.delete_project(tmp_path, "mX")
-    assert not pr.project_path(tmp_path, "mX").exists()
+    assert db.fetch_project(conn, "mX") is None
 
 
 def test_next_color_distinct() -> None:

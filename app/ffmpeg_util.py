@@ -213,3 +213,35 @@ def trim_silence(
         str(dst),
     ])
     return dst
+
+def export_segment_trimmed(
+    src: str | Path,
+    dst: str | Path,
+    start: float,
+    end: float,
+    *,
+    sample_rate: int,
+    silence_threshold: str = "-35dB",
+    min_silence: float = 0.10,
+) -> Path:
+    """Cut [start, end) and trim head/tail silence in a single ffmpeg call.
+
+    Equivalent to export_segment() followed by trim_silence() but spawns only
+    one ffmpeg process (used by the GPT-SoVITS dataset exporter).
+    """
+    dst = Path(dst)
+    dur = max(0.0, end - start)
+    if dur <= 0:
+        raise ValueError(f"invalid segment: start={start} end={end}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    run_ffmpeg([
+        "-y", "-ss", f"{start:.6f}", "-i", str(src),
+        "-t", f"{dur:.6f}",
+        "-af",
+        f"silenceremove=start_periods=1:start_threshold={silence_threshold}:start_silence={min_silence:.3f},"
+        f"areverse,silenceremove=start_periods=1:start_threshold={silence_threshold}:start_silence={min_silence:.3f},"
+        f"areverse",
+        "-ar", str(sample_rate), "-ac", "1",
+        str(dst),
+    ])
+    return dst

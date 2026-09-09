@@ -25,7 +25,7 @@ VoiceCut/
 │   ├── config.py             # AppConfig: 路径 / ffmpeg 探测 / 采样率常量
 │   ├── ffmpeg_util.py        # ffmpeg/ffprobe 封装: probe / extract / export / trim / remux
 │   ├── audio_ops.py          # 音频分析: 波形峰值 / 质量指标 / 响度标准化 / 数据集校验
-│   ├── media_store.py        # MediaStore: 内存素材注册表 (线程安全)
+│   ├── media_store.py        # MediaStore: SQLite 素材注册表 (线程安全, 重启不丢)
 │   ├── tasks.py              # TaskManager: 后台任务 + 进度轮询
 │   ├── denoise.py            # noisereduce 封装 (保守降噪)
 │   ├── separate.py           # demucs CLI 封装 (two-stems=vocals + 进度解析)

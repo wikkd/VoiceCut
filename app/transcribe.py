@@ -139,3 +139,64 @@ def transcribe_timed(
     if progress_cb:
         progress_cb(1.0)
     return subs
+
+
+def transcribe_clips_full(
+    wav_path: str | Path,
+    clips: list[tuple[float, float]],
+    *,
+    language: str = "ja",
+    model: str = "medium",
+    task: str = "transcribe",
+    progress_cb=None,
+    cancelled_cb=None,
+) -> list[str]:
+    """Transcribe the whole file once (word-level) and map words to clips.
+
+    clips: list of (start, end) seconds.
+    A word belongs to the clip whose [start, end) contains the word's midpoint.
+    Returns a list aligned with ``clips``; clips without words yield "".
+
+    Cancellation: ``cancelled_cb()`` returning True raises TaskCancelled at
+    safe checkpoints (between whisper segments / clips).
+    """
+    from app.tasks import TaskCancelled
+
+    _init_runtime()
+    cached = _load_model(model, task)
+    assert cached is not None
+    segments, info = cached.transcribe(
+        str(wav_path), language=language, task=task,
+        vad_filter=True, word_timestamps=True)
+
+    words: list[tuple[float, float, str]] = []
+    total = float(getattr(info, "duration", 0) or 0) or 0.0
+    for seg in segments:
+        if cancelled_cb and cancelled_cb():
+            raise TaskCancelled()
+        for w in (seg.words or []):
+            try:
+                ws, we = float(w.start), float(w.end)
+            except (TypeError, ValueError):
+                continue
+            if w.text and w.text.strip():
+                words.append((ws, we, w.text))
+        if progress_cb and total > 0:
+            progress_cb(min(0.9, float(seg.end) / total))
+    if progress_cb:
+        progress_cb(0.9)
+
+    texts: list[str] = []
+    n = len(clips)
+    for i, (cs, ce) in enumerate(clips):
+        if cancelled_cb and cancelled_cb():
+            raise TaskCancelled()
+        parts: list[str] = []
+        for ws, we, t in words:
+            mid = (ws + we) / 2.0
+            if cs <= mid < ce:
+                parts.append(t)
+        texts.append(_normalize_jp_text("".join(parts)))
+        if progress_cb and n:
+            progress_cb(min(1.0, 0.9 + 0.1 * (i + 1) / n))
+    return texts

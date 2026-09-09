@@ -16,7 +16,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from app.tasks import TaskManager
+from app.tasks import TaskCancelled, TaskManager
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -146,6 +146,8 @@ def download(
     done = 0
     with open(dest, "wb") as f:
         while True:
+            if tasks and task_id and tasks.cancelled(task_id):
+                raise TaskCancelled()
             data = resp.read(chunk)
             if not data:
                 break

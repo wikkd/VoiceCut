@@ -12,6 +12,7 @@ import threading
 import webbrowser
 
 from app.config import AppConfig
+from app.log import setup_logging
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     cfg = AppConfig()
+    setup_logging(cfg.workdir)
     print(f"[VoiceCut] 工作目录: {cfg.workdir}")
     print(f"[VoiceCut] ffmpeg   : {cfg.ffmpeg_path}")
 
