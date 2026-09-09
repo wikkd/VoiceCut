@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import noisereduce as nr
+import numpy as np
 import soundfile as sf
 
 from app.audio_ops import read_wav
@@ -29,7 +29,6 @@ def denoise_wav(
         # 重采样到目标采样率再处理（noisereduce 对任意 sr 均可用，这里统一工作采样率）
         import scipy.signal
 
-        n = int(round(len(data) * sample_rate / sr))
         data = scipy.signal.resample_poly(data, sample_rate, sr).astype(np.float32)
         sr = sample_rate
 

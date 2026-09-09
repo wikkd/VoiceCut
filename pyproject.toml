@@ -1,0 +1,35 @@
+[project]
+name = "voicecut"
+version = "0.1.0"
+description = "VoiceCut — GPT-SoVITS 训练集制作工具"
+requires-python = ">=3.12"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["."]
+exclude = [
+    ".git",
+    ".venv",
+    "workdir",
+    "GPT-SoVITS",   # 上游第三方源码，不做 lint/format
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+# 经典高价值规则：pycodestyle 错误 / pyflakes / isort
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # 行长交给 formatter，避免与既有中文注释风格冲突
+    "E702",  # 测试/脚本里刻意的一行多语句风格
+]
+
+[tool.ruff.lint.per-file-ignores]
+# test_core_imports 刻意 import 以验证各依赖可导入
+"tests/test_env.py" = ["F401"]
+
+[tool.pytest.ini_options]
+markers = [
+    "env: 环境/GPU/机器相关测试（CI 跳过）",
+]
+testpaths = ["tests"]

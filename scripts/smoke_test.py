@@ -82,8 +82,7 @@ def check_cuda(tmp: Path) -> None:
 
 def check_ffmpeg_pipeline(tmp: Path) -> None:
     from app.audio_ops import audio_metrics, compute_peaks
-    from app.ffmpeg_util import (extract_audio, export_segment, media_duration,
-                                 probe, trim_silence)
+    from app.ffmpeg_util import export_segment, extract_audio, media_duration, probe, trim_silence
 
     ff = find_ffmpeg()
     print(f"  ffmpeg={ff}")
@@ -153,8 +152,6 @@ def check_denoise(tmp: Path) -> None:
 
 def check_demucs(tmp: Path) -> None:
     import subprocess as sp
-    import numpy as np
-    import soundfile as sf
 
     from app.separate import run_separation
 

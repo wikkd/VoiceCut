@@ -5,8 +5,8 @@ import json
 import subprocess
 import tempfile
 import time
-import urllib.request
 import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 

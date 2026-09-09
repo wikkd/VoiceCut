@@ -11,16 +11,17 @@ def _ver(pkg: str) -> str:
     return md.version(pkg)
 
 
+@pytest.mark.env
 def test_core_imports() -> None:
+    import faster_whisper
     import flask
+    import noisereduce
     import numpy
     import scipy
     import soundfile
-    import noisereduce
-    import yt_dlp
-    import faster_whisper
     import torch
     import torchaudio
+    import yt_dlp
 
     assert float(_ver("flask").split(".")[0]) >= 3
     assert noisereduce is not None
@@ -31,6 +32,7 @@ def test_core_imports() -> None:
     assert _ver("demucs") >= "4"
 
 
+@pytest.mark.env
 def test_ffmpeg_found() -> None:
     from app.config import find_ffmpeg
 
@@ -40,6 +42,7 @@ def test_ffmpeg_found() -> None:
     # 注意: 本机 D:\ffmpeg 无 ffprobe，probe() 走 ffmpeg stderr 回退（test_ffmpeg_util 覆盖）
 
 
+@pytest.mark.env
 def test_torch_cuda_blackwell() -> None:
     """GPU 校验：RTX 5060 Ti (Blackwell sm_120) 应可用。"""
     import torch

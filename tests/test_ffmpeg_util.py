@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from app.ffmpeg_util import (
-    extract_audio,
     export_segment,
+    extract_audio,
     media_duration,
     probe,
     remux_preview,
