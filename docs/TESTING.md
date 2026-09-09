@@ -176,3 +176,17 @@
 - 找一个「两人在同一句里接话/叠话」的片段 → 重新「识别说话人」→ 该字幕应被拆成两个 speaker_segments（时间轴换人点），片段标「混合」且未分配角色；两个角色不会并入一个。
 - 混合片段：手动拆分/重定向到正确角色后，角色池计数与片段颜色即时同步。
 - 跨素材：同一角色在不同素材各自识别后仍能自动归并（干净代表声纹）；不同角色不会因混音而误并。
+
+
+## 9. 训练交付页 + GPT-SoVITS 合并（junction）
+
+**合并**：`VoiceCut\GPT-SoVITS` = junction → `D:\projects\ai-agent-test\GPT-SoVITS`（零拷贝，D 盘即数据本体）；D 盘仓库 `.git` 改名 `.git.bak`；VoiceCut `.gitignore` 排除重目录（.venv/runtime/logs/GPT_weights*/SoVITS_weights*/output/TEMP/separated_*/pretrained_models/Docker/.github/.git.bak/媒体文件），仓库只跟踪 237 个代码文件。
+
+**页面化**：底部页面切换器「素材库 / 剪辑 / 训练交付」；素材库页全屏素材管理；训练交付页 = 角色面板 + 管线步骤卡 + 配置 + 试听 + 队列。
+
+**自动化**：pytest 91/91（新增 `test_gptsovits.py` 8 例：sanitize/lang_map、settings 往返、unique_exp 去重、预处理 env、S1/S2 配置模板替换、权重发现、val 留出、训练 API）；smoke 6/6；browser_test 全绿（新增 TRAIN 断言：3 页按钮、训练页元素、素材库页列表、切回剪辑页）。
+
+**待人工回归（真实素材）**
+- 角色有片段后跑「一键全链」（先 1 epoch 验证）→ 核对 `logs/<exp>/` 产物 + 权重落 `GPT_weights_v2/SoVITS_weights_v2` → 试听合成一段。
+- 训练中 GPU 串行：识别/分离任务排队；推理试听与训练互斥（先停 API）。
+- 重新训练同一角色复用同一 exp（不新建目录）。

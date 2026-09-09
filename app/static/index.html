@@ -87,6 +87,7 @@
     <label class="chip" title="当前项目">项目 <select id="project-select"></select></label>
   </div>
 
+  <div id="page-edit" class="vc-page">
   <!-- ③ 工作区：3×3 网格 / 分隔条 / 面板换位 / 布局记忆 -->
   <div id="workspace">
     <aside id="media-panel" class="panel" data-panel="media">
@@ -219,6 +220,63 @@
       <button id="btn-export-selection" class="btn primary">导出选区 <kbd>E</kbd></button>
     </div>
   </div>
+
+  </div>
+
+  <!-- 页面切换（DaVinci 式：素材库 / 剪辑 / 训练交付） -->
+  <nav id="pagebar">
+    <button class="page-btn" data-page="media">🗂 素材库</button>
+    <button class="page-btn active" data-page="edit">✂ 剪辑</button>
+    <button class="page-btn" data-page="train">🚀 训练交付</button>
+  </nav>
+
+  <!-- 素材库页 -->
+  <section id="page-media" class="vc-page hidden">
+    <div class="page-head">
+      <span class="page-title">🗂 素材库</span>
+      <button id="btn-import2" class="btn primary">📂 导入文件</button>
+      <button id="btn-url2" class="btn">🔗 从 URL 导入</button>
+      <button id="btn-pool2" class="btn">🎭 角色池</button>
+      <span class="spacer"></span>
+      <label class="chip">项目 <select id="project-select2"></select></label>
+    </div>
+    <div id="media-page-body">
+      <ul id="media-page-list"></ul>
+      <div id="media-page-empty" class="muted">拖拽文件到窗口，或点「导入文件」</div>
+    </div>
+  </section>
+
+  <!-- 训练交付页（DaVinci Deliver 风格） -->
+  <section id="page-train" class="vc-page hidden">
+    <div class="page-head">
+      <span class="page-title">🚀 训练交付 · GPT-SoVITS</span>
+      <span id="train-gpu-state" class="chip">尚未加载</span>
+      <span class="spacer"></span>
+      <button id="btn-train-refresh" class="btn">↻ 刷新</button>
+    </div>
+    <div id="train-grid">
+      <aside id="train-roles">
+        <div class="train-col-title">角色 / 数据集</div>
+        <div id="train-role-list"><div class="muted pad">加载中…</div></div>
+      </aside>
+      <main id="train-pipeline">
+        <div class="train-col-title" id="train-pipeline-title">— 选择左侧角色 —</div>
+        <div id="train-steps"></div>
+        <div id="train-dataset-info"></div>
+        <pre id="train-log" class="train-log muted">（选择角色后显示管线日志）</pre>
+      </main>
+      <aside id="train-inspector">
+        <div class="train-col-title">配置</div>
+        <div id="train-config-form"></div>
+        <div class="train-col-title">推理试听</div>
+        <div id="train-infer-panel"></div>
+      </aside>
+    </div>
+    <div id="train-queue">
+      <span class="queue-title">训练队列</span>
+      <div id="train-queue-items" class="muted">暂无排队任务</div>
+    </div>
+  </section>
 
   <!-- ⑤ 状态栏（任务进度） -->
   <footer id="statusbar">

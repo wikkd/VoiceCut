@@ -374,3 +374,122 @@ tr.seg-row.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .seg-src { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; }
 .ps-src { color: var(--muted); font-size: 10px; white-space: nowrap; max-width: 46px; overflow: hidden; text-overflow: ellipsis; }
 
+
+
+/* ── 页面化工作流（DaVinci 式页面切换） ── */
+.vc-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.vc-page.hidden { display: none !important; }
+#page-edit { }
+#page-edit #workspace { flex: 1; }
+
+/* 底部页面切换器 */
+#pagebar {
+  flex-shrink: 0; display: flex; align-items: center; gap: 4px;
+  padding: 4px 12px; background: var(--panel-2);
+  border-top: 1px solid var(--border);
+}
+.page-btn {
+  border: none; background: transparent; padding: 6px 14px; border-radius: 8px;
+  color: var(--muted); font-weight: 600; cursor: pointer;
+}
+.page-btn:hover { background: var(--panel-3); color: var(--text); }
+.page-btn.active { background: var(--accent); color: #101018; }
+
+/* 素材库页 */
+.page-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--border);
+}
+.page-title { font-size: 14px; font-weight: 700; margin-right: 4px; }
+#media-page-body { flex: 1; min-height: 0; overflow: auto; padding: 14px; }
+#media-page-list {
+  list-style: none; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px;
+}
+#media-page-list li {
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px;
+  cursor: pointer; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px;
+}
+#media-page-list li:hover { border-color: var(--accent); }
+#media-page-list li.active { border-color: var(--accent); background: var(--accent-dim); }
+#media-page-list .m-name { font-weight: 600; word-break: break-all; }
+#media-page-list .m-meta { font-size: 12px; color: var(--muted); display: flex; gap: 8px; align-items: center; }
+#media-page-list .m-badge {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--panel-3);
+  border: 1px solid var(--border); color: var(--muted);
+}
+#media-page-empty { margin-top: 24px; text-align: center; }
+
+/* 训练交付页 */
+#page-train { }
+#train-grid {
+  flex: 1; min-height: 0; display: grid; gap: 0;
+  grid-template-columns: 260px 1fr 300px;
+  grid-template-areas: "roles pipeline inspector";
+}
+#train-roles     { grid-area: roles; border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+#train-pipeline  { grid-area: pipeline; display: flex; flex-direction: column; min-height: 0; }
+#train-inspector { grid-area: inspector; border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.train-col-title {
+  padding: 7px 12px; font-size: 12px; font-weight: 700; color: var(--muted);
+  background: var(--panel-2); border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+#train-role-list { flex: 1; min-height: 0; overflow: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.train-role-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; cursor: pointer;
+  background: var(--panel-2); display: flex; flex-direction: column; gap: 6px;
+}
+.train-role-card:hover { border-color: var(--accent); }
+.train-role-card.active { border-color: var(--accent); background: var(--accent-dim); }
+.train-role-name { font-weight: 700; display: flex; align-items: center; gap: 8px; }
+.train-role-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.train-role-meta { font-size: 11px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; }
+.train-role-meta .tag { font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--panel-3); border: 1px solid var(--border); }
+.train-role-meta .tag.ok { color: var(--ok); border-color: var(--ok); }
+.train-role-meta .tag.warn { color: var(--warn); border-color: var(--warn); }
+.train-role-meta .tag.run { color: var(--accent); border-color: var(--accent); }
+.pad { padding: 10px 12px; }
+
+/* 管线步骤卡 */
+#train-steps { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.step-card {
+  border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  background: var(--panel-2); display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+.step-card .st-name { font-weight: 600; min-width: 150px; }
+.step-card .st-state { font-size: 11px; color: var(--muted); flex: 1; }
+.step-card .st-state.ok { color: var(--ok); }
+.step-card .st-state.run { color: var(--accent); }
+.step-card .st-actions { display: flex; gap: 6px; }
+.step-card button { padding: 3px 10px; font-size: 12px; }
+#train-dataset-info { padding: 4px 14px 8px; font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 10px; }
+#train-dataset-info b { color: var(--text); }
+.train-log {
+  flex: 1; min-height: 0; overflow: auto; margin: 0 12px 10px;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: #0b0e14; color: #c8d0dc; font-family: Consolas, monospace; font-size: 12px;
+  white-space: pre-wrap; word-break: break-all;
+}
+.train-log:empty::before { content: "（无日志）"; color: var(--muted); }
+
+/* 配置 / 试听 */
+#train-config-form, #train-infer-panel { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+#train-config-form label, #train-infer-panel label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+#train-config-form input, #train-config-form select,
+#train-infer-panel textarea, #train-infer-panel input, #train-infer-panel select { width: 100%; }
+#train-infer-panel textarea { min-height: 64px; resize: vertical; font-family: inherit; }
+.train-infer-audio { width: 100%; }
+.infer-ref { font-size: 11px; color: var(--muted); word-break: break-all; }
+
+/* 训练队列 */
+#train-queue {
+  flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; background: var(--panel-2); border-top: 1px solid var(--border);
+}
+#train-queue .queue-title { font-weight: 700; font-size: 12px; color: var(--muted); }
+#train-queue-items { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.queue-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--panel);
+}
+.queue-chip .qc-dot { width: 8px; height: 8px; border-radius: 50%; }

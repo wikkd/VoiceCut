@@ -308,6 +308,35 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const _uiItem = _itemsList.find(x => x.name === 'ui_import');
     if (_uiItem) await fetch(`http://127.0.0.1:8765/api/items/${_uiItem.id}`, { method: "DELETE" });
 
+
+    // DaVinci 式页面切换：素材库 / 剪辑 / 训练交付
+    const rT = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const pageBtns = document.querySelectorAll('#pagebar .page-btn').length;
+      vc.setPage('train');
+      await new Promise(r => setTimeout(r, 900));
+      const trainVisible = !document.querySelector('#page-train').classList.contains('hidden');
+      const trainEls = !!document.querySelector('#train-role-list') && !!document.querySelector('#train-steps')
+        && !!document.querySelector('#train-config-form') && !!document.querySelector('#train-infer-panel')
+        && !!document.querySelector('#train-queue');
+      const gpuState = document.querySelector('#train-gpu-state');
+      const gpuTxt = gpuState ? gpuState.textContent : null;
+      vc.setPage('media');
+      await new Promise(r => setTimeout(r, 200));
+      const mediaVisible = !document.querySelector('#page-media').classList.contains('hidden');
+      const mediaList = !!document.querySelector('#media-page-list');
+      const mediaItems = document.querySelectorAll('#media-page-list li').length;
+      vc.setPage('edit');
+      const editVisible = !document.querySelector('#page-edit').classList.contains('hidden');
+      const hasApi = typeof vc.loadTraining === 'function' && typeof vc.startTrain === 'function'
+        && typeof vc.setPage === 'function';
+      return { ok: true, pageBtns, trainVisible, trainEls, gpuTxt, mediaVisible, mediaList,
+               mediaItems, editVisible, hasApi };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("TRAIN:", JSON.stringify(rT.result && rT.result.result && rT.result.result.value));
+
+    // 恢复默认页面（剪辑），避免影响后续测试
+    await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();
   } finally { child.kill(); }
 })();

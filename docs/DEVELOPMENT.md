@@ -31,6 +31,7 @@ VoiceCut/
 │   ├── separate.py           # demucs CLI 封装 (two-stems=vocals + 进度解析)
 │   ├── transcribe.py         # faster-whisper 封装 (日语, 批量转写, 模型缓存)
 │   ├── dataset.py            # GPT-SoVITS 数据集导出 (001.wav+001.txt+list.txt)
+│   ├── gptsovits.py          # GPT-SoVITS 训练管线驱动 (导出/预处理/训练/试听)
 │   ├── bilibili.py           # yt-dlp 解析 + 直链代理 (方案A)
 │   ├── server.py             # Flask 路由 (create_app 工厂)
 │   └── static/               # 前端 (index.html / css / js / vendor)
@@ -53,7 +54,12 @@ denoise.py    ──►     audio_ops (读 wav)
 separate.py   ──►     tasks (进度上报)
 transcribe.py ──►     tasks (进度上报)
 dataset.py    ──►     ffmpeg_util + audio_ops (切分/去静音/校验)
+gptsovits.py  ──►     dataset (导出) + subprocess 驱动 GPT-SoVITS 脚本/服务
 bilibili.py   ──►     (yt-dlp / 网络代理)
+
+- GPT-SoVITS 经 junction 并进仓库：`GPT-SoVITS/ → D:\projects\ai-agent-test\GPT-SoVITS`
+  （文件物理存 D 盘，D 盘即数据本体；VoiceCut 只读代码 + 写 logs/权重）
+- 训练管线只以子进程驱动 GPT-SoVITS 脚本（不改其源码）；训练/预处理走 GPU 串行池
 ```
 
 - 处理模块均接收 **WAV 路径**作为输入，产出新 WAV / 新素材条目

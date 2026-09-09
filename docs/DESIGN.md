@@ -151,3 +151,13 @@ B站链接打开                ──req───►   yt-dlp 解析 + Range �
 - 歌曲/广播剧分离后人声轨可能残留 BGM 残响 → 靠人工挑选 BGM 轻的片段
 - faster-whisper 首次使用需下载模型（medium ≈1.5GB，large-v3 ≈3GB）
 - demucs 首次分离需下载 htdemucs 模型（≈300MB）
+
+
+## 4d. 训练交付页（DaVinci Deliver 风格，GPT-SoVITS 管线）
+
+- **页面化工作流**：底部页面切换器「素材库 / 剪辑 / 训练交付」（localStorage 记忆）；剪辑页保留 3×3 自由工作区。
+- **素材库页**：全屏素材列表 + 项目切换 + 导入（本地/URL/B站）+ 角色池入口 + 素材右键（复用剪辑页素材逻辑）。
+- **训练交付页布局**：左=角色/数据集面板；中=管线步骤卡（①导出 ②预处理 ③S2 ④S1 ⑤一键全链 + 实时日志）；右=配置面板 + 推理试听；底部=训练队列横条。
+- **管线（每角色一模型，串行）**：按角色收集项目内片段 → `export_dataset`（32k 单声道/去静音/响度标准化）写 `logs/<exp>/` + `list.txt` → 复刻 webui `open1abc` 预处理（`1-get-text → 2-get-hubert-wav32k → 3-get-semantic`）→ 以 `TEMP/tmp_s1.yaml + tmp_s2.json` 为模板替换后写回 → `s2_train_single.py` → `s1_train_single.py`。
+- **试听**：生成 per-role `tts_infer.yaml`（custom 段指向训练权重）→ 懒启动 `api_v2.py`（默认 9880）→ `POST /tts`（参考片段取该角色导出 wav + 对应文本）→ 浏览器播放；训练前自动停 API 释放显存。
+- **配置持久化**：`workdir/settings.json`（GPT-SoVITS 根/解释器/exp_root/端口/版本/默认语言/轮数/验证集比例），`/api/training/config` 读写。

@@ -24,3 +24,22 @@ logs/
 # ── 系统 ────────────────────────────────────────────────
 Thumbs.db
 .DS_Store
+# ── GPT-SoVITS（junction → D:\projects\ai-agent-test\GPT-SoVITS，只跟踪代码）────
+GPT-SoVITS/.venv/
+GPT-SoVITS/runtime/
+GPT-SoVITS/logs/
+GPT-SoVITS/GPT_weights*/
+GPT-SoVITS/SoVITS_weights*/
+GPT-SoVITS/output/
+GPT-SoVITS/TEMP/
+GPT-SoVITS/separated_*/
+GPT-SoVITS/GPT_SoVITS/pretrained_models/
+GPT-SoVITS/Docker/
+GPT-SoVITS/.git.bak/
+GPT-SoVITS/.github/
+GPT-SoVITS/**/__pycache__/
+GPT-SoVITS/**/*.log
+GPT-SoVITS/**/*.wav
+GPT-SoVITS/**/*.mp3
+GPT-SoVITS/*.wav
+GPT-SoVITS/*.mp3
