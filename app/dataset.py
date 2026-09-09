@@ -1,12 +1,14 @@
-"""GPT-SoVITS 训练集导出。
+"""GPT-SoVITS training-set exporter.
 
-目录结构:
-    dataset/
-    ├── 001.wav / 001.txt / 002.wav / 002.txt ...
-    └── list.txt        # 每行: 绝对路径|speaker|JP|text
+Directory layouts:
+    flat (default):
+        dataset/001.wav / 001.txt / ... + list.txt
+    per_speaker:
+        dataset/<speaker>/train/001.wav ...  +  dataset/<speaker>/val/001.wav ...
+        each <speaker>/ gets list.txt (train+val) and val_list.txt (if any)
 
-规范: 32kHz 单声道 WAV，片段 1~15s（主力 2~8s），
-自动去头尾静音 + 响度标准化；空文本 / 过短片段跳过并在返回中标注。
+Spec: 32kHz mono WAV, clips 1~15s (ideal 2~8s), auto trim head/tail silence
++ RMS loudness normalization; empty / too-short clips are skipped and reported.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from app.tasks import TaskCancelled
 
 @dataclass
 class DatasetSegment:
-    """一个训练片段（用户在片段列表里维护的条目）。"""
+    """One training clip (a row the user maintains in the segment list)."""
 
     start: float
     end: float
@@ -29,9 +31,18 @@ class DatasetSegment:
     item_id: str = ""
     language: str = "JP"
     speaker: str = "speaker"
-    note: str = ""                      # 主观标记: clean / bgm / reverb
-    ok: bool | None = None              # 校验结果（导出时填充）
+    note: str = ""                      # subjective tag: clean / bgm / reverb
+    ok: bool | None = None              # validation result (filled on export)
     issues: list[str] = field(default_factory=list)
+
+
+def _safe_dir(name: str) -> str:
+    """Filesystem-safe folder name from a speaker name."""
+    out = []
+    for ch in name or "":
+        out.append("_" if (ch in '/\\:*?"<>|\x00' or ch.isspace()) else ch)
+    s = "".join(out).strip("._ ") or "speaker"
+    return s[:64]
 
 
 def export_dataset(
@@ -45,16 +56,25 @@ def export_dataset(
     trim: bool = True,
     normalize: bool = True,
     min_dur: float = 0.8,
+    layout: str = "flat",
+    val_ratio: float = 0.0,
     tasks=None,
     task_id: str | None = None,
 ) -> dict:
-    """把片段列表导出为 GPT-SoVITS 标准目录。
+    """Export segment lists to a GPT-SoVITS standard directory.
 
-    返回 {out_dir, count, skipped, files, list_file}。
-    skipped 元素: {"index"(源序号), "reason", "seg": {start,end,text}}。
+    - layout="flat" (default): out_dir/001.wav ... + list.txt (legacy).
+    - layout="per_speaker": out_dir/<speaker>/train|val/001.wav ... with a
+      list.txt (+ val_list.txt) per speaker; val clips are picked
+      deterministically (every N-th clip per speaker, N=round(1/val_ratio)).
+    Unassigned clips (empty speaker) fall back to ``speaker``.
+
+    Returns {out_dir, count, skipped, files, list_file, layout, speakers}.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    per_speaker = layout == "per_speaker"
+    val_n = max(1, int(round(1.0 / val_ratio))) if (val_ratio and val_ratio > 0) else 0
 
     if isinstance(sources, dict):
         def _src(seg: DatasetSegment) -> Path:
@@ -70,70 +90,124 @@ def export_dataset(
         def _src(seg: DatasetSegment) -> Path:
             return single
 
-    written: list[dict] = []
-    skipped: list[dict] = []
-    num = 0
-    total = len(segments)
-
+    # Group by speaker name (order of first appearance).
+    groups: dict[str, list[DatasetSegment]] = {}
+    order: list[str] = []
     for seg in segments:
-        if tasks and task_id and tasks.cancelled(task_id):
-            raise TaskCancelled()
-        if tasks and task_id:
-            tasks.update(task_id, progress=num / total if total else 1.0,
-                         message=f"dataset export {num}/{total}")
-        text = seg.text.strip()
-        if not text:
-            skipped.append({"reason": "空文本", "seg": seg})
-            continue
-        if seg.end - seg.start < min_dur:
-            skipped.append({"reason": f"片段过短(<{min_dur:.1f}s)", "seg": seg})
-            continue
+        key = (seg.speaker or speaker) or speaker
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(seg)
 
-        num += 1
-        wav_path = out_dir / f"{num:03d}.wav"
-        txt_path = out_dir / f"{num:03d}.txt"
+    skipped: list[dict] = []
+    written: list[dict] = []
+    speaker_summaries: list[dict] = []
+    total = len(segments)
+    done = 0
+    counters: dict[str, int] = {}
 
-        # 1) 切片段 → 2) 去头尾静音 → 3) 响度标准化 → 4) 落盘正式文件
-        tmp_trim = out_dir / f".tmp_cut_{num:03d}.wav"
-        if trim:
-            export_segment_trimmed(_src(seg), tmp_trim, seg.start, seg.end,
-                                   sample_rate=sample_rate)
+    for key in order:
+        grp = groups[key]
+        if per_speaker:
+            gdir = out_dir / _safe_dir(key)
+            train_dir = gdir / "train"
+            val_dir = gdir / "val"
         else:
-            export_segment(_src(seg), tmp_trim, seg.start, seg.end, sample_rate=sample_rate)
+            gdir = out_dir
+            train_dir = out_dir
+            val_dir = None
 
-        final = tmp_trim
-        if normalize:
-            tmp_norm = out_dir / f".tmp_norm_{num:03d}.wav"
-            normalize_loudness(tmp_trim, tmp_norm, target_db=-16.0)
-            final = tmp_norm
+        grp_written: list[dict] = []
+        for gi, seg in enumerate(grp):
+            done += 1
+            if tasks and task_id and tasks.cancelled(task_id):
+                raise TaskCancelled()
+            if tasks and task_id:
+                tasks.update(task_id, progress=done / total if total else 1.0,
+                             message=f"dataset export {done}/{total}")
+            text = seg.text.strip()
+            if not text:
+                skipped.append({"reason": "\u7a7a\u6587\u672c", "seg": seg})
+                continue
+            if seg.end - seg.start < min_dur:
+                skipped.append({"reason": f"\u7247\u6bb5\u8fc7\u77ed(<{min_dur:.1f}s)", "seg": seg})
+                continue
 
-        check = validate_dataset_clip(final, min_dur=1.0, max_dur=15.0)
-        seg.ok = check["ok"]
-        seg.issues = check["issues"]
+            is_val = bool(val_dir) and bool(val_n) and ((gi + 1) % val_n == 0)
+            target_dir = val_dir if is_val else train_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            cnt = counters.get(str(target_dir), 0) + 1
+            counters[str(target_dir)] = cnt
+            wav_path = target_dir / f"{cnt:03d}.wav"
+            txt_path = target_dir / f"{cnt:03d}.txt"
 
-        shutil.move(str(final), str(wav_path))
-        txt_path.write_text(text + "\n", encoding="utf-8")
-        for tmp in out_dir.glob(f".tmp_*_{num:03d}.wav"):
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+            tmp_trim = target_dir / f".tmp_cut_{cnt:03d}.wav"
+            if trim:
+                export_segment_trimmed(_src(seg), tmp_trim, seg.start, seg.end,
+                                       sample_rate=sample_rate)
+            else:
+                export_segment(_src(seg), tmp_trim, seg.start, seg.end, sample_rate=sample_rate)
 
-        written.append({
-            "index": num, "wav": wav_path.name, "txt": txt_path.name,
-            "start": round(seg.start, 3), "end": round(seg.end, 3),
-            "duration": check["duration"], "ok": seg.ok, "issues": seg.issues,
-            "text": text, "language": seg.language or language,
-            "speaker": seg.speaker or speaker,
-        })
+            final = tmp_trim
+            if normalize:
+                tmp_norm = target_dir / f".tmp_norm_{cnt:03d}.wav"
+                normalize_loudness(tmp_trim, tmp_norm, target_db=-16.0)
+                final = tmp_norm
 
-    # list.txt: 绝对路径|speaker|language|text （只含已写出的片段，顺序与编号一致）
+            check = validate_dataset_clip(final, min_dur=1.0, max_dur=15.0)
+            seg.ok = check["ok"]
+            seg.issues = check["issues"]
+
+            shutil.move(str(final), str(wav_path))
+            txt_path.write_text(text + "\n", encoding="utf-8")
+            for tmp in target_dir.glob(f".tmp_*_{cnt:03d}.wav"):
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
+
+            grp_written.append({
+                "index": cnt, "wav": wav_path.name, "txt": txt_path.name,
+                "rel": wav_path.relative_to(out_dir).as_posix(),
+                "path": wav_path, "sub": "val" if is_val else "train",
+                "start": round(seg.start, 3), "end": round(seg.end, 3),
+                "duration": check["duration"], "ok": seg.ok, "issues": seg.issues,
+                "text": text, "language": seg.language or language,
+                "speaker": key,
+            })
+
+        if not grp_written:
+            continue
+        written.extend(grp_written)
+
+        def _line(w: dict) -> str:
+            return f"{w['path'].as_posix()}|{w['speaker']}|{w['language']}|{w['text'].replace('|', ' ')}"
+
+        if per_speaker:
+            list_file = gdir / "list.txt"
+            list_file.write_text("\n".join(_line(w) for w in grp_written) + "\n", encoding="utf-8")
+            val_entries = [w for w in grp_written if w["sub"] == "val"]
+            val_list_file = None
+            if val_entries:
+                val_list_file = gdir / "val_list.txt"
+                val_list_file.write_text("\n".join(_line(w) for w in val_entries) + "\n", encoding="utf-8")
+            speaker_summaries.append({
+                "name": key, "path": str(gdir),
+                "train": sum(1 for w in grp_written if w["sub"] == "train"),
+                "val": len(val_entries),
+                "list_file": str(list_file),
+                "val_list_file": str(val_list_file) if val_list_file else None,
+            })
+        else:
+            speaker_summaries.append({"name": key, "path": str(out_dir),
+                                      "train": len(grp_written), "val": 0,
+                                      "list_file": str(out_dir / "list.txt"),
+                                      "val_list_file": None})
+
     list_file = out_dir / "list.txt"
-    lines = [
-        f"{(out_dir / w['wav']).as_posix()}|{w['speaker']}|{w['language']}|{w['text'].replace('|', ' ')}"
-        for w in written
-    ]
-    list_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    list_lines = [_line(w) for w in written]
+    list_file.write_text("\n".join(list_lines) + ("\n" if list_lines else ""), encoding="utf-8")
 
     return {
         "out_dir": str(out_dir),
@@ -141,7 +215,9 @@ def export_dataset(
         "skipped": [{"reason": s["reason"], "seg": {"start": s["seg"].start, "end": s["seg"].end,
                                                      "text": (s["seg"].text or "").strip()}}
                     for s in skipped],
-        "files": [w["wav"] for w in written],
+        "files": [w["rel"] for w in written],
         "list_file": str(list_file),
-        "list_content": "".join(lines),
+        "list_content": "".join(list_lines),
+        "layout": layout,
+        "speakers": speaker_summaries,
     }

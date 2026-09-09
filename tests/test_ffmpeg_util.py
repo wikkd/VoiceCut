@@ -78,3 +78,21 @@ def test_remux_preview(sample_video: Path, tmp_path: Path) -> None:
     info = probe(out)
     codecs = {s.get("codec_name") for s in info["streams"]}
     assert "h264" in codecs or "hevc" in codecs
+
+
+def test_detect_silence_parses_stderr(monkeypatch, tmp_path) -> None:
+    from app import ffmpeg_util as fu
+
+    class _Proc:
+        stderr = (
+            "[silencedetect @ 0x1] silence_start: 1.5\n"
+            "[silencedetect @ 0x1] silence_end: 2.5 | silence_duration: 1\n"
+            "[silencedetect @ 0x1] silence_start: 8.0\n"
+        )
+
+    def fake_run(args, **kw):
+        return _Proc()
+
+    monkeypatch.setattr(fu, "run_ffmpeg", fake_run)
+    out = fu.detect_silence(tmp_path / "x.wav", threshold_db=-40.0, min_silence=0.4)
+    assert out == [(1.5, 2.5), (8.0, float("inf"))]

@@ -73,3 +73,55 @@ def test_export_dataset_multi_source_missing_item(tmp_path: Path) -> None:
     segs2 = [DatasetSegment(start=0.2, end=1.5, text="hello")]
     with _pytest.raises(ValueError):
         export_dataset({}, segs2, tmp_path / "dsy")
+
+
+def test_export_dataset_per_speaker_layout(sample_wav, tmp_path) -> None:
+    from app.dataset import DatasetSegment, export_dataset
+
+    segs = [
+        DatasetSegment(start=0.2, end=1.5, text="one", language="JP", speaker="s1"),
+        DatasetSegment(start=1.6, end=2.6, text="two", language="JP", speaker="s1"),
+        DatasetSegment(start=0.2, end=1.5, text="three", language="JP", speaker="s2"),
+        DatasetSegment(start=0.3, end=0.5, text="", language="JP", speaker="s2"),
+    ]
+    out = export_dataset(sample_wav, segs, tmp_path / "ds", layout="per_speaker", val_ratio=0.5)
+    assert out["count"] == 3
+    assert out["layout"] == "per_speaker"
+    assert len(out["speakers"]) == 2
+    # s1: 2 clips, N=round(1/0.5)=2 -> gi=1 is val -> train 1, val 1
+    s1 = tmp_path / "ds" / "s1"
+    assert sorted(p.name for p in (s1 / "train").glob("*.wav")) == ["001.wav"]
+    assert sorted(p.name for p in (s1 / "val").glob("*.wav")) == ["001.wav"]
+    lines = (s1 / "list.txt").read_text(encoding="utf-8").strip().splitlines()
+    assert len(lines) == 2
+    assert all("|s1|JP|" in ln for ln in lines)
+    val_lines = (s1 / "val_list.txt").read_text(encoding="utf-8").strip().splitlines()
+    assert len(val_lines) == 1
+    # s2: 1 valid clip -> train only, no val dir
+    s2 = tmp_path / "ds" / "s2"
+    assert len([p for p in (s2 / "train").glob("*.wav")]) == 1
+    assert not (s2 / "val").exists()
+    # files are out_dir-relative
+    assert out["files"] == ["s1/train/001.wav", "s1/val/001.wav", "s2/train/001.wav"]
+
+
+def test_export_dataset_per_speaker_unassigned_default(sample_wav, tmp_path) -> None:
+    from app.dataset import DatasetSegment, export_dataset
+
+    segs = [DatasetSegment(start=0.2, end=1.5, text="hello", language="JP", speaker="")]
+    out = export_dataset(sample_wav, segs, tmp_path / "dsu", layout="per_speaker")
+    d = tmp_path / "dsu" / "speaker"
+    assert (d / "train" / "001.wav").exists()
+    lines = (d / "list.txt").read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].split("|")[1] == "speaker"
+    assert out["speakers"][0]["name"] == "speaker"
+
+
+def test_export_dataset_flat_unchanged(sample_wav, tmp_path) -> None:
+    from app.dataset import DatasetSegment, export_dataset
+
+    segs = [DatasetSegment(start=0.2, end=1.5, text="hello", language="JP", speaker="s1")]
+    out = export_dataset(sample_wav, segs, tmp_path / "dsf")
+    assert out["layout"] == "flat"
+    assert sorted(p.name for p in (tmp_path / "dsf").glob("*.wav")) == ["001.wav"]
+    assert out["files"] == ["001.wav"]

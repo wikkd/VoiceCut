@@ -65,6 +65,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       out.errs = errs;
       out.duration = vc.state.currentItem.duration;
       out.videoVisible = !document.querySelector('#video-panel').classList.contains('no-video') && !!document.querySelector('#video-preview').getAttribute('src');
+      // A2: play-selection sets auditioning so playback stops at the selection end
+      try { document.querySelector('#btn-play-selection').click(); out.auditioning = vc.state.auditioning; vc.state.auditioning = null; } catch (e) { out.auditioning = null; }
+      // A4: video mute is locked (volumechange cannot unmute)
+      try { const _vp = document.querySelector('#video-preview'); _vp.muted = false; _vp.dispatchEvent(new Event('volumechange')); out.mutedLocked = _vp.muted; } catch (e) { out.mutedLocked = null; }
       out.hasItems = vc.state.items.length;
       return out;
     })()`;
@@ -172,9 +176,48 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const projectName = vc.state.currentProject ? vc.state.currentProject.name : null;
       const srcCells = document.querySelectorAll('#seg-tbody .seg-src').length;
       const poolTitle = document.querySelector('#pool-item-name').textContent;
+      // A1: text input does NOT rebuild the table (focus preserved + row badge updates locally)
+      let a1 = null;
+      const segInput = document.querySelector('#seg-tbody .seg-text');
+      if (segInput) {
+        segInput.focus();
+        segInput.value = "";
+        segInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const focusKept = document.activeElement === segInput;
+        const tagEmpty = segInput.closest('tr').querySelector('.tag').textContent;
+        segInput.value = "test";
+        segInput.dispatchEvent(new Event('input', { bubbles: true }));
+        const tagOk = segInput.closest('tr').querySelector('.tag').textContent;
+        a1 = { focusKept, tagEmpty, tagOk };
+      }
+      // D1: per-speaker / val-ratio export fields
+      const hasPerSpeaker = !!document.querySelector('#ds-per-speaker');
+      const hasValRatio = !!document.querySelector('#ds-val-ratio');
+      // D2: autosplit modal + menu
+      const hasAutosplitModal = !!document.querySelector('#modal-autosplit');
+      const hasAutosplitMenu = !!document.querySelector("[data-act='autosplit']");
+      const hasAsStart = !!document.querySelector('#as-start');
+      // D3: undo restores a deleted segment; undo/redo API + menu exposed
+      const itId = vc.state.currentItem.id;
+      const segsArr = vc.state.segmentsByItem.get(itId) || [];
+      segsArr.push(vc.newSegment(6, 9, "undo-test"));
+      vc.pushUndo();
+      const nBefore = segsArr.length;
+      segsArr.pop();
+      vc.undo();
+      const nAfter = (vc.state.segmentsByItem.get(itId) || []).length;
+      const hasUndoApi = typeof vc.undo === 'function' && typeof vc.redo === 'function' && typeof vc.pushUndo === 'function';
+      const hasUndoMenu = !!document.querySelector("[data-act='undo']");
+      const _a = vc.state.segmentsByItem.get(itId) || [];
+      const _i = _a.findIndex(s => s.text === 'undo-test');
+      if (_i >= 0) { _a.splice(_i, 1); vc.state.dirtyItems.add(itId); }
+      await vc.saveProjectNow();
+      vc.renderSegments();
       return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
-               mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: segs.length,
-               hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle };
+               mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: (vc.state.segmentsByItem.get(itId) || []).length,
+               hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle,
+               a1, hasPerSpeaker, hasValRatio, hasAutosplitModal, hasAutosplitMenu, hasAsStart,
+               hasUndoApi, hasUndoMenu, undoRestored: nAfter === nBefore };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
 
@@ -239,6 +282,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       };
     })()`, returnByValue: true });
     console.log("RESET:", JSON.stringify(rS.result && rS.result.result && rS.result.result.value));
+
+    // A3: import through the UI auto-selects the new item (pollTasks refresh-then-doneCb)
+    const rA3 = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const secs = 2, sr = 16000, dataLen = secs * sr * 2;
+      const buf = new ArrayBuffer(44 + dataLen);
+      const dv = new DataView(buf);
+      const wr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+      wr(0, 'RIFF'); dv.setUint32(4, 36 + dataLen, true); wr(8, 'WAVE'); wr(12, 'fmt ');
+      dv.setUint32(16, 16, true); dv.setUint16(20, 1, true); dv.setUint16(22, 1, true);
+      dv.setUint32(24, sr, true); dv.setUint32(28, sr * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+      wr(36, 'data'); dv.setUint32(40, dataLen, true);
+      const blob = new Blob([buf], { type: 'audio/wav' });
+      vc.uploadFile(new File([blob], 'ui_import', { type: 'audio/wav' }));
+      for (let i = 0; i < 80; i++) {
+        await new Promise(r => setTimeout(r, 400));
+        if (vc.state.currentItem && vc.state.currentItem.name === 'ui_import') break;
+      }
+      const ok = !!(vc.state.currentItem && vc.state.currentItem.name === 'ui_import');
+      return { ok, name: vc.state.currentItem ? vc.state.currentItem.name : null };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("A3:", JSON.stringify(v(rA3)));
+    const _itemsList = await (await fetch("http://127.0.0.1:8765/api/items")).json();
+    const _uiItem = _itemsList.find(x => x.name === 'ui_import');
+    if (_uiItem) await fetch(`http://127.0.0.1:8765/api/items/${_uiItem.id}`, { method: "DELETE" });
 
     ws.close();
   } finally { child.kill(); }

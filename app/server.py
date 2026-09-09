@@ -14,6 +14,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from app import bilibili as bilibili_mod
 from app import db as db_mod
+from app import autosplit as autosplit_mod
 from app import dataset as dataset_mod
 from app import project as project_mod
 from app import speakers as speakers_mod
@@ -23,11 +24,14 @@ from app import subtitles as subtitles_mod
 from app import transcribe as transcribe_mod
 from app.audio_ops import compute_peaks
 from app.config import AppConfig
-from app.ffmpeg_util import export_segment, extract_audio, media_duration, remux_preview, trim_silence
+from app.ffmpeg_util import (
+    detect_silence, export_segment, extract_audio, media_duration,
+    remux_preview, trim_silence,
+)
 from app.log import get_logger
 from app.media_store import MediaItem, MediaStore
 from app.streaming import stream_file
-from app.tasks import TaskManager
+from app.tasks import TaskCancelled, TaskManager
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -564,7 +568,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 for s in clips
             ]
             out_dir = out_dir or str(cfg.workdir / "datasets" / f"{body['project_id']}_{int(time.time())}")
-            tid = tasks.submit(_dataset_worker, sources, ds_segs, Path(out_dir))
+            layout = body.get("layout") or "flat"
+            val_ratio = float(body.get("val_ratio") or 0.0)
+            tid = tasks.submit(_dataset_worker, sources, ds_segs, Path(out_dir), layout, val_ratio)
             return jsonify({"task_id": tid})
 
         item = store.require(body.get("item_id"))
@@ -584,10 +590,12 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         tid = tasks.submit(_dataset_worker, item.wav_path, ds_segs, Path(out_dir))
         return jsonify({"task_id": tid})
 
-    def _dataset_worker(sources, ds_segs: list, out_dir: Path) -> dict:
+    def _dataset_worker(sources, ds_segs: list, out_dir: Path,
+                         layout: str = "flat", val_ratio: float = 0.0) -> dict:
         tid = tasks.current_task_id()
         return dataset_mod.export_dataset(sources, ds_segs, out_dir,
-                                          tasks=tasks, task_id=tid)
+                                          tasks=tasks, task_id=tid,
+                                          layout=layout, val_ratio=val_ratio)
 
     # ── B 站 ─────────────────────────────────────────────────
 
@@ -704,6 +712,43 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
             proj["speaker_segments"] = body["speaker_segments"] or []
         project_mod.save_project(cfg.workdir, item_id, proj)
         return jsonify({"ok": True})
+
+    @app.post("/api/items/<item_id>/autosplit")
+    def api_autosplit(item_id: str) -> object:
+        store.require(item_id)
+        body = request.get_json(force=True) or {}
+        tid = tasks.submit(_autosplit_worker, cfg, store, item_id, body)
+        return jsonify({"task_id": tid})
+
+    def _autosplit_worker(cfg_: AppConfig, store_: MediaStore, item_id: str, body: dict) -> dict:
+        tid = tasks.current_task_id()
+        item = store_.require(item_id)
+        threshold_db = float(body.get("threshold_db") or -35.0)
+        min_silence = float(body.get("min_silence") or 0.5)
+        min_len = float(body.get("min_len") or 0.8)
+        max_len = float(body.get("max_len") or 15.0)
+        language = body.get("language") or "JP"
+        if tid and tasks.cancelled(tid):
+            raise TaskCancelled()
+        if tid:
+            tasks.update(tid, progress=0.1, message="detecting silence")
+        silences = detect_silence(item.wav_path, threshold_db=threshold_db, min_silence=min_silence)
+        duration = item.duration or media_duration(item.wav_path)
+        if tid:
+            tasks.update(tid, progress=0.5, message="splitting by silence")
+        clips = autosplit_mod.split_by_silence(duration, silences, min_len=min_len, max_len=max_len)
+        segs = [{
+            "id": project_mod.new_uid("seg"),
+            "start": round(s, 3), "end": round(e, 3),
+            "text": "", "language": language,
+            "speakerLabel": "", "characterId": None, "note": "",
+        } for s, e in clips]
+        proj = project_mod.load_project(cfg_.workdir, item_id)
+        proj["segments"] = segs
+        project_mod.save_project(cfg_.workdir, item_id, proj)
+        if tid:
+            tasks.update(tid, progress=1.0, message="done")
+        return {"count": len(segs), "clips": clips}
 
     @app.get("/api/items/<item_id>/speakers")
     def api_speakers_get(item_id: str) -> object:

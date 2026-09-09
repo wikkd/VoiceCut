@@ -132,3 +132,28 @@
 
 **单元/冒烟**
 - ✅ pytest 63/63；冒烟 6/6（demucs 34.3s、whisper 正常）。
+
+## 7. 交互修复 + 工作流增强验证记录（2026-09-09）
+
+**本轮改动**
+- A1 片段文本编辑不再整表重绘（`updateSegBadge` 局部刷新状态徽标），连续输入不失焦、不打断 IME
+- A2 「播放选区」单选区播完在终点停止（设置 auditioning）；开循环时循环优先、互不冲突
+- A3 导入完成后先 `refreshItems` 再执行 doneCb → 新素材自动选中；`selectResultItem` 增加兜底并入
+- A4 视频永静音：`volumechange` 强制 muted；音量键只调波形音频（视频为画面参考）
+- D1 训练集导出：`per_speaker` 布局（`out_dir/<角色>/train|val/*.wav+*.txt` + 每角色 list.txt / val_list.txt）+ 验证集比例（确定性每 N 取 1，N=round(1/ratio)）；未分配片段归默认说话人；flat 旧布局兼容
+- D2 自动切分（按静音）：`POST /api/items/<id>/autosplit`（ffmpeg silencedetect → `split_by_silence` → 替换该素材片段），数据集▸菜单入口 + 弹窗参数（阈值/最小静音/时长范围）+ 二次确认
+- D3 撤销/重做：快照栈（片段 + 角色池，上限 50，刷新即清空），Ctrl+Z / Ctrl+Shift+Z（兼容 Ctrl+Y），文件▸菜单入口
+
+**单元测试**
+- ✅ pytest 77/77（新增 `test_autosplit.py` 10 例、`test_dataset.py` per_speaker/val 3 例、`test_ffmpeg_util.py` detect_silence 1 例）
+
+**浏览器验证（scripts/browser_test.js）**
+- ✅ A1 输入后焦点保持、状态徽标局部更新（空文本→合规）；A2 playSelection 设置 auditioning；A4 volumechange 无法解除视频静音
+- ✅ D1 分目录/验证集字段存在；D2 自动切分弹窗/菜单/按钮存在；D3 undo/redo API 与菜单存在、删除片段后 Ctrl+Z 可恢复
+- ✅ A3 通过 UI 导入新素材后自动选中（含任务轮询 refresh→doneCb 顺序）
+
+**待人工回归（真实场景）**
+- 播放选区播完即停；循环 + 选区不冲突；视频打开后仍静音（画面参考）
+- 自动切分：调参 → 替换当前素材片段（二次确认）→ 片段表刷新；超长段等分、过短合并是否符合预期
+- 训练集导出：per_speaker 目录树（train/val + list.txt + val_list.txt）与 list.txt 内容核对
+- 撤销/重做：角色重命名/改色/删除/合并/重定向、片段增删改、字幕加片段、批量转写回填后的恢复

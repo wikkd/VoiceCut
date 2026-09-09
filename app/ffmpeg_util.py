@@ -245,3 +245,31 @@ def export_segment_trimmed(
         str(dst),
     ])
     return dst
+
+
+def detect_silence(
+    src: str | Path,
+    *,
+    threshold_db: float = -35.0,
+    min_silence: float = 0.5,
+) -> list[tuple[float, float]]:
+    """Detect silence intervals with ffmpeg's silencedetect filter.
+
+    Parses ``silence_start:`` / ``silence_end:`` lines from stderr. A trailing
+    silence that runs to EOF has no ``silence_end``; its end is set to +inf so
+    callers can clamp to the media duration.
+    """
+    proc = run_ffmpeg([
+        "-hide_banner", "-nostats", "-i", str(src),
+        "-af", f"silencedetect=noise={threshold_db}dB:d={min_silence:.3f}",
+        "-f", "null", "-",
+    ])
+    err = proc.stderr or ""
+    starts = [float(m) for m in re.findall(r"silence_start:\s*([0-9.]+)", err)]
+    ends = [float(m) for m in re.findall(r"silence_end:\s*([0-9.]+)", err)]
+    out: list[tuple[float, float]] = []
+    for i, s in enumerate(starts):
+        e = ends[i] if i < len(ends) else float("inf")
+        if e > s:
+            out.append((s, e))
+    return out

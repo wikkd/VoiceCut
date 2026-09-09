@@ -22,6 +22,9 @@
         <button data-act="project-new">新建项目…</button>
         <button data-act="project-rename">重命名项目…</button>
         <button data-act="project-delete">删除项目…</button>
+        <div class="menu-sep"></div>
+        <button data-act="undo">撤销 <kbd>Ctrl+Z</kbd></button>
+        <button data-act="redo">重做 <kbd>Ctrl+Shift+Z</kbd></button>
       </div>
     </div>
     <div class="menu" data-menu="audio">
@@ -38,6 +41,7 @@
       <div class="menu-items">
         <button data-act="transcribe">批量转写…</button>
         <button data-act="dataset-export">导出训练集…</button>
+        <button data-act="autosplit">自动切分（按静音）…</button>
         <div class="menu-sep"></div>
         <button data-act="validate">质量校验</button>
       </div>
@@ -98,11 +102,11 @@
 
     <section id="video-panel" class="panel" data-panel="video">
       <div class="panel-grip">
-        <span class="grip-title">视频预览</span>
+        <span class="grip-title">视频预览 <small>（画面参考）</small></span>
         <button class="grip-close" data-close-panel="video" title="隐藏面板">×</button>
       </div>
       <div class="panel-body video-body">
-        <video id="video-preview" muted playsinline controls></video>
+        <video id="video-preview" muted playsinline controls title="画面参考，声音统一走波形音频"></video>
         <div id="video-placeholder" class="muted">无视频预览（音频素材）</div>
       </div>
     </section>
@@ -262,6 +266,28 @@
     </div>
   </div>
 
+  <div id="modal-autosplit" class="modal-mask hidden">
+    <div class="modal">
+      <h3>自动切分（按静音）</h3>
+      <p class="muted">检测静音并切出片段，完成后将替换当前素材的全部片段（会先确认）。</p>
+      <label>静音阈值 <input id="as-threshold" type="number" step="1" value="-35"> dB</label>
+      <label>最小静音时长 <input id="as-min-silence" type="number" step="0.1" value="0.5"> 秒</label>
+      <label>最短片段 <input id="as-min-len" type="number" step="0.1" value="0.8"> 秒</label>
+      <label>最长片段 <input id="as-max-len" type="number" step="0.1" value="15"> 秒</label>
+      <label>语言
+        <select id="as-language">
+          <option value="JP" selected>JP</option>
+          <option value="ZH">ZH</option>
+          <option value="EN">EN</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button class="btn" data-close>取消</button>
+        <button class="btn primary" id="as-start">开始切分</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-transcribe" class="modal-mask hidden">
     <div class="modal">
       <h3>批量转写（日语）</h3>
@@ -285,6 +311,15 @@
       <p class="muted">生成 001.wav + 001.txt + list.txt，32kHz 单声道，自动去静音 + 响度标准化；空文本/过短片段跳过。</p>
       <label>说话人
         <input id="ds-speaker" type="text" value="speaker" placeholder="speaker">
+      </label>
+      <label class="toggle"><input type="checkbox" id="ds-per-speaker" checked> 按说话人分目录导出（每角色 train/val 子目录）</label>
+      <label>验证集比例
+        <select id="ds-val-ratio">
+          <option value="0">不分验证集</option>
+          <option value="0.1" selected>10%</option>
+          <option value="0.2">20%</option>
+          <option value="0.3">30%</option>
+        </select>
       </label>
       <label>默认语言
         <select id="ds-language">
