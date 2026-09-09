@@ -157,3 +157,22 @@
 - 自动切分：调参 → 替换当前素材片段（二次确认）→ 片段表刷新；超长段等分、过短合并是否符合预期
 - 训练集导出：per_speaker 目录树（train/val + list.txt + val_list.txt）与 list.txt 内容核对
 - 撤销/重做：角色重命名/改色/删除/合并/重定向、片段增删改、字幕加片段、批量转写回填后的恢复
+
+
+## 8. 字幕-角色声纹绑定优化（窗口化声纹）
+
+**问题**：旧逻辑对每条 whisper 字幕只算 1 个声纹（取句中 ~1s），whisper 把两人合成一句话时该声纹是两人混音 → 污染角色代表声纹，两个不同角色被并入同一角色。
+
+**改动**：
+- `app/speakers.py`：每条字幕内按 0.8s 滑窗(步进 0.4s)采样声纹再层次聚类；`speaker_segments` 改为「窗口连续段」（比字幕细，能标出同一句话内的换人点）；角色代表声纹 = 各自簇的窗口均值（干净）。
+- `dominant_label(start,end,speaker_segments)`：按时间重叠返回主导标签 + `mixed`（次标签覆盖≥35% 且≥0.25s 判定为真混双人）。
+- `bind_segments(segments, speaker_segments, char_of_label)`：重算每片段 speakerLabel / characterId；mixed 片段置 `mixed:true` 且 `characterId=None`（不自动并入单一角色，供人工拆分/重定向）。
+- `app/server.py::_speakers_worker` 改用 `bind_segments`；返回新增 `mixed` / `mixed_segments`。
+- 前端：新片段带 `mixed` 标记；片段表状态徽标显示「混合」(warn 黄)；识别完成 toast 显示「N 段为多人混合(未绑定)」。
+
+**自动化**：pytest 83/83（`test_speakers.py` 18 例新增：窗口覆盖、dominant_label 边界/极小重叠、双人合一字幕拆分、bind_segments mixed 不自动绑定/保留人工角色）；smoke 6/6；browser_test 全绿。
+
+**待人工回归（真实素材）**
+- 找一个「两人在同一句里接话/叠话」的片段 → 重新「识别说话人」→ 该字幕应被拆成两个 speaker_segments（时间轴换人点），片段标「混合」且未分配角色；两个角色不会并入一个。
+- 混合片段：手动拆分/重定向到正确角色后，角色池计数与片段颜色即时同步。
+- 跨素材：同一角色在不同素材各自识别后仍能自动归并（干净代表声纹）；不同角色不会因混音而误并。

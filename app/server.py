@@ -816,13 +816,14 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         project_mod.save_pool(cfg_.workdir, project_id, chars)
         char_of_label = {lb: cid for lb, cid in assignments.items()}
         proj = project_mod.load_project(cfg_.workdir, item.id)
-        for seg in proj["segments"]:
-            lb = seg.get("speakerLabel")
-            if lb and not seg.get("characterId") and lb in char_of_label:
-                seg["characterId"] = char_of_label[lb]
+        # 窗口化声纹分段重新绑定：同一句话含两人时标 mixed 且不自动绑定角色，
+        # 避免旧逻辑（每字幕单一声纹）把两人并入同一个角色。
+        proj["segments"], mixed_segs = speakers_mod.bind_segments(
+            proj["segments"], speaker_segments, char_of_label)
         proj["speaker_segments"] = speaker_segments
         project_mod.save_project(cfg_.workdir, item.id, proj)
         return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
+                "mixed": res.get("mixed", 0), "mixed_segments": mixed_segs,
                 "n_speakers": res["n_speakers"], "quality": res["quality"],
                 "speaker_segments": speaker_segments,
                 "characters": chars, "created": created, "merged": merged}

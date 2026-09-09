@@ -786,6 +786,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   }
   function segIssues(seg) {
     const issues = [];
+    if (seg.mixed) issues.push("混合");
     const dur = seg.end - seg.start;
     if (!seg.text.trim()) issues.push("空文本");
     if (dur < SEG_MIN) issues.push(`过短(<${SEG_MIN}s)`);
@@ -809,7 +810,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     const seg = segs[i];
     if (!seg) return;
     const issues = segIssues(seg);
-    const tagCls = issues.length ? (issues.includes("空文本") ? "warn" : "bad") : "ok";
+    const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
     const tagTxt = issues.length ? issues.join("，") : "合规";
     const cell = tr.querySelector(".tag");
     if (cell) { cell.className = "tag " + tagCls; cell.textContent = tagTxt; }
@@ -830,7 +831,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       const i = segsFor(item.id).indexOf(seg);
       const issues = segIssues(seg);
       const cls = issues.length ? "bad" : "";
-      const tagCls = issues.length ? (issues.some(x => x.includes("空文本")) ? "warn" : "bad") : "ok";
+      const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
       const tagTxt = issues.length ? issues.join("，") : "合规";
       const ch = charById(seg.characterId);
       const tr = document.createElement("tr");
@@ -911,12 +912,25 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function newSegment(start, end, text, language) {
     const sp = autoCharacterFor(start, end);
     return { id: uid("s"), start, end, text: text || "", language: language || "JP",
-             speakerLabel: sp.speakerLabel, characterId: sp.characterId };
+             speakerLabel: sp.speakerLabel, characterId: sp.characterId, mixed: !!sp.mixed };
   }
 
   function speakerLabelAt(t) {
     for (const s of state.speakerSegs) if (s.label && t >= s.start && t < s.end) return s.label;
     return null;
+  }
+  function mixedAtRange(start, end) {
+    const cover = new Map();
+    for (const s of state.speakerSegs) {
+      if (!s.label) continue;
+      const ov = Math.min(end, s.end) - Math.max(start, s.start);
+      if (ov > 0) cover.set(s.label, (cover.get(s.label) || 0) + ov);
+    }
+    if (cover.size < 2) return false;
+    const items = Array.from(cover.entries()).sort((a, b) => b[1] - a[1]);
+    const labeled = items.reduce((a, x) => a + x[1], 0);
+    const second = items[1][1];
+    return second / labeled >= 0.35 && second >= 0.25;
   }
   function autoCharacterFor(start, end) {
     let best = null, bestOv = 0;
@@ -925,10 +939,11 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
       const ov = Math.min(end, s.end) - Math.max(start, s.start);
       if (ov > bestOv) { bestOv = ov; best = s.label; }
     }
-    if (!best) return { characterId: null, speakerLabel: null };
+    const mixed = mixedAtRange(start, end);
+    if (!best) return { characterId: null, speakerLabel: null, mixed };
     const key = (state.currentItem ? state.currentItem.id : "") + ":" + best;
     const ch = state.characters.find(c => (c.speakerLabels || []).includes(key));
-    return { characterId: ch ? ch.id : null, speakerLabel: best };
+    return { characterId: mixed ? null : (ch ? ch.id : null), speakerLabel: best, mixed };
   }
 
   async function loadProject(item, force) {
@@ -1174,7 +1189,8 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         renderPool(); renderSegments(); renderSubs();
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
-        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记；新增 ${created} 角色，跨素材归并 ${merged} 段`);
+        const mixed = result.mixed_segments || result.mixed || 0;
+        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`);
       });
     } catch (e) { toast("说话人识别启动失败: " + e.message, 6000); }
   }

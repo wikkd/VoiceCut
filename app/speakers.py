@@ -1,10 +1,19 @@
 """Speaker labeling: ECAPA-TDNN embeddings (speechbrain) + hierarchical clustering.
 
-For each whisper timed speech segment we compute a fixed-window speaker embedding,
+For each whisper timed speech segment we compute fixed-window speaker embeddings,
 then cluster embeddings with scipy agglomerative clustering and emit
 speaker_segments [{start, end, label}]. If the ECAPA model cannot be loaded /
 downloaded, we fall back to MFCC-based clustering so the feature still works
 offline (marked quality="mfcc").
+
+Windowed sub-segments: a whisper subtitle frequently merges two speakers into one
+sentence (typical in anime dialogue). Instead of one embedding per subtitle
+(which mixes two voices and pollutes the character voiceprint pool), we slide a
+short window inside each subtitle and cluster window embeddings, so a merged
+subtitle naturally splits into its two speakers. ``speaker_segments`` is emitted
+at window-run granularity (finer than subtitles); ``dominant_label`` binds a time
+range to its dominant speaker and flags ``mixed`` ranges that really contain two
+speakers, which are kept unassigned for manual correction.
 
 Accuracy is approximate by design (over/under-segmentation allowed); the user
 corrects via the character pool.
@@ -23,6 +32,12 @@ import numpy as np
 
 TARGET_SR = 16000
 _RMS_GATE_DB = -45.0
+
+# Sliding window used to sub-sample each subtitle so a subtitle that mixes two
+# speakers is split into clean per-speaker windows instead of one mixed vector.
+_WIN = 0.8       # window length (s)
+_HOP = 0.4       # window step (s)
+_MIN_WIN = 0.25  # ignore trailing windows shorter than this
 
 
 def _init_runtime() -> None:
@@ -135,6 +150,76 @@ def _mfcc_embedding(mono, sr, start, end):
         m = mfcc(t).squeeze(0)
         emb = m.mean(dim=1).cpu().numpy()
     return np.asarray(emb, dtype=np.float64)
+def _window_ranges(start, end):
+    """Yield (ws, we) sub-windows covering [start, end); keeps full coverage."""
+    start, end = float(start), float(end)
+    if end - start < _MIN_WIN:
+        return
+    t = start
+    while t < end - 1e-6:
+        we = min(t + _WIN, end)
+        if we - t < _MIN_WIN:
+            break
+        yield (t, we)
+        t += _HOP
+
+
+def dominant_label(start, end, speaker_segments, min_cover=0.35, min_sec=0.25):
+    """Dominant speaker label for a time range + ``mixed`` flag.
+
+    The dominant label is the one covering the most time. ``mixed`` is True when
+    a second label also covers at least ``min_cover`` of the labeled time and at
+    least ``min_sec`` seconds (a real second speaker, not a tiny boundary
+    overlap). Returns (label_or_None, mixed_bool).
+    """
+    cover: dict[str, float] = {}
+    for s in speaker_segments:
+        lb = s.get("label")
+        if not lb:
+            continue
+        ov = min(float(end), float(s["end"])) - max(float(start), float(s["start"]))
+        if ov > 0:
+            cover[lb] = cover.get(lb, 0.0) + ov
+    if not cover:
+        return None, False
+    items = sorted(cover.items(), key=lambda kv: -kv[1])
+    dom = items[0][0]
+    labeled = sum(cover.values())
+    if len(items) < 2 or labeled <= 0:
+        return dom, False
+    second = items[1][1]
+    mixed = (second / labeled >= min_cover) and (second >= min_sec)
+    return dom, bool(mixed)
+
+
+
+def bind_segments(segments, speaker_segments, char_of_label):
+    """Rebind a segment list to speaker labels by time overlap.
+
+    Each segment gets ``speakerLabel`` = dominant label. Segments that really
+    contain two speakers (``mixed``) keep ``characterId=None`` so they are not
+    auto-bound to a single character and surface for manual correction; other
+    segments keep an existing characterId or get the matched one. Returns
+    (segments, mixed_count).
+    """
+    out = []
+    mixed_count = 0
+    for seg in segments:
+        seg = dict(seg)
+        lb, mixed = dominant_label(
+            seg.get("start", 0.0), seg.get("end", 0.0), speaker_segments)
+        if lb:
+            seg["speakerLabel"] = lb
+            seg["mixed"] = bool(mixed)
+            if mixed:
+                mixed_count += 1
+                seg["characterId"] = None
+            elif not seg.get("characterId") and lb in char_of_label:
+                seg["characterId"] = char_of_label[lb]
+        out.append(seg)
+    return out, mixed_count
+
+
 def _cluster_labels(embeddings):
     """Agglomerative clustering -> cluster id per embedding (ordered by tree)."""
     from scipy.cluster.hierarchy import fcluster, linkage
@@ -160,34 +245,42 @@ def generate_speakers(
     *,
     progress_cb=None,
 ):
-    """Label each whisper sub with a speaker label.
+    """Label speaker segments with windowed embeddings.
 
-    subs: [{start, end, text, ...}] (whisper timed segments).
-    Returns {"speaker_segments": [{start,end,label}], "quality": "ecapa"|"mfcc",
-             "total": n, "labeled": k, "n_speakers": m}.
+    subs: [{start, end, text, ...}] (whisper timed segments, may be unsorted).
+    Each subtitle is sub-sampled into sliding windows; window embeddings are
+    clustered and ``speaker_segments`` is emitted at window-run granularity so a
+    subtitle that mixes two speakers yields two segments. Returns
+    {"speaker_segments": [{start,end,label}], "quality": "ecapa"|"mfcc",
+     "total": n, "labeled": k, "mixed": m, "n_speakers": s,
+     "label_embeddings": {label: emb}, "sub_labels": [{label,mixed}, ...]}.
     """
     _init_runtime()
     mono, sr = read_mono16k(wav_path)
     total = len(subs)
 
-    quality = "ecapa"
-    embeds = []
-    try:
+    def _collect(emb_fn):
+        windows = []
+        n_total = max(1, total)
         for i, s in enumerate(subs):
-            if progress_cb:
-                progress_cb(0.1 + 0.7 * i / total if total else 1.0)
-            embeds.append(_ecapa_embedding(mono, sr, s["start"], s["end"]))
-    except Exception:
-        quality = "mfcc"
-        embeds = []
-        for i, s in enumerate(subs):
-            if progress_cb:
-                progress_cb(0.1 + 0.7 * i / total if total else 1.0)
-            embeds.append(_mfcc_embedding(mono, sr, s["start"], s["end"]))
+            if progress_cb and total:
+                progress_cb(0.1 + 0.7 * i / n_total)
+            for ws, we in _window_ranges(s["start"], s["end"]):
+                emb = emb_fn(mono, sr, ws, we)
+                if emb is not None:
+                    windows.append((ws, we, emb))
+        return windows
 
-    valid_idx = [i for i, e in enumerate(embeds) if e is not None]
-    valid = [embeds[i] for i in valid_idx]
-    clusters = _cluster_labels(valid) if valid else []
+    quality = "ecapa"
+    windows = []
+    try:
+        windows = _collect(_ecapa_embedding)
+    except Exception:  # noqa: BLE001
+        quality = "mfcc"
+        windows = _collect(_mfcc_embedding)
+
+    embeds = [w[2] for w in windows]
+    clusters = _cluster_labels(embeds) if embeds else []
 
     # renumber clusters by first occurrence order
     order = {}
@@ -199,24 +292,44 @@ def generate_speakers(
     n_speakers = next_no
 
     label_of = {}
-    for i, c in zip(valid_idx, clusters):
+    for i, c in enumerate(clusters):
         label_of[i] = "\u8bf4\u8bdd\u4eba%d" % (order[c] + 1)  # 说话人N
 
-    out = []
-    for i, s in enumerate(subs):
-        out.append({"start": round(float(s["start"]), 3),
-                    "end": round(float(s["end"]), 3),
-                    "label": label_of.get(i)})
+    # window-run speaker segments (finer than subtitles), in time order
+    ordered = sorted(range(len(windows)), key=lambda i: (windows[i][0], windows[i][1]))
+    runs = []
+    for i in ordered:
+        ws, we, _ = windows[i]
+        lb = label_of.get(i)
+        if lb is None:
+            continue
+        if runs and runs[-1]["label"] == lb and (ws - runs[-1]["end"]) <= _HOP * 0.75:
+            runs[-1]["end"] = max(runs[-1]["end"], we)
+        else:
+            runs.append({"start": round(float(ws), 3), "end": round(float(we), 3),
+                         "label": lb})
+
+    # per-subtitle binding: dominant label + mixed flag
+    sub_labels = []
+    for s in subs:
+        lb, mixed = dominant_label(s["start"], s["end"], runs)
+        sub_labels.append({"label": lb, "mixed": bool(mixed)})
+    labeled = sum(1 for x in sub_labels if x["label"])
+    mixed_count = sum(1 for x in sub_labels if x["mixed"])
+
+    label_embeddings = _label_embeddings(
+        list(range(len(clusters))), clusters, label_of, embeds)
     if progress_cb:
         progress_cb(1.0)
-    label_embeddings = _label_embeddings(valid_idx, clusters, label_of, embeds)
     return {
-        "speaker_segments": out,
+        "speaker_segments": runs,
         "quality": quality,
         "total": total,
-        "labeled": len(valid_idx),
+        "labeled": labeled,
+        "mixed": mixed_count,
         "n_speakers": n_speakers,
         "label_embeddings": label_embeddings,
+        "sub_labels": sub_labels,
     }
 
 
