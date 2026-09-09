@@ -58,3 +58,31 @@ def test_cancel_running_sets_flag() -> None:
     # worker exits once it observes the cancelled flag
     t = _wait_status(tm, tid, ("done", "cancelled", "error"))
     assert t["status"] == "cancelled"  # worker observed the flag and aborted
+
+
+def test_cleanup_prunes_finished_tasks() -> None:
+    tm = TaskManager()
+    tid = tm.submit(lambda: 42)
+    _wait_status(tm, tid, ("done", "error"))
+    assert tm.get(tid) is not None
+    tm.cleanup(max_age=-1)  # 终态任务立即过期
+    assert tm.get(tid) is None
+
+
+def test_cleanup_keeps_running_tasks() -> None:
+    tm = TaskManager()
+    tid = tm.submit(lambda: time.sleep(0.5))
+    time.sleep(0.05)
+    tm.cleanup(max_age=-1)
+    assert tm.get(tid) is not None  # 运行中不清理
+    _wait_status(tm, tid, ("done", "error"))
+
+
+def test_submit_lazily_prunes_old_tasks() -> None:
+    tm = TaskManager()
+    tid1 = tm.submit(lambda: 1)
+    _wait_status(tm, tid1, ("done", "error"))
+    tm.cleanup(max_age=-1)  # tid1 过期
+    tm.submit(lambda: 2)    # submit 内惰性清理
+    assert tm.get(tid1) is None
+

@@ -1,6 +1,7 @@
 """project 持久化单元测试：角色池/片段/说话人分段 JSON 读写。"""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from app import project as pr
@@ -73,3 +74,30 @@ def test_pool_roundtrip(tmp_path: Path) -> None:
 
 def test_load_pool_missing_returns_default(tmp_path: Path) -> None:
     assert pr.load_pool(tmp_path, "p-none")["characters"] == []
+
+
+def test_save_load_roundtrip_uses_columns(tmp_path: Path) -> None:
+    """segments/speaker_segments 独立列、紧凑 JSON，data 不再冗余携带。"""
+    from app import db
+
+    item_id = "m0002"
+    data = pr.default_project()
+    data["characters"] = [{"id": "c1", "name": "A", "color": "#e5484d",
+                           "speakerLabels": ["说话人1"], "created": 1}]
+    data["segments"] = [{"id": "s1", "start": 0.0, "end": 1.0, "text": "hi"}]
+    data["speaker_segments"] = [{"start": 0.0, "end": 1.0, "label": "说话人1"}]
+    pr.save_project(tmp_path, item_id, data)
+
+    conn = db.get_conn(tmp_path)
+    cols = db.fetch_project_columns(conn, item_id)
+    assert cols is not None
+    data_raw, seg_raw, spk_raw = cols
+    assert json.loads(seg_raw)[0]["text"] == "hi"
+    assert json.loads(spk_raw)[0]["label"] == "说话人1"
+    assert "segments" not in json.loads(data_raw)
+    assert "speaker_segments" not in json.loads(data_raw)
+
+    got = pr.load_project(tmp_path, item_id)
+    assert got["segments"][0]["id"] == "s1"
+    assert got["characters"][0]["name"] == "A"
+

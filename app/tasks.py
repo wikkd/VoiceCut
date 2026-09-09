@@ -46,6 +46,7 @@ class TaskManager:
         gpu: bool = False,
         **kwargs: Any,
     ) -> str:
+        self.cleanup()  # 惰性清理历史终态任务，避免字典无限增长
         task_id = uuid.uuid4().hex[:12]
         with self._lock:
             self._tasks[task_id] = {
@@ -149,6 +150,7 @@ class TaskManager:
             return dict(t) if t else None
 
     def all(self) -> list[dict]:
+        self.cleanup()
         with self._lock:
             return [dict(t) for t in self._tasks.values()]
 

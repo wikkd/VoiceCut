@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE TABLE IF NOT EXISTS item_projects (
     item_id TEXT PRIMARY KEY,
-    data    TEXT NOT NULL DEFAULT '{}'
+    data    TEXT NOT NULL DEFAULT '{}',
+    segments TEXT NOT NULL DEFAULT '[]',
+    speaker_segments TEXT NOT NULL DEFAULT '[]'
 );
 """
 
@@ -99,6 +101,7 @@ def _init_db(workdir: Path, conn: sqlite3.Connection) -> None:
     """Idempotent bootstrap: v1->v2 migration, default project, legacy import."""
     with _db_lock:
         _migrate_v1(conn)
+        _migrate_v2(conn)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_items_project ON items(project_id)")
         conn.commit()
         ensure_default_project(conn)
@@ -146,6 +149,39 @@ def _migrate_v1(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE items ADD COLUMN project_id TEXT")
     conn.commit()
     _pool_characters_from_item_data(conn)
+
+
+def _migrate_v2(conn: sqlite3.Connection) -> None:
+    """v2 -> v3: item_projects 增 segments/speaker_segments 列并回填。
+
+    幂等：列已存在则跳过 ALTER；只回填仍为默认空数组的列。
+    """
+    tables = _table_names(conn)
+    if "item_projects" not in tables:
+        return
+    cols = _table_cols(conn, "item_projects")
+    if "segments" not in cols:
+        conn.execute("ALTER TABLE item_projects ADD COLUMN segments TEXT NOT NULL DEFAULT '[]'")
+    if "speaker_segments" not in cols:
+        conn.execute("ALTER TABLE item_projects ADD COLUMN speaker_segments TEXT NOT NULL DEFAULT '[]'")
+    rows = conn.execute(
+        "SELECT item_id, data, segments, speaker_segments FROM item_projects").fetchall()
+    for r in rows:
+        seg = r["segments"] or "[]"
+        spk = r["speaker_segments"] or "[]"
+        if seg != "[]" and spk != "[]":
+            continue
+        try:
+            data = json.loads(r["data"] or "{}")
+        except Exception:
+            data = {}
+        new_seg = seg if seg != "[]" else json.dumps(data.get("segments") or [], ensure_ascii=False)
+        new_spk = spk if spk != "[]" else json.dumps(data.get("speaker_segments") or [], ensure_ascii=False)
+        if new_seg != seg or new_spk != spk:
+            conn.execute(
+                "UPDATE item_projects SET segments=?, speaker_segments=? WHERE item_id=?",
+                (new_seg, new_spk, r["item_id"]))
+    conn.commit()
 
 
 def _pool_characters_from_item_data(conn: sqlite3.Connection) -> None:
@@ -302,18 +338,45 @@ def delete_item_row(conn: sqlite3.Connection, item_id: str) -> None:
 # ---- item_projects (per-item snapshots) -------------------------
 
 def fetch_project(conn: sqlite3.Connection, item_id: str) -> str | None:
+    """返回 data 列 JSON（向后兼容，供旧调用/测试使用）。"""
     with _db_lock:
         row = conn.execute(
             "SELECT data FROM item_projects WHERE item_id=?", (item_id,)).fetchone()
         return row["data"] if row else None
 
 
-def upsert_project(conn: sqlite3.Connection, item_id: str, data: str) -> None:
+def fetch_project_columns(conn: sqlite3.Connection, item_id: str) -> tuple[str, str, str] | None:
+    """返回 (data, segments, speaker_segments) 三列原始 JSON；无记录返回 None。"""
     with _db_lock:
-        conn.execute(
-            "INSERT INTO item_projects (item_id, data) VALUES (?, ?) "
-            "ON CONFLICT(item_id) DO UPDATE SET data=excluded.data",
-            (item_id, data))
+        row = conn.execute(
+            "SELECT data, segments, speaker_segments FROM item_projects WHERE item_id=?",
+            (item_id,)).fetchone()
+        return (row["data"], row["segments"], row["speaker_segments"]) if row else None
+
+
+def upsert_project(conn: sqlite3.Connection, item_id: str, data: str, *,
+                   segments: str | None = None,
+                   speaker_segments: str | None = None) -> None:
+    """写入 per-item 项目数据；segments/speaker_segments 独立列（不传则保留原值）。"""
+    if segments is None and speaker_segments is None:
+        sql = ("INSERT INTO item_projects (item_id, data) VALUES (?, ?) "
+               "ON CONFLICT(item_id) DO UPDATE SET data=excluded.data")
+        params = (item_id, data)
+    elif segments is None:
+        sql = ("INSERT INTO item_projects (item_id, data, speaker_segments) VALUES (?, ?, ?) "
+               "ON CONFLICT(item_id) DO UPDATE SET data=excluded.data, speaker_segments=excluded.speaker_segments")
+        params = (item_id, data, speaker_segments)
+    elif speaker_segments is None:
+        sql = ("INSERT INTO item_projects (item_id, data, segments) VALUES (?, ?, ?) "
+               "ON CONFLICT(item_id) DO UPDATE SET data=excluded.data, segments=excluded.segments")
+        params = (item_id, data, segments)
+    else:
+        sql = ("INSERT INTO item_projects (item_id, data, segments, speaker_segments) VALUES (?, ?, ?, ?) "
+               "ON CONFLICT(item_id) DO UPDATE SET data=excluded.data, segments=excluded.segments, "
+               "speaker_segments=excluded.speaker_segments")
+        params = (item_id, data, segments, speaker_segments)
+    with _db_lock:
+        conn.execute(sql, params)
         conn.commit()
 
 

@@ -52,26 +52,52 @@ def project_path(workdir: Path, item_id: str) -> Path:
     return Path(workdir) / "projects" / f"{item_id}.json"
 
 
+def _json_list(raw: str | None, fallback: list) -> list:
+    """解析 JSON 列表列；空/损坏时回退到 fallback。"""
+    if raw:
+        try:
+            v = json.loads(raw)
+            if isinstance(v, list):
+                return v
+        except Exception:
+            pass
+    return fallback
+
+
 def load_project(workdir: Path, item_id: str) -> dict:
     conn = db.get_conn(workdir)
-    raw = db.fetch_project(conn, item_id)
-    if raw is None:
+    cols = db.fetch_project_columns(conn, item_id)
+    if cols is None:
         return default_project()
+    data_raw, seg_raw, spk_raw = cols
     try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return default_project()
-        data.setdefault("characters", [])
-        data.setdefault("segments", [])
-        data.setdefault("speaker_segments", [])
-        return data
+        data = json.loads(data_raw or "{}")
     except Exception:
-        return default_project()
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data.setdefault("characters", [])
+    data["segments"] = _json_list(seg_raw, data.get("segments") or [])
+    data["speaker_segments"] = _json_list(spk_raw, data.get("speaker_segments") or [])
+    return data
 
 
 def save_project(workdir: Path, item_id: str, data: dict) -> dict:
+    """持久化 per-item 项目状态。
+
+    segments / speaker_segments 写入独立列（紧凑 JSON），其余字段
+    （characters / version / ...）写入 data 列，避免每次全包序列化。
+    """
     conn = db.get_conn(workdir)
-    db.upsert_project(conn, item_id, json.dumps(data, ensure_ascii=False, indent=1))
+    segs = data.get("segments") or []
+    spks = data.get("speaker_segments") or []
+    rest = {k: v for k, v in data.items() if k not in ("segments", "speaker_segments")}
+    db.upsert_project(
+        conn, item_id,
+        json.dumps(rest, ensure_ascii=False),
+        segments=json.dumps(segs, ensure_ascii=False),
+        speaker_segments=json.dumps(spks, ensure_ascii=False),
+    )
     return data
 
 

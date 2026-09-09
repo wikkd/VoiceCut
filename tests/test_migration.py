@@ -62,3 +62,46 @@ def test_migrate_only_runs_once(tmp_path: Path) -> None:
 def test_no_legacy_no_rows(tmp_path: Path) -> None:
     conn = db.get_conn(tmp_path)
     assert db.fetch_all_items(conn) == []
+
+
+def test_v2_to_v3_adds_segment_columns(tmp_path: Path) -> None:
+    """v2 单列 item_projects 升级到 v3：新增两列并从 data 回填。"""
+    import sqlite3
+
+    path = tmp_path / "voicecut.db"
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE projects (
+            id TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL,
+            updated REAL NOT NULL, extra TEXT NOT NULL DEFAULT '{}');
+        CREATE TABLE items (
+            id TEXT PRIMARY KEY, project_id TEXT, name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'audio', wav_path TEXT NOT NULL,
+            created REAL NOT NULL, extra TEXT NOT NULL DEFAULT '{}');
+        CREATE TABLE item_projects (
+            item_id TEXT PRIMARY KEY, data TEXT NOT NULL DEFAULT '{}');
+    """)
+    conn.execute("INSERT INTO projects (id,name,created,updated) VALUES ('p-1','默认项目',1,1)")
+    conn.execute("INSERT INTO items (id,name,wav_path,created) VALUES ('m-1','a','x.wav',1)")
+    conn.execute("INSERT INTO item_projects (item_id,data) VALUES ('m-1', ?)", (
+        json.dumps({"characters": [],
+                    "segments": [{"id": "s1", "start": 0.0, "end": 1.0, "text": "x"}],
+                    "speaker_segments": [{"start": 0.0, "end": 1.0, "label": "说话人1"}]}),))
+    conn.commit()
+    conn.close()
+
+    db.reset_conns()
+    conn2 = db.get_conn(tmp_path)
+    cols = db.fetch_project_columns(conn2, "m-1")
+    assert cols is not None
+    _data, seg_raw, spk_raw = cols
+    assert json.loads(seg_raw)[0]["id"] == "s1"
+    assert json.loads(spk_raw)[0]["label"] == "说话人1"
+
+    # 幂等：再次连接不丢数据
+    db.reset_conns()
+    conn3 = db.get_conn(tmp_path)
+    cols3 = db.fetch_project_columns(conn3, "m-1")
+    assert cols3 is not None
+    assert json.loads(cols3[1])[0]["id"] == "s1"
+

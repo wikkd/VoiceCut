@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -31,6 +32,16 @@ def referer_for(url: str) -> str:
 
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+_JOB_TTL = 24 * 3600.0  # 代理 job 保留 24h，过期惰性清理
+
+
+def _prune_jobs() -> None:
+    """删除超过 TTL 的代理 job（惰性，避免内存无限增长）。"""
+    now = time.time()
+    with _jobs_lock:
+        for jid in [j for j, v in _jobs.items()
+                    if now - float(v.get("created") or 0) > _JOB_TTL]:
+            _jobs.pop(jid, None)
 
 
 # ── yt-dlp 解析 ─────────────────────────────────────────────
@@ -94,12 +105,15 @@ def create_job(url: str) -> dict:
         "status": "resolved",
         "error": None,
     }
+    job["created"] = time.time()
+    _prune_jobs()
     with _jobs_lock:
         _jobs[job["id"]] = job
     return job
 
 
 def get_job(job_id: str) -> dict | None:
+    _prune_jobs()
     with _jobs_lock:
         j = _jobs.get(job_id)
         return dict(j) if j else None

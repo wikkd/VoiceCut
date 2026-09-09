@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -39,8 +40,17 @@ STATIC_DIR = Path(__file__).parent / "static"
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".webm", ".ts", ".m4v"}
 AUDIO_EXTS = {".wav", ".mp3", ".flac", ".aac", ".ogg", ".m4a", ".opus"}
 
-_downloadable: dict[str, Path] = {}
-_dl_lock = __import__("threading").RLock()
+_downloadable: dict[str, dict] = {}   # key -> {"path": Path, "ts": float}
+_dl_lock = threading.RLock()
+_DL_TTL = 3600.0  # 下载链接保留 1h，过期惰性清理
+
+
+def _prune_downloadable() -> None:
+    """删除过期的下载注册项（惰性，避免字典无限增长）。"""
+    now = time.time()
+    with _dl_lock:
+        for k in [k for k, v in _downloadable.items() if now - v["ts"] > _DL_TTL]:
+            _downloadable.pop(k, None)
 
 
 def create_app(cfg: AppConfig | None = None) -> Flask:
@@ -242,7 +252,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         if f:
             paths.add(Path(f))
         src = Path(item.source) if item.source else None
-        if src and src not in paths and src.exists() and str(src).startswith(str(cfg.workdir)):
+        wd = Path(cfg.workdir).resolve()
+        if (src and src not in paths and src.exists()
+                and src.resolve().is_relative_to(wd)):
             paths.add(src)
         for p in paths:
             try:
@@ -440,14 +452,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     def _register_download(path: Path) -> str:
         key = uuid.uuid4().hex
+        _prune_downloadable()
         with _dl_lock:
-            _downloadable[key] = path
+            _downloadable[key] = {"path": path, "ts": time.time()}
         return key
 
     @app.get("/api/files/<name>")
     def api_files(name: str) -> object:
+        _prune_downloadable()
         with _dl_lock:
-            path = _downloadable.get(name)
+            rec = _downloadable.get(name)
+        path = rec["path"] if rec else None
         if not path or not path.exists():
             return jsonify({"error": "not found"}), 404
         resp = stream_file(path)
@@ -483,7 +498,7 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         out_dir = cfg_.workdir / "demucs" / src_item.id
         tid = tasks.current_task_id()
         res = separate_mod.run_separation(
-            src_item.wav_path, out_dir, device="cuda",
+            src_item.wav_path, out_dir, device="auto",
             task_id=tid, tasks=tasks,
         )
         items_dir = cfg_.workdir / "items"
@@ -968,6 +983,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     # ── 训练交付（GPT-SoVITS 管线） ──────────────
     _training_tasks: dict[str, str] = {}  # role_id -> task_id
+    _training_lock = threading.Lock()
+    _training_status_cache: dict = {"key": None, "ts": 0.0, "data": None}
+    _TRAINING_STATUS_TTL = 4.0
 
     def _project_pool(project_id: str) -> list[dict]:
         if not project_id:
@@ -1019,8 +1037,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         role = next((c for c in _project_pool(project_id) if c["id"] == role_id), None)
         if not role:
             return jsonify({"error": "角色不存在"}), 404
-        if role_id in _training_tasks:
-            return jsonify({"error": "该角色已有训练任务在运行"}), 409
+        with _training_lock:
+            if role_id in _training_tasks:
+                return jsonify({"error": "该角色已有训练任务在运行"}), 409
         settings = gptsovits_mod.load_settings(cfg.workdir)
         exp = _role_exp(settings, role, body.get("exp_name") or "")
         # 记录 exp 到角色池，便于重训复用
@@ -1031,10 +1050,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         project_mod.save_pool(cfg.workdir, project_id, pool["characters"])
         if not any(stages.values()):
             return jsonify({"error": "至少需要一个阶段"}), 400
-        _training_tasks[role_id] = "pending"
-        tid = tasks.submit(_training_worker, project_id, role, stages,
-                           {**body, "exp_name": exp}, gpu=True)
-        _training_tasks[role_id] = tid
+        with _training_lock:
+            _training_tasks[role_id] = "pending"
+        try:
+            tid = tasks.submit(_training_worker, project_id, role, stages,
+                               {**body, "exp_name": exp}, gpu=True)
+        except Exception:
+            with _training_lock:
+                _training_tasks.pop(role_id, None)
+            raise
+        with _training_lock:
+            _training_tasks[role_id] = tid
         return jsonify({"task_id": tid, "exp": exp, "role_id": role_id})
 
     def _training_worker(project_id: str, role: dict, stages: dict, opts: dict) -> dict:
@@ -1119,8 +1145,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 "count": len(segs),
             }
         finally:
-            if _training_tasks.get(role_id) == tid:
-                _training_tasks.pop(role_id, None)
+            with _training_lock:
+                if _training_tasks.get(role_id) == tid:
+                    _training_tasks.pop(role_id, None)
             log_file.close()
 
     @app.get("/api/training/config")
@@ -1141,6 +1168,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     def api_training_status() -> object:
         project_id = request.args.get("project_id") or _default_project_id()
         settings = gptsovits_mod.load_settings(cfg.workdir)
+        _sig = json.dumps({
+            "pid": project_id,
+            "settings": settings,
+            "training": dict(_training_tasks),
+            "running": [(t["id"], t["status"]) for t in tasks.all()],
+        }, sort_keys=True, default=str)
+        now = time.time()
+        if (_training_status_cache["key"] == _sig
+                and now - _training_status_cache["ts"] < _TRAINING_STATUS_TTL
+                and _training_status_cache["data"] is not None):
+            return jsonify(_training_status_cache["data"])
         roles = []
         for c in _project_pool(project_id):
             try:
@@ -1180,13 +1218,17 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 })
             except Exception as exc:  # noqa: BLE001
                 log.warning("training status role %s failed: %s", c.get("id"), exc)
-        return jsonify({
+        data = {
             "ok": True, "project_id": project_id, "settings": settings,
             "api": {"running": gptsovits_mod.api_running(settings),
                     "port": int(settings.get("api_port") or 9880)},
             "gpu_busy": any(t["status"] == "running" for t in tasks.all()),
             "roles": roles,
-        })
+        }
+        _training_status_cache["key"] = _sig
+        _training_status_cache["ts"] = now
+        _training_status_cache["data"] = data
+        return jsonify(data)
 
     @app.get("/api/training/weights")
     def api_training_weights() -> object:
@@ -1281,8 +1323,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         role = next((c for c in _project_pool(project_id) if c["id"] == role_id), None)
         if not role:
             return jsonify({"error": "角色不存在"}), 404
-        if role_id in _training_tasks:
-            return jsonify({"error": "训练进行中，请结束后再试听（显存冲突）"}), 409
+        with _training_lock:
+            if role_id in _training_tasks:
+                return jsonify({"error": "训练进行中，请结束后再试听（显存冲突）"}), 409
         settings = gptsovits_mod.load_settings(cfg.workdir)
         exp = body.get("exp_name") or _role_exp(settings, role)
         text = (body.get("text") or "").strip()
