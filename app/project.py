@@ -131,8 +131,53 @@ def load_pool(workdir: Path, project_id: str) -> dict:
 
 
 def save_pool(workdir: Path, project_id: str, characters: list) -> dict:
-    """Persist the project-level character pool; returns {"characters": [...]}."""
+    """Persist the project-level character pool; keeps other project settings.
+
+    Returns {"characters": [...]}.
+    """
     conn = db.get_conn(workdir)
     chars = list(characters or [])
-    db.update_project_extra(conn, project_id, {"characters": chars})
+    rec = db.fetch_project_record(conn, project_id)
+    try:
+        extra = json.loads(rec["extra"] or "{}") if rec else {}
+    except Exception:
+        extra = {}
+    if not isinstance(extra, dict):
+        extra = {}
+    extra["characters"] = chars
+    db.update_project_extra(conn, project_id, extra)
     return {"characters": chars}
+
+
+def _load_extra(workdir: Path, project_id: str) -> dict:
+    """Read the project record's raw extra dict (characters + settings)."""
+    conn = db.get_conn(workdir)
+    rec = db.fetch_project_record(conn, project_id)
+    if rec is None:
+        return {}
+    try:
+        extra = json.loads(rec["extra"] or "{}")
+    except Exception:
+        extra = {}
+    return extra if isinstance(extra, dict) else {}
+
+
+def get_project_setting(workdir: Path, project_id: str, key: str, default=None):
+    """Read one project-level setting (e.g. auto_analyze) from the extra blob."""
+    return _load_extra(workdir, project_id).get(key, default)
+
+
+def set_project_setting(workdir: Path, project_id: str, key: str, value) -> None:
+    """Persist one project-level setting, preserving the character pool."""
+    conn = db.get_conn(workdir)
+    rec = db.fetch_project_record(conn, project_id)
+    if rec is None:
+        return
+    try:
+        extra = json.loads(rec["extra"] or "{}")
+    except Exception:
+        extra = {}
+    if not isinstance(extra, dict):
+        extra = {}
+    extra[key] = value
+    db.update_project_extra(conn, project_id, extra)

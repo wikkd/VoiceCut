@@ -44,6 +44,7 @@ class TaskManager:
         fn: Callable[..., Any],
         *args: Any,
         gpu: bool = False,
+        kind: str = "",
         **kwargs: Any,
     ) -> str:
         self.cleanup()  # 惰性清理历史终态任务，避免字典无限增长
@@ -51,6 +52,7 @@ class TaskManager:
         with self._lock:
             self._tasks[task_id] = {
                 "id": task_id,
+                "kind": kind,
                 "status": "pending",
                 "progress": 0.0,
                 "message": "queued",

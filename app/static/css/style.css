@@ -45,6 +45,7 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #101018; font-weight: 600; }
 button.primary:hover { filter: brightness(1.08); }
 button.danger { color: var(--danger); border-color: var(--danger); }
+button.btn-auto-on { background: var(--accent); border-color: var(--accent); color: #101018; font-weight: 600; }
 input[type="text"], select {
   cursor: auto; background: var(--panel);
 }

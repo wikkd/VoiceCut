@@ -95,7 +95,7 @@ def api_import() -> object:
     raw_path = upload_dir / (uuid.uuid4().hex + ext)
     f.save(str(raw_path))
     project_id = request.form.get("project_id") or ""
-    tid = c.tasks.submit(_import_worker, c, raw_path, filename, project_id)
+    tid = c.tasks.submit(_import_worker, c, raw_path, filename, project_id, kind="import")
     return jsonify({"task_id": tid, "name": filename})
 
 
@@ -138,7 +138,17 @@ def _import_worker(c, raw_path: Path, filename: str, project_id: str = "") -> di
     if subs_file:
         item.extra["subs_file"] = str(subs_file)
         c.store.persist(item)
-    return {"item_id": item.id, "item": c.item_json(item)}
+    result = {"item_id": item.id, "item": c.item_json(item)}
+    auto_tid = _auto_analyze_after_import(c, item.project_id or "")
+    if auto_tid:
+        result["auto_task_id"] = auto_tid
+    return result
+
+
+def _auto_analyze_after_import(c, project_id: str) -> str | None:
+    """导入完成后自动触发项目级分析（缺字幕先 Whisper 生成，再做说话人识别）。"""
+    from app.web.projects import submit_project_analyze  # 延迟导入避免 Blueprint 循环依赖
+    return submit_project_analyze(c, project_id)
 
 
 # ── 流式 / 波形 ───────────────────────────────────────────

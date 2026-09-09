@@ -32,6 +32,7 @@ export const state = {
   subs: [],                 // 实时字幕 [{start,end,text}]
   currentSubIdx: -1,        // 当前播放头命中的字幕行索引
   bootErr: null,
+  autoAnalyze: true,         // 导入后后台自动生成字幕 + 识别说话人
 };
 
 let toastTimer = null;

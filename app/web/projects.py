@@ -71,6 +71,8 @@ def api_project_record_get(project_id: str) -> object:
     return jsonify({
         "id": rec["id"], "name": rec["name"], "created": rec["created"],
         "updated": rec["updated"],
+        "auto_analyze": bool(project_mod.get_project_setting(
+            c.cfg.workdir, project_id, "auto_analyze", True)),
         "characters": pool["characters"],
         "items": [c.item_json(i) for i in c.store.by_project(project_id)],
     })
@@ -119,6 +121,19 @@ def api_pool_save(project_id: str) -> object:
     if not isinstance(chars, list):
         return jsonify({"error": "characters must be a list"}), 400
     project_mod.save_pool(c.cfg.workdir, project_id, chars)
+    return jsonify({"ok": True})
+
+
+@bp.post("/api/projects/<project_id>/settings")
+def api_project_settings(project_id: str) -> object:
+    """项目设置（当前仅 auto_analyze：导入后后台自动生成字幕 + 识别说话人）。"""
+    c = ctx()
+    if db_mod.fetch_project_record(db_mod.get_conn(c.cfg.workdir), project_id) is None:
+        return jsonify({"error": "project not found"}), 404
+    body = request.get_json(force=True) or {}
+    if "auto_analyze" in body:
+        project_mod.set_project_setting(
+            c.cfg.workdir, project_id, "auto_analyze", bool(body["auto_analyze"]))
     return jsonify({"ok": True})
 
 
@@ -202,7 +217,7 @@ def api_speakers_get(item_id: str) -> object:
 def api_speakers_generate(item_id: str) -> object:
     c = ctx()
     c.store.require(item_id)
-    tid = c.tasks.submit(_speakers_worker, c, item_id, gpu=True)
+    tid = c.tasks.submit(_speakers_worker, c, item_id, gpu=True, kind="speakers")
     return jsonify({"task_id": tid})
 
 
@@ -298,11 +313,53 @@ def api_project_speakers_generate(project_id: str) -> object:
     c = ctx()
     if db_mod.fetch_project_record(db_mod.get_conn(c.cfg.workdir), project_id) is None:
         return jsonify({"error": "project not found"}), 404
-    tid = c.tasks.submit(_project_speakers_worker, c, project_id, gpu=True)
+    tid = submit_project_analyze(c, project_id, force=True)
     return jsonify({"task_id": tid})
 
 
+def submit_project_analyze(c, project_id: str, *, force: bool = False) -> str | None:
+    """提交项目级说话人识别（每项目去重排队）。
+
+    - 非 force（导入链自动触发）受项目设置 ``auto_analyze`` 控制，关闭返回 None。
+    - 若该项目已有分析在跑，仅打“需要重跑”标记；当前分析完成后自动再排一次，
+      保证批量导入时后完成的素材也被纳入本次分析。
+    """
+    if not force and not project_mod.get_project_setting(
+            c.cfg.workdir, project_id, "auto_analyze", True):
+        return None
+    with c.auto_analyze_lock:
+        existing = c.auto_analyze_tasks.get(project_id)
+        if existing:
+            t = c.tasks.get(existing)
+            if t and t["status"] in ("pending", "running"):
+                c.auto_analyze_pending[project_id] = True
+                return existing
+        tid = c.tasks.submit(_project_speakers_worker, c, project_id,
+                             gpu=True, kind="speakers")
+        c.auto_analyze_tasks[project_id] = tid
+        return tid
+
+
 def _project_speakers_worker(c, project_id: str) -> dict:
+    """项目级说话人识别入口；结束后清理去重注册，必要时自动再排一轮。"""
+    tid = c.tasks.current_task_id()
+    ok = False
+    try:
+        result = _project_speakers_run(c, project_id)
+        ok = True
+        return result
+    finally:
+        rerun = False
+        with c.auto_analyze_lock:
+            if c.auto_analyze_tasks.get(project_id) == tid:
+                c.auto_analyze_tasks.pop(project_id, None)
+            rerun = c.auto_analyze_pending.pop(project_id, False)
+        # 仅当本轮分析成功完成且期间又有新导入需要纳入时才再排一轮
+        if rerun and ok:
+            submit_project_analyze(c, project_id, force=True)
+
+
+def _project_speakers_run(c, project_id: str) -> dict:
     tid = c.tasks.current_task_id()
     items = [it for it in c.store.by_project(project_id)
              if it.wav_path and Path(it.wav_path).exists()]
@@ -315,12 +372,18 @@ def _project_speakers_worker(c, project_id: str) -> dict:
             raise TaskCancelled()
         c.tasks.update(tid, progress=0.05 + 0.2 * idx / len(items),
                        message=f"准备素材 {idx + 1}/{len(items)} …")
+        # 后台自动分析可能在排队期间被删素材，单独跳过，不让整轮任务失败
+        if not item.wav_path or not Path(item.wav_path).exists():
+            continue
         subs = c.load_subs(item)
         if not subs:
-            subs = transcribe_mod.transcribe_timed(
-                item.wav_path, language="ja", model="medium",
-                progress_cb=lambda p: c.tasks.update(tid, progress=p * 0.2,
-                                                     message=f"识别字幕 {p * 100:.0f}%"))
+            try:
+                subs = transcribe_mod.transcribe_timed(
+                    item.wav_path, language="ja", model="medium",
+                    progress_cb=lambda p: c.tasks.update(tid, progress=p * 0.2,
+                                                         message=f"识别字幕 {p * 100:.0f}%"))
+            except FileNotFoundError:
+                continue  # 素材在识别中途被删除
             if subs:
                 subs_dir = c.cfg.workdir / "subs"
                 subs_dir.mkdir(parents=True, exist_ok=True)

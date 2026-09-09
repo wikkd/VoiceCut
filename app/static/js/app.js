@@ -135,12 +135,15 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     const j = await api(`/api/projects/${proj.id}`);
     state.items = j.items || [];
     state.characters = j.characters || [];
+    state.autoAnalyze = (j.auto_analyze !== false);
+    renderAutoAnalyzeBtn();
     state.segmentsByItem = new Map();
     state.speakerSegsByItem = new Map();
     renderMediaList();
     await loadAllItemData();
     if (state.items.length) await selectItem(state.items[0]);
     else clearWorkbench();
+    attachActiveTasks();
   }
 
   async function loadAllItemData() {
@@ -1012,6 +1015,29 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     } catch (e) { toast("项目说话人识别启动失败: " + e.message, 6000); }
   }
 
+  function renderAutoAnalyzeBtn() {
+    const on = !!state.autoAnalyze;
+    ["#btn-auto-analyze", "#btn-auto-analyze2"].forEach((sel) => {
+      const b = $(sel);
+      if (b) {
+        b.classList.toggle("btn-auto-on", on);
+        b.textContent = on ? "⚡ 自动分析·开" : "⚡ 自动分析·关";
+      }
+    });
+  }
+  async function toggleAutoAnalyze() {
+    if (!state.currentProject) return toast("请先选择项目");
+    const on = !state.autoAnalyze;
+    try {
+      await api(`/api/projects/${state.currentProject.id}/settings`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_analyze: on }) });
+      state.autoAnalyze = on;
+      renderAutoAnalyzeBtn();
+      toast(on ? "已开启：导入后自动生成字幕 + 识别说话人" : "已关闭后台自动分析", 4000);
+    } catch (e) { toast("设置保存失败: " + e.message, 6000); }
+  }
+
   // 角色池页面事件
   $("#pool-grid").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
@@ -1250,9 +1276,48 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
 
   // ── 任务跟踪 ───────────────────────────────────────────
   function trackTask(taskId, doneCb) {
+    const existing = state.activeTasks.get(taskId);
+    if (existing) { existing.doneCb = doneCb; return; }  // 同一后台任务去重
     state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb });
     ensurePolling();
     updateStatusbar();
+  }
+
+  // 后台自动分析完成：刷新角色池 / 素材 / 片段 / 字幕
+  async function autoAnalyzeDone(result) {
+    if (!result) return;
+    if (Array.isArray(result.characters)) state.characters = result.characters;
+    try {
+      if (state.currentProject) {
+        const j = await api(`/api/projects/${state.currentProject.id}`);
+        if (Array.isArray(j.characters)) state.characters = j.characters;
+        state.items = j.items || [];
+        renderMediaList();
+      }
+    } catch (e) { /* 网络抖动忽略，用任务结果兜底 */ }
+    await loadAllItemData();
+    renderPool(); renderSegments(); renderSubs();
+    const created = (result.created || []).length, merged = (result.merged || 0);
+    const mixed = result.mixed || 0, cleaned = result.cleaned || 0;
+    const itemN = (result.items || []).length;
+    let msg = `后台分析完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
+    if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
+    toast(msg, 6000);
+    return true;  // 已显示专属完成提示，抑制通用“任务完成”
+  }
+
+  // 刷新页面后重新挂接仍在后台运行的任务（含导入后自动分析）
+  async function attachActiveTasks() {
+    try {
+      const tasks = await api("/api/tasks/active");
+      tasks.forEach((t) => {
+        if (state.activeTasks.has(t.id)) return;
+        let cb = null;
+        if (t.kind === "speakers") cb = autoAnalyzeDone;
+        else if (t.kind === "import") cb = (r) => { if (r) refreshItems(); };
+        if (cb) trackTask(t.id, cb);
+      });
+    } catch (e) { /* 忽略 */ }
   }
   function ensurePolling() {
     if (state.pollTimer) return;
@@ -1270,8 +1335,9 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
         if (t.status === "done") {
           state.activeTasks.delete(tid);
           await refreshItems();
-          if (info.doneCb) info.doneCb(t.result);
-          toast("任务完成");
+          let customToast = false;
+          if (info.doneCb) customToast = !!(await info.doneCb(t.result));
+          if (!customToast) toast("任务完成");
         } else if (t.status === "error") {
           state.activeTasks.delete(tid);
           toast("任务失败: " + (t.message || "未知错误"), 6000);
@@ -1326,7 +1392,10 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     toast(`导入中: ${file.name}`);
     try {
       const j = await api("/api/import", { method: "POST", body: fd });
-      trackTask(j.task_id, (result) => selectResultItem(result));
+      trackTask(j.task_id, (result) => {
+        selectResultItem(result);
+        if (result && result.auto_task_id) trackTask(result.auto_task_id, autoAnalyzeDone);
+      });
     } catch (e) { toast("导入失败: " + e.message); }
   }
 
@@ -1434,8 +1503,13 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
       }
       let ok = 0, fail = 0;
       results.forEach(r => {
-        if (r.ok) { ok++; trackTask(r.task_id, (res) => selectResultItem(res)); }
-        else { fail++; toast(`解析失败: ${r.url} — ${r.error}`, 6000); }
+        if (r.ok) {
+          ok++;
+          trackTask(r.task_id, (res) => {
+            selectResultItem(res);
+            if (res && res.auto_task_id) trackTask(res.auto_task_id, autoAnalyzeDone);
+          });
+        } else { fail++; toast(`解析失败: ${r.url} — ${r.error}`, 6000); }
       });
       toast(`已提交 ${ok} 个链接，${fail} 个失败`);
     } catch (e) { toast("URL 导入失败: " + e.message, 6000); }
@@ -1690,6 +1764,8 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     $("#btn-transcribe").addEventListener("click", openTranscribeModal);
     $("#btn-pool").addEventListener("click", openPool);
     $("#btn-identify-speakers").addEventListener("click", doIdentifySpeakers);
+    $("#btn-auto-analyze").addEventListener("click", toggleAutoAnalyze);
+    $("#btn-auto-analyze2").addEventListener("click", toggleAutoAnalyze);
     $("#pool-back").addEventListener("click", closePool);
     $("#pool-close").addEventListener("click", closePool);
     $("#pool-new").addEventListener("click", createPoolCharacter);
@@ -2089,6 +2165,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
   window.addEventListener("beforeunload", () => {
     if (state.dirtyItems.size || state.poolDirty) beaconSave();
   });
+  renderAutoAnalyzeBtn();
   boot();
 
   // 调试/自动化钩子
@@ -2097,6 +2174,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     loadProject, saveProjectNow, savePoolNow, openPool, closePool, renderPool,
     undo, redo, pushUndo, doAutosplit, uploadFile,
     createProject, renameProject, deleteProject, doIdentifySpeakers, newSegment,
+    toggleAutoAnalyze, autoAnalyzeDone, attachActiveTasks,
     setPage, loadTraining, startTrain, doInfer, train,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };
 })();

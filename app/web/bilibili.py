@@ -28,7 +28,7 @@ def _open_url(c, url: str, project_id: str = "") -> dict:
         job = bilibili_mod.create_job(url)
     except RuntimeError as exc:
         return {"url": url, "ok": False, "error": str(exc)}
-    tid = c.tasks.submit(_bilibili_worker, c, job, project_id)
+    tid = c.tasks.submit(_bilibili_worker, c, job, project_id, kind="import")
     return {"url": url, "ok": True, "job_id": job["id"], "title": job["title"],
             "video_proxy_url": f"/api/bilibili/proxy/{job['id']}", "task_id": tid}
 
@@ -87,7 +87,12 @@ def _bilibili_worker(c, job: dict, project_id: str = "") -> dict:
                            extra={"proxy_url": f"/api/bilibili/proxy/{job['id']}",
                                   "bilibili_job": job["id"]})
     c.log.info("url import ok: %s -> %s", job.get("title"), item.id)
-    return {"item_id": item.id, "item": c.item_json(item)}
+    result = {"item_id": item.id, "item": c.item_json(item)}
+    from app.web.projects import submit_project_analyze  # 延迟导入避免循环依赖
+    auto_tid = submit_project_analyze(c, item.project_id or "")
+    if auto_tid:
+        result["auto_task_id"] = auto_tid
+    return result
 
 
 @bp.get("/api/bilibili/proxy/<job_id>")

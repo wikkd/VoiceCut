@@ -37,6 +37,11 @@ class WebContext:
         self.training_tasks: dict[str, str] = {}     # role_id -> task_id
         self.training_lock = threading.Lock()
         self.training_status_cache: dict = {"key": None, "ts": 0.0, "data": None}
+        # 项目级自动分析去重：project_id -> 运行中/排队中的任务 id；
+        # auto_analyze_pending 标记“当前分析完成后需再跑一轮”（批量导入收敛）。
+        self.auto_analyze_tasks: dict[str, str] = {}
+        self.auto_analyze_pending: dict[str, bool] = {}
+        self.auto_analyze_lock = threading.Lock()
 
     # ── item JSON ─────────────────────────────────────────────
     def item_json(self, item: MediaItem) -> dict:

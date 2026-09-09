@@ -15,6 +15,13 @@ def list_tasks() -> object:
     return jsonify(ctx().tasks.all())
 
 
+@bp.get("/api/tasks/active")
+def active_tasks() -> object:
+    """运行中/排队中的任务（前端刷新后可重新挂接进度与完成回调）。"""
+    return jsonify([t for t in ctx().tasks.all()
+                    if t["status"] in ("pending", "running")])
+
+
 @bp.get("/api/tasks/<task_id>")
 def get_task(task_id: str) -> object:
     t = ctx().tasks.get(task_id)
