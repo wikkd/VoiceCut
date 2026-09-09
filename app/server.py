@@ -791,7 +791,25 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
         project_id = item.project_id or _default_project_id()
         pool = project_mod.load_pool(cfg_.workdir, project_id)
         label_embeds = res.get("label_embeddings") or {}
+        cleaned = 0
         if res.get("quality") == "ecapa" and label_embeds:
+            # 清理旧版本产生的“一人一窗口”垃圾角色：只删自动命名(说话人N)、仅归属
+            # 本素材、从未合并(emb_count<=1)、且未训练(无 exp)的角色；清空引用它们
+            # 的片段绑定，让本次识别重新分配。
+            stale = speakers_mod.stale_characters(item.id, pool["characters"])
+            stale_ids = {c["id"] for c in stale}
+            if stale_ids:
+                cleaned = len(stale_ids)
+                pool["characters"] = [c for c in pool["characters"] if c["id"] not in stale_ids]
+                proj_tmp = project_mod.load_project(cfg_.workdir, item.id)
+                changed = False
+                for seg in proj_tmp["segments"]:
+                    if seg.get("characterId") in stale_ids:
+                        seg["characterId"] = None
+                        seg["speakerLabel"] = None
+                        changed = True
+                if changed:
+                    project_mod.save_project(cfg_.workdir, item.id, proj_tmp)
             assignments, chars, created = speakers_mod.match_labels_to_pool(
                 item.id, label_embeds, pool["characters"])
             merged = max(0, len(assignments) - len(created))
@@ -827,7 +845,8 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
                 "mixed": res.get("mixed", 0), "mixed_segments": mixed_segs,
                 "n_speakers": res["n_speakers"], "quality": res["quality"],
                 "speaker_segments": speaker_segments,
-                "characters": chars, "created": created, "merged": merged}
+                "characters": chars, "created": created, "merged": merged,
+                "cleaned": cleaned}
 
     # ── 训练交付（GPT-SoVITS 管线） ──────────────
     _training_tasks: dict[str, str] = {}  # role_id -> task_id

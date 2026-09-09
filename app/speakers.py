@@ -1,22 +1,21 @@
 """Speaker labeling: ECAPA-TDNN embeddings (speechbrain) + hierarchical clustering.
 
-For each whisper timed speech segment we compute fixed-window speaker embeddings,
-then cluster embeddings with scipy agglomerative clustering and emit
-speaker_segments [{start, end, label}]. If the ECAPA model cannot be loaded /
-downloaded, we fall back to MFCC-based clustering so the feature still works
-offline (marked quality="mfcc").
+Pipeline (robust against BGM-laden anime audio):
+  1. Sliding windows inside each whisper subtitle -> ECAPA embeddings.
+  2. AVERAGE the windows per subtitle into one stable subtitle embedding
+     (short-window embeddings alone are too noisy: clustering them directly
+     used to produce one "speaker" per window, e.g. 999 roles for one video).
+  3. Cluster the subtitle embeddings with an adaptive cosine cutoff -> a sane
+     number of speakers (~3-15 by default).
+  4. Vote each subtitle's windows against the speaker centroids: clean
+     subtitles yield one speaker segment; subtitles that really mix two
+     speakers are split at window level and flagged ``mixed`` (kept unassigned
+     for manual correction via the character pool).
 
-Windowed sub-segments: a whisper subtitle frequently merges two speakers into one
-sentence (typical in anime dialogue). Instead of one embedding per subtitle
-(which mixes two voices and pollutes the character voiceprint pool), we slide a
-short window inside each subtitle and cluster window embeddings, so a merged
-subtitle naturally splits into its two speakers. ``speaker_segments`` is emitted
-at window-run granularity (finer than subtitles); ``dominant_label`` binds a time
-range to its dominant speaker and flags ``mixed`` ranges that really contain two
-speakers, which are kept unassigned for manual correction.
-
-Accuracy is approximate by design (over/under-segmentation allowed); the user
-corrects via the character pool.
+If ECAPA cannot be loaded/downloaded we fall back to MFCC-based clustering so
+the feature still works offline (marked quality="mfcc").  Accuracy is
+approximate by design (over/under-segmentation allowed); the user corrects via
+the character pool.
 """
 from __future__ import annotations
 
@@ -33,11 +32,22 @@ import numpy as np
 TARGET_SR = 16000
 _RMS_GATE_DB = -45.0
 
-# Sliding window used to sub-sample each subtitle so a subtitle that mixes two
-# speakers is split into clean per-speaker windows instead of one mixed vector.
-_WIN = 0.8       # window length (s)
-_HOP = 0.4       # window step (s)
-_MIN_WIN = 0.25  # ignore trailing windows shorter than this
+# Sliding window used to sub-sample each subtitle.  The per-subtitle windows are
+# then AVERAGED into one stable subtitle embedding before clustering (short
+# 0.8s windows are too noisy on BGM-laden anime audio and used to fragment the
+# pool into one "speaker" per window).  1.4s / 0.5s hop keeps full coverage of
+# each subtitle while giving ECAPA enough speech to be discriminative.
+_WIN = 1.4       # window length (s)
+_HOP = 0.5       # window step (s)
+_MIN_WIN = 0.3   # ignore trailing windows shorter than this
+
+# Agglomerative clustering cutoff (cosine distance, average linkage) used on the
+# stable subtitle-level embeddings, with adaptive adjustment into a sane band so
+# we never regress to "one speaker per window" (hundreds of labels) nor merge an
+# entire video into a single speaker.
+_CLUSTER_THR = 0.60  # cosine distance cutoff
+_CLUSTER_MIN_K = 3   # tighten cutoff (finer) if fewer clusters than this
+_CLUSTER_MAX_K = 15  # loosen cutoff (coarser) if more clusters than this
 
 
 def _init_runtime() -> None:
@@ -220,8 +230,16 @@ def bind_segments(segments, speaker_segments, char_of_label):
     return out, mixed_count
 
 
-def _cluster_labels(embeddings):
-    """Agglomerative clustering -> cluster id per embedding (ordered by tree)."""
+def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
+                  max_k=_CLUSTER_MAX_K):
+    """Agglomerative clustering (average linkage, cosine) -> cluster id per embedding.
+
+    Cut the dendrogram at ``thr`` cosine distance.  Because anime window /
+    subtitle embeddings vary a lot, the count is adjusted adaptively: if the
+    cutoff over-merges (< ``min_k`` clusters) we tighten it; if it over-
+    fragments (> ``max_k`` clusters, e.g. one speaker per window) we loosen it.
+    Returns arbitrary cluster ids; callers renumber by first appearance.
+    """
     from scipy.cluster.hierarchy import fcluster, linkage
 
     n = len(embeddings)
@@ -232,11 +250,52 @@ def _cluster_labels(embeddings):
     X = np.stack(embeddings)
     X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-9)
     Z = linkage(X, method="average", metric="cosine")
-    for thr in (0.42, 0.34, 0.26, 0.18, 0.10):
-        lab = fcluster(Z, t=thr, criterion="distance")
-        if len(set(lab)) >= 2 or thr == 0.10:
-            return [int(x) - 1 for x in lab]
-    return [int(x) - 1 for x in fcluster(Z, t=0.42, criterion="distance")]
+
+    def _cut(t: float):
+        return [int(x) - 1 for x in fcluster(Z, t=t, criterion="distance")]
+
+    lab = _cut(thr)
+    k = len(set(lab))
+    if k < min_k:
+        for t in (0.55, 0.50, 0.45, 0.40, 0.35, 0.30):
+            lab = _cut(t)
+            if len(set(lab)) >= min_k:
+                return lab
+    elif k > max_k:
+        for t in (0.65, 0.70, 0.75, 0.80, 0.85, 0.90):
+            lab = _cut(t)
+            if len(set(lab)) == 1:
+                break
+            if 2 <= len(set(lab)) <= max_k:
+                return lab
+    return lab
+
+
+def stale_characters(item_id: str, characters: list) -> list:
+    """Auto-created garbage characters from previous runs of ``item_id``.
+
+    Old versions clustered per-window ECAPA embeddings, producing hundreds of
+    "说话人N" roles (one per window).  Re-running recognition would otherwise
+    keep those stale roles in the pool.  A character is safe to drop when it is
+    auto-named (说话人N), only ever attached to this item's labels, never merged
+    / reused (emb_count <= 1) and not trained (no ``exp``).  Returns the list of
+    characters that should be removed before re-binding.
+    """
+    prefix = f"{item_id}:"
+    out = []
+    for c in characters:
+        if c.get("exp"):
+            continue  # trained model attached -> keep
+        labels = c.get("speakerLabels") or []
+        if not labels:
+            continue
+        if not c.get("name", "").startswith("\u8bf4\u8bdd\u4eba"):
+            continue
+        if int(c.get("emb_count") or 1) > 1:
+            continue
+        if all(lb.startswith(prefix) for lb in labels):
+            out.append(c)
+    return out
 
 
 def generate_speakers(
@@ -245,84 +304,135 @@ def generate_speakers(
     *,
     progress_cb=None,
 ):
-    """Label speaker segments with windowed embeddings.
+    """Label speaker segments from whisper subtitles.
 
-    subs: [{start, end, text, ...}] (whisper timed segments, may be unsorted).
-    Each subtitle is sub-sampled into sliding windows; window embeddings are
-    clustered and ``speaker_segments`` is emitted at window-run granularity so a
-    subtitle that mixes two speakers yields two segments. Returns
-    {"speaker_segments": [{start,end,label}], "quality": "ecapa"|"mfcc",
-     "total": n, "labeled": k, "mixed": m, "n_speakers": s,
-     "label_embeddings": {label: emb}, "sub_labels": [{label,mixed}, ...]}.
+    Robust two-level pipeline that avoids both under- and over-fragmentation:
+
+      1. compute short sliding-window ECAPA embeddings inside each subtitle,
+      2. AVERAGE the windows per subtitle into one stable subtitle embedding
+         (short-window ECAPA on BGM-laden anime audio is too noisy to cluster
+         directly -- it used to produce one label per window, e.g. 999 roles
+         for a single video),
+      3. cluster the stable subtitle embeddings with an adaptive cosine cutoff
+         -> a sane number of speakers (default ~3-15),
+      4. vote each subtitle's windows against the speaker centroids: a clean
+         subtitle yields one speaker segment; a genuinely two-speaker subtitle
+         (whisper often merges a dialogue line) is split at window level and
+         flagged ``mixed`` so it stays unassigned for manual correction.
+
+    Returns {"speaker_segments": [{start,end,label}], "quality", "total",
+             "labeled", "mixed", "n_speakers", "label_embeddings",
+             "sub_labels": [{label,mixed}]}.
     """
     _init_runtime()
     mono, sr = read_mono16k(wav_path)
     total = len(subs)
 
     def _collect(emb_fn):
-        windows = []
-        n_total = max(1, total)
+        win = []
         for i, s in enumerate(subs):
             if progress_cb and total:
-                progress_cb(0.1 + 0.7 * i / n_total)
+                progress_cb(0.1 + 0.7 * i / max(1, total))
             for ws, we in _window_ranges(s["start"], s["end"]):
                 emb = emb_fn(mono, sr, ws, we)
                 if emb is not None:
-                    windows.append((ws, we, emb))
-        return windows
+                    win.append((i, ws, we, emb))
+        return win
 
     quality = "ecapa"
-    windows = []
+    windows: list = []
     try:
         windows = _collect(_ecapa_embedding)
     except Exception:  # noqa: BLE001
         quality = "mfcc"
         windows = _collect(_mfcc_embedding)
 
-    embeds = [w[2] for w in windows]
-    clusters = _cluster_labels(embeds) if embeds else []
+    # subtitle-level averaged embeddings (stable) -> cluster speakers;
+    # ``acc`` keeps (ws, we, emb) per subtitle for later window voting.
+    acc: dict[int, list] = {}
+    for i, ws, we, e in windows:
+        acc.setdefault(i, []).append((ws, we, e))
+    sub_embs = [None] * total
+    for i, vecs in acc.items():
+        sub_embs[i] = np.mean(np.stack([v[2] for v in vecs]), axis=0)
 
-    # renumber clusters by first occurrence order
-    order = {}
-    next_no = 0
-    for c in clusters:
-        if c not in order:
-            order[c] = next_no
-            next_no += 1
-    n_speakers = next_no
+    valid = [i for i in range(total) if sub_embs[i] is not None]
+    clusters = _cluster_labels([sub_embs[i] for i in valid]) if valid else []
 
-    label_of = {}
-    for i, c in enumerate(clusters):
-        label_of[i] = "\u8bf4\u8bdd\u4eba%d" % (order[c] + 1)  # 说话人N
+    # renumber cluster ids by first appearance (time order)
+    order: dict[int, int] = {}
+    for j, i in enumerate(sorted(valid, key=lambda i: (subs[i]["start"], subs[i]["end"]))):
+        c = clusters[j]
+        order.setdefault(c, len(order))
+    n_speakers = len(order)
+    label_of_sub = {
+        i: "\u8bf4\u8bdd\u4eba%d" % (order[c] + 1) for i, c in zip(valid, clusters)
+    }
 
-    # window-run speaker segments (finer than subtitles), in time order
-    ordered = sorted(range(len(windows)), key=lambda i: (windows[i][0], windows[i][1]))
-    runs = []
-    for i in ordered:
-        ws, we, _ = windows[i]
-        lb = label_of.get(i)
-        if lb is None:
+    # speaker centroids (normalized) -> label embeddings for cross-material matching
+    label_embeddings: dict[str, np.ndarray] = {}
+    for lb, cid in label_of_sub.items():
+        m = sub_embs[lb]
+        norm = float(np.linalg.norm(m)) + 1e-9
+        label_embeddings.setdefault(cid, np.zeros_like(m))
+        label_embeddings[cid] = label_embeddings[cid] + m / norm
+    for cid in label_embeddings:
+        m = label_embeddings[cid]
+        label_embeddings[cid] = m / (float(np.linalg.norm(m)) + 1e-9)
+
+    def _nearest_lb(e: np.ndarray) -> str:
+        best, best_sim = None, -1.0
+        for cid, cemb in label_embeddings.items():
+            sim = _cos(e, cemb)
+            if sim > best_sim:
+                best, best_sim = cid, sim
+        return best
+
+    # per-subtitle window votes -> speaker_segments + mixed flag
+    speaker_segments: list = []
+    sub_labels: list = []
+    mixed_count = 0
+    for i in range(total):
+        s = subs[i]
+        cid = label_of_sub.get(i)
+        vecs = acc.get(i, [])
+        if cid is None or not vecs:
+            sub_labels.append({"label": cid, "mixed": False})
             continue
-        if runs and runs[-1]["label"] == lb and (ws - runs[-1]["end"]) <= _HOP * 0.75:
-            runs[-1]["end"] = max(runs[-1]["end"], we)
+        votes: dict[str, int] = {}
+        for _ws, _we, e in vecs:
+            nlb = _nearest_lb(e)
+            votes[nlb] = votes.get(nlb, 0) + 1
+        top = sorted(votes.items(), key=lambda kv: -kv[1])
+        dom = top[0][0]
+        second = top[1][0] if len(top) > 1 else None
+        second_share = (top[1][1] / len(vecs)) if (len(top) > 1 and vecs) else 0.0
+        mixed = bool(second is not None and second != dom and len(vecs) >= 2
+                     and second_share >= 0.30)
+        if mixed:
+            # emit window-level runs so downstream dominant_label() sees the
+            # real second speaker (kept unassigned for manual correction)
+            mixed_count += 1
+            runs: list = []
+            for ws, we, e in vecs:
+                nlb = _nearest_lb(e)
+                if runs and runs[-1]["label"] == nlb and (ws - runs[-1]["end"]) <= _HOP * 0.75:
+                    runs[-1]["end"] = max(runs[-1]["end"], we)
+                else:
+                    runs.append({"start": round(float(ws), 3), "end": round(float(we), 3),
+                                 "label": nlb})
+            speaker_segments.extend(runs)
         else:
-            runs.append({"start": round(float(ws), 3), "end": round(float(we), 3),
-                         "label": lb})
+            speaker_segments.append({"start": round(float(s["start"]), 3),
+                                     "end": round(float(s["end"]), 3), "label": dom})
+        sub_labels.append({"label": dom, "mixed": bool(mixed)})
 
-    # per-subtitle binding: dominant label + mixed flag
-    sub_labels = []
-    for s in subs:
-        lb, mixed = dominant_label(s["start"], s["end"], runs)
-        sub_labels.append({"label": lb, "mixed": bool(mixed)})
+    speaker_segments.sort(key=lambda x: (x["start"], x["end"]))
     labeled = sum(1 for x in sub_labels if x["label"])
-    mixed_count = sum(1 for x in sub_labels if x["mixed"])
-
-    label_embeddings = _label_embeddings(
-        list(range(len(clusters))), clusters, label_of, embeds)
     if progress_cb:
         progress_cb(1.0)
     return {
-        "speaker_segments": runs,
+        "speaker_segments": speaker_segments,
         "quality": quality,
         "total": total,
         "labeled": labeled,

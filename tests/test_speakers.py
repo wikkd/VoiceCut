@@ -154,9 +154,9 @@ def test_match_labels_reuses_existing_label() -> None:
 
 
 def test_window_ranges_coverage() -> None:
-    assert list(speakers._window_ranges(0, 1.0)) == [(0.0, 0.8), (0.4, 1.0)]
+    assert list(speakers._window_ranges(0, 1.0)) == [(0.0, 1.0), (0.5, 1.0)]
     rng = list(speakers._window_ranges(0, 2.0))
-    assert rng[0] == (0.0, 0.8) and rng[-1][1] == 2.0
+    assert rng[0] == (0.0, 1.4) and rng[-1][1] == 2.0
     assert all(rng[i + 1][0] < rng[i][1] for i in range(len(rng) - 1))  # overlapping
     assert list(speakers._window_ranges(0, 0.2)) == []  # too short
 
@@ -180,26 +180,38 @@ def test_dominant_label_tiny_overlap_not_mixed() -> None:
 
 
 def test_generate_splits_mixed_subtitle(monkeypatch, tmp_path: Path) -> None:
-    """Whisper merges two speakers into ONE subtitle -> windowing splits them."""
+    """A whisper subtitle that merges two speakers is flagged mixed, not merged
+    into one character; surrounding single-speaker subtitles map to 2 roles."""
     wav = tmp_path / "mix.wav"
     sr = 16000
-    n = sr * 2
+    n = sr * 12
     t = np.arange(n) / sr
-    sig = np.where(t < 1.0, np.sin(2 * np.pi * 180 * t), np.sin(2 * np.pi * 420 * t))
+    sig = np.sin(2 * np.pi * 180 * t)  # placeholder tone (fake embeddings are patched)
     sf.write(str(wav), sig.astype(np.float32), sr)
-    subs = [{"start": 0.0, "end": 2.0}]
+    subs = [
+        {"start": 0.0, "end": 3.0},    # speaker A only
+        {"start": 4.0, "end": 8.0},    # A (4-6.5s) then B (6.5-8s) -> mixed
+        {"start": 9.0, "end": 12.0},   # speaker B only
+    ]
 
     def fake_emb(mono, sr, start, end):
-        return np.array([1.0, 0.0, 0.0]) if (start + end) / 2 < 1.0 else np.array([0.0, 1.0, 0.0])
+        mid = (start + end) / 2
+        if mid < 6.5:
+            return np.array([1.0, 0.0, 0.0])  # A
+        return np.array([0.0, 1.0, 0.0])      # B
 
     monkeypatch.setattr(speakers, "_ecapa_embedding", fake_emb)
     res = speakers.generate_speakers(str(wav), subs)
     assert res["n_speakers"] == 2
-    assert len(res["speaker_segments"]) == 2
-    assert res["speaker_segments"][0]["label"] != res["speaker_segments"][1]["label"]
-    assert res["sub_labels"][0]["mixed"] is True
     assert len(res["label_embeddings"]) == 2
-    assert res["total"] == 1 and res["labeled"] == 1 and res["mixed"] == 1
+    assert res["sub_labels"][0]["mixed"] is False
+    assert res["sub_labels"][1]["mixed"] is True   # merged subtitle flagged
+    assert res["sub_labels"][2]["mixed"] is False
+    assert res["mixed"] == 1
+    assert res["total"] == 3 and res["labeled"] == 3
+    # the mixed subtitle emits a second-speaker run so it is not silently merged
+    labels = {s["label"] for s in res["speaker_segments"]}
+    assert len(labels) == 2
 
 
 def test_bind_segments_mixed_not_auto_bound() -> None:
@@ -228,3 +240,42 @@ def test_bind_segments_keeps_manual_character() -> None:
     out, _mixed = speakers.bind_segments(segs, spk, {"说话人1": "c1"})
     assert out[0]["speakerLabel"] == "说话人1"
     assert out[0]["characterId"] == "manual"  # manual assignment preserved
+
+
+def test_stale_characters_removes_only_item_garbage() -> None:
+    chars = [
+        {"id": "c1", "name": "说话人1", "speakerLabels": ["i1:说话人1"], "emb_count": 1},
+        {"id": "c2", "name": "说话人2", "speakerLabels": ["i1:说话人2", "i2:说话人2"], "emb_count": 2},  # merged -> keep
+        {"id": "c3", "name": "说话人3", "speakerLabels": ["i1:说话人3"], "emb_count": 1, "exp": "exp3"},  # trained -> keep
+        {"id": "c4", "name": "マドカ", "speakerLabels": ["i1:说话人4"], "emb_count": 1},  # renamed -> keep
+        {"id": "c5", "name": "说话人5", "speakerLabels": ["i2:说话人5"], "emb_count": 1},  # other item -> keep
+    ]
+    stale = speakers.stale_characters("i1", chars)
+    assert [c["id"] for c in stale] == ["c1"]
+    assert len(chars) == 5  # helper is pure: original list untouched
+
+
+def test_stale_characters_no_embedding_chars_kept() -> None:
+    # MFCC-era characters carry no embedding / emb_count -> still cleaned if
+    # auto-named and single-item (they are the legacy garbage we want gone)
+    chars = [{"id": "c1", "name": "说话人1", "speakerLabels": ["i1:说话人1"]}]
+    assert [c["id"] for c in speakers.stale_characters("i1", chars)] == ["c1"]
+    # real ECAPA-era garbage (embedding + emb_count=1, single-item) is also stale
+    chars2 = [{"id": "c2", "name": "说话人2", "speakerLabels": ["i1:说话人2"],
+               "embedding": "AAAA", "emb_count": 1}]
+    assert [c["id"] for c in speakers.stale_characters("i1", chars2)] == ["c2"]
+
+
+def test_cluster_adaptive_merges_noise() -> None:
+    """Noisy per-window-like embeddings must NOT collapse to one-per-vector."""
+    rng = np.random.default_rng(0)
+    # 4 speaker centres + gaussian noise around each
+    centres = np.array([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+    X = []
+    for c in centres:
+        for _ in range(25):
+            v = c + rng.normal(0, 0.15, 4)
+            X.append(v / (np.linalg.norm(v) + 1e-9))
+    labels = speakers._cluster_labels(X)
+    k = len(set(labels))
+    assert 2 <= k <= 8, f"expected a sane cluster count, got {k}"

@@ -1196,7 +1196,10 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
         const mixed = result.mixed_segments || result.mixed || 0;
-        toast(`说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`);
+        const cleaned = result.cleaned || 0;
+        let msg = `说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
+        if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
+        toast(msg);
       });
     } catch (e) { toast("说话人识别启动失败: " + e.message, 6000); }
   }
