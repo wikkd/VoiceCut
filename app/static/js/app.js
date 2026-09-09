@@ -900,11 +900,25 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
     $("#sel-info").textContent = fmtSel(seg);
   }
   async function auditionSegment(item, seg) {
-    if (state.currentItem && state.currentItem.id !== item.id) await selectItem(item);
+    if (!state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.ws.play();
     state.auditioning = { start: seg.start, end: seg.end };
+    scrollSegRow(item.id, seg.id);
+  }
+  // 从角色池/素材库等位置试听时：先回到剪辑页并选中对应素材再播放
+  async function gotoEditAndPlay(item, seg) {
+    closePool();
+    setPage("edit");
+    await auditionSegment(item, seg);
+  }
+  function scrollSegRow(itemId, segId) {
+    const segs = segsFor(itemId);
+    const i = segs.findIndex(s => s.id === segId);
+    if (i < 0) return;
+    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   // ── 角色池 / 说话人自动匹配 ──
@@ -1117,12 +1131,12 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
   function poolAudition(cid) {
     const rows = charSegs(cid);
     if (!rows.length) return toast("该角色暂无片段");
-    auditionSegment(rows[0].item, rows[0].seg);
+    gotoEditAndPlay(rows[0].item, rows[0].seg);
   }
   function poolPlaySeg(segId, itemId) {
     const item = state.items.find(x => x.id === itemId);
     const seg = item ? segsFor(item.id).find(s => s.id === segId) : null;
-    if (item && seg) auditionSegment(item, seg);
+    if (item && seg) gotoEditAndPlay(item, seg);
   }
   function poolRename(cid) {
     const ch = charById(cid); if (!ch) return;

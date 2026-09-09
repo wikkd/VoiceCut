@@ -213,11 +213,43 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       if (_i >= 0) { _a.splice(_i, 1); vc.state.dirtyItems.add(itId); }
       await vc.saveProjectNow();
       vc.renderSegments();
+      // 角色池试听 → 跳转剪辑页并播放（回归：poolAudition 需先关掉角色池子页面、
+      // 切回剪辑页、选中素材再 ws.play()）。用全新角色绑定当前素材的片段，
+      // 保证 rows[0] 就在当前素材上；audSync 同步读可证明 auditionSegment 已执行
+      // （headless 下无音频设备会让 auditionCheck 立即触发，故不依赖最终 auditioning 值）。
+      const audCh = { id: "char_feat_aud_" + Date.now(), name: "回归角色", color: "#46a758",
+                      speakerLabels: [], created: Date.now() };
+      vc.state.characters.push(audCh);
+      const audSeg = vc.newSegment(1, 4, "aud");
+      audSeg.characterId = audCh.id;
+      (vc.state.segmentsByItem.get(itId) || []).push(audSeg);
+      vc.renderSegments(); vc.renderPool();
+      await new Promise(r => setTimeout(r, 300));
+      const audBtn = document.querySelector('#pool-grid .pool-card[data-pool-char="' + audCh.id + '"] .pool-aud');
+      let poolAud = null;
+      if (audBtn) {
+        audBtn.click();
+        const audSync = vc.state.auditioning ? { start: vc.state.auditioning.start, end: vc.state.auditioning.end } : null;
+        await new Promise(r => setTimeout(r, 300));
+        poolAud = {
+          poolClosed: document.querySelector('#pool-view').classList.contains('hidden'),
+          editVisible: !document.querySelector('#page-edit').classList.contains('hidden'),
+          currentItemOk: vc.state.currentItem && vc.state.currentItem.id === itId,
+          wsExists: !!vc.state.ws,
+          audSync,
+        };
+      }
+      // 清掉临时角色/片段（不落库）
+      // 清掉临时角色/片段（不落库），避免影响后续 PERSIST 的 charCount 断言
+      vc.state.characters = vc.state.characters.filter(c => c.id !== audCh.id);
+      const _audList = vc.state.segmentsByItem.get(itId) || [];
+      const _ai = _audList.findIndex(s => s.id === audSeg.id);
+      if (_ai >= 0) _audList.splice(_ai, 1);
       return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
                mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: (vc.state.segmentsByItem.get(itId) || []).length,
                hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle,
                a1, hasPerSpeaker, hasValRatio, hasAutosplitModal, hasAutosplitMenu, hasAsStart,
-               hasUndoApi, hasUndoMenu, undoRestored: nAfter === nBefore };
+               hasUndoApi, hasUndoMenu, undoRestored: nAfter === nBefore, poolAud };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
 
