@@ -78,12 +78,12 @@
 
   <!-- ② 高频工具栏 -->
   <div id="toolbar">
-    <button id="btn-import" class="btn primary">📂 导入文件</button>
-    <button id="btn-bilibili" class="btn">🔗 从 URL 导入</button>
-    <button id="btn-identify-speakers" class="btn">👥 识别说话人</button>
-    <button id="btn-auto-analyze" class="btn" title="导入后自动生成字幕并识别说话人">⚡ 自动分析</button>
-    <button id="btn-pool" class="btn">🎭 角色池</button>
-    <button id="btn-export-dataset" class="btn">📦 导出训练集</button>
+    <button id="btn-import" class="btn primary">导入文件</button>
+    <button id="btn-bilibili" class="btn">从 URL 导入</button>
+    <button id="btn-identify-speakers" class="btn">识别说话人</button>
+    <button id="btn-auto-analyze" class="btn" title="导入后自动生成字幕并识别说话人">自动分析</button>
+    <button id="btn-pool" class="btn">角色池</button>
+    <button id="btn-export-dataset" class="btn">导出训练集</button>
     <span class="spacer"></span>
     <label class="chip" title="当前项目">项目 <select id="project-select"></select></label>
   </div>
@@ -136,11 +136,11 @@
         <div class="menu sub-menu">
           <button class="menu-title chip">字幕 ▾</button>
           <div class="menu-items">
-            <button id="btn-sub-open">📄 加载字幕文件…</button>
-            <button id="btn-sub-generate">🎙 生成字幕（Whisper）</button>
+            <button id="btn-sub-open">加载字幕…</button>
+            <button id="btn-sub-generate">生成字幕</button>
           </div>
         </div>
-        <button id="btn-sub-add" class="chip primary">＋ 当前字幕加片段</button>
+        <button id="btn-sub-add" class="chip primary">加为片段</button>
         <button class="grip-close" data-close-panel="sub" title="隐藏面板">×</button>
       </div>
       <div class="panel-body sub-body">
@@ -160,8 +160,8 @@
     <section id="segments-panel" class="panel" data-panel="seg">
       <div class="panel-grip">
         <span class="grip-title">片段列表 <small id="seg-count"></small></span>
-        <button id="btn-add-seg" class="chip">＋ 选区加片段</button>
-        <button id="btn-transcribe" class="chip">🔤 批量转写</button>
+        <button id="btn-add-seg" class="chip">加片段</button>
+        <button id="btn-transcribe" class="chip">批量转写</button>
         <div class="menu seg-menu">
           <button class="menu-title chip" title="更多操作">⋯</button>
           <div class="menu-items">
@@ -190,7 +190,7 @@
             <tbody id="seg-tbody"></tbody>
           </table>
         </div>
-        <div id="seg-empty" class="muted">在波形上拖拽出选区，点「＋ 选区加片段」加入训练片段</div>
+        <div id="seg-empty" class="muted">在波形上拖拽出选区，点「加片段」加入训练片段</div>
       </div>
     </section>
 
@@ -209,8 +209,8 @@
       <button id="btn-next" class="chip" title="跳到结尾">⏭</button>
     </div>
     <div class="tr-group">
-      <button id="btn-loop" class="chip" title="循环播放选区 (L)">🔁 循环</button>
-      <button id="btn-play-selection" class="chip" title="播放选区">▶ 选区</button>
+      <button id="btn-loop" class="chip" title="循环播放选区 (L)">循环</button>
+      <button id="btn-play-selection" class="chip" title="播放选区">选区</button>
     </div>
     <div class="tr-info">
       <span>播放头 <b id="cur-time">0:00.0</b></span>
@@ -226,19 +226,19 @@
 
   <!-- 页面切换（DaVinci 式：素材库 / 剪辑 / 训练交付） -->
   <nav id="pagebar">
-    <button class="page-btn" data-page="media">🗂 素材库</button>
-    <button class="page-btn active" data-page="edit">✂ 剪辑</button>
-    <button class="page-btn" data-page="train">🚀 训练交付</button>
+    <button class="page-btn" data-page="media">素材库</button>
+    <button class="page-btn active" data-page="edit">剪辑</button>
+    <button class="page-btn" data-page="train">训练交付</button>
   </nav>
 
   <!-- 素材库页 -->
   <section id="page-media" class="vc-page hidden">
     <div class="page-head">
-      <span class="page-title">🗂 素材库</span>
-      <button id="btn-import2" class="btn primary">📂 导入文件</button>
-      <button id="btn-url2" class="btn">🔗 从 URL 导入</button>
-      <button id="btn-auto-analyze2" class="btn" title="导入后自动生成字幕并识别说话人">⚡ 自动分析</button>
-      <button id="btn-pool2" class="btn">🎭 角色池</button>
+      <span class="page-title">素材库</span>
+      <button id="btn-import2" class="btn primary">导入文件</button>
+      <button id="btn-url2" class="btn">从 URL 导入</button>
+      <button id="btn-auto-analyze2" class="btn" title="导入后自动生成字幕并识别说话人">自动分析</button>
+      <button id="btn-pool2" class="btn">角色池</button>
       <span class="spacer"></span>
       <label class="chip">项目 <select id="project-select2"></select></label>
     </div>
@@ -251,10 +251,10 @@
   <!-- 训练交付页（DaVinci Deliver 风格） -->
   <section id="page-train" class="vc-page hidden">
     <div class="page-head">
-      <span class="page-title">🚀 训练交付 · GPT-SoVITS</span>
+      <span class="page-title">训练交付 · GPT-SoVITS</span>
       <span id="train-gpu-state" class="chip">尚未加载</span>
       <span class="spacer"></span>
-      <button id="btn-train-refresh" class="btn">↻ 刷新</button>
+      <button id="btn-train-refresh" class="btn">刷新</button>
     </div>
     <div id="train-grid">
       <aside id="train-roles">
@@ -299,11 +299,11 @@
   <!-- 角色池子页面 -->
   <section id="pool-view" class="hidden">
     <header id="pool-header">
-      <button id="pool-back" class="btn">← 返回</button>
+      <button id="pool-back" class="btn">返回</button>
       <span class="pool-title">角色池 · <b id="pool-item-name"></b></span>
       <span class="spacer"></span>
-      <button id="pool-identify" class="btn">👥 识别说话人</button>
-      <button id="pool-new" class="btn">＋ 新建角色</button>
+      <button id="pool-identify" class="btn">识别说话人</button>
+      <button id="pool-new" class="btn">新建角色</button>
       <button id="pool-merge" class="btn">合并选中 <b id="pool-merge-count">0</b></button>
       <button id="pool-close" class="btn" title="关闭">×</button>
     </header>

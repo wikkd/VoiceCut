@@ -359,7 +359,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     const icon = state.playing ? "⏸" : "▶";
     $("#btn-play2").textContent = icon;
     $("#btn-loop").classList.toggle("primary", state.loop);
-    $("#btn-loop").textContent = state.loop ? "🔁 循环中" : "🔁 循环";
+    $("#btn-loop").textContent = state.loop ? "循环中" : "循环";
   }
   function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
   function playSelection() {
@@ -619,7 +619,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
         <td>${fmtT(seg.start)} ~ ${fmtT(seg.end)}</td>
         <td>${fmtDur(seg.end - seg.start)}</td>
         <td><span class="tag ${tagCls}">${tagTxt}</span></td>
-        <td><button class="chip seg-aud" data-i="${i}">▶ 试听</button></td>
+        <td><button class="chip seg-aud" data-i="${i}">试听</button></td>
         <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…"></td>
         <td><select class="seg-lang" data-i="${i}">
           ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
@@ -893,7 +893,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
       </div>
       ${ch && (ch.speakerLabels || []).length ? `<div class="pool-labels">自动标签: ${ch.speakerLabels.map(esc).join("、")}</div>` : ""}
       <div class="pool-actions">
-        ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">▶ 试听</button>
+        ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">试听</button>
           <button class="chip pool-rename" data-char="${ch.id}">重命名</button>
           <button class="chip pool-del danger" data-char="${ch.id}">删除</button>`}
       </div>
@@ -1021,7 +1021,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
       const b = $(sel);
       if (b) {
         b.classList.toggle("btn-auto-on", on);
-        b.textContent = on ? "⚡ 自动分析·开" : "⚡ 自动分析·关";
+        b.textContent = on ? "自动分析·开" : "自动分析·关";
       }
     });
   }
@@ -1979,7 +1979,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
     const runCard = document.createElement("div");
     runCard.className = "step-card";
     runCard.style.borderColor = "var(--accent)";
-    runCard.innerHTML = `<span class="st-name" style="font-weight:700">▶ 一键全链</span>
+    runCard.innerHTML = `<span class="st-name" style="font-weight:700">一键全链</span>
       <span class="st-state">导出 → 预处理 → S2 → S1（串行）</span>
       <span class="st-actions"><button id="btn-train-run" class="btn primary" ${running ? "disabled" : ""}>${running ? "训练中" : "开始训练"}</button></span>`;
     runCard.querySelector("button").addEventListener("click", () => startTrain("pipeline"));
@@ -2082,7 +2082,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
         <select id="tf-ref">${refs.length ? refs.map((c, i) => `<option value="${i}">${esc(c.wav)}</option>`).join("") : '<option value="">（无导出片段）</option>'}</select>
       </label>
       <label>合成文本 <textarea id="tf-text" placeholder="输入要合成的文本…"></textarea></label>
-      <button id="btn-train-infer" class="btn primary" ${trained ? "" : "disabled"}>▶ 合成试听</button>
+      <button id="btn-train-infer" class="btn primary" ${trained ? "" : "disabled"}>合成试听</button>
       <audio id="train-infer-audio" class="train-infer-audio" controls hidden></audio>
       <div class="infer-ref">${trained ? "" : "需要先训练出 GPT + SoVITS 权重才能试听"}</div>
     `;
@@ -2134,7 +2134,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
       if (audio) { audio.src = j.audio_url; audio.hidden = false; audio.play().catch(() => {}); }
       toast("合成完成");
     } catch (e) { toast("合成失败: " + e.message, 8000); }
-    if (btn) { btn.disabled = false; btn.textContent = "▶ 合成试听"; }
+    if (btn) { btn.disabled = false; btn.textContent = "合成试听"; }
   }
 
   // ── 启动 ───────────────────────────────────────────────
