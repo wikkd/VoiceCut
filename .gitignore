@@ -43,3 +43,11 @@ GPT-SoVITS/**/*.wav
 GPT-SoVITS/**/*.mp3
 GPT-SoVITS/*.wav
 GPT-SoVITS/*.mp3
+
+# ── GPT-SoVITS 词典/缓存（新克隆需运行 GPT-SoVITS 下载/生成脚本补全）────
+GPT-SoVITS/GPT_SoVITS/text/ja_userdic/
+GPT-SoVITS/GPT_SoVITS/text/cmudict*.rep
+GPT-SoVITS/GPT_SoVITS/text/engdict*.rep
+GPT-SoVITS/GPT_SoVITS/text/engdict_cache.pickle
+GPT-SoVITS/GPT_SoVITS/text/g2pw/polyphonic*
+GPT-SoVITS/GPT_SoVITS/text/namedict_cache.pickle

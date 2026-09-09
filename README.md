@@ -49,6 +49,14 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 - `docs/DEVELOPMENT.md` — 开发文档（架构 / 模块职责 / API / 快捷键）
 - `docs/TESTING.md` — 测试文档（环境 / 单元 / 回归）
 
+## 注意：GPT-SoVITS 词典
+
+仓库内的 GPT-SoVITS/ 只跟踪源码，**日语/英语词典与缓存已从版本库移除**
+（	ext/ja_userdic/、cmudict*.rep、ngdict*、g2pw/polyphonic*、
+
+amedict_cache.pickle）。首次在新克隆上运行 GPT-SoVITS 文本处理前，
+请运行其下载/生成脚本补全词典（本地 junction 目录不受影响）。
+
 ## 当前阶段状态
 
 - [x] 01 阶段：git 环境 / 项目结构 / 开发文档
