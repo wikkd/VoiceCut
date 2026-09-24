@@ -245,7 +245,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       const _audList = vc.state.segmentsByItem.get(itId) || [];
       const _ai = _audList.findIndex(s => s.id === audSeg.id);
       if (_ai >= 0) _audList.splice(_ai, 1);
-      return { ok: true, poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
+      // 把关键可见性并入 ok：此前只打印不判定，曾漏掉右键重定向菜单打不开的回归
+      return { ok: poolVisible && redirVisible && mediaMenuVisible && bbIsTextarea && cancelBtn && hasAutosplitMenu,
+               poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
                mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: (vc.state.segmentsByItem.get(itId) || []).length,
                hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle,
                a1, hasPerSpeaker, hasValRatio, hasAutosplitModal, hasAutosplitMenu, hasAsStart,

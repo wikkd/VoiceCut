@@ -14,6 +14,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
 import { createSegments } from "/static/js/modules/segments.js";
 import { createPool } from "/static/js/modules/pool.js";
 import { createTasks } from "/static/js/modules/tasks.js";
+import { createStore } from "/static/js/modules/store.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -130,8 +131,8 @@ import { createTasks } from "/static/js/modules/tasks.js";
   }
 
   async function selectProject(proj) {
-    if (state.dirtyItems.size) await saveProjectNow();
-    if (state.poolDirty) await savePoolNow();
+    if (state.dirtyItems.size) await store.saveProjectNow();
+    if (state.poolDirty) await store.savePoolNow();
     state.currentProject = proj;
     try { localStorage.setItem(LS_PROJECT, proj.id); } catch (e) {}
     state.currentItem = null;
@@ -155,7 +156,7 @@ import { createTasks } from "/static/js/modules/tasks.js";
 
   async function loadAllItemData() {
     const items = state.items || [];
-    await Promise.all(items.map(item => loadProject(item, true)));
+    await Promise.all(items.map(item => store.loadProject(item, true)));
   }
 
   function clearWorkbench() {
@@ -233,169 +234,6 @@ import { createTasks } from "/static/js/modules/tasks.js";
     } catch (e) { toast("删除失败: " + e.message, 6000); }
   }
 
-  // ── 角色池 / 说话人自动匹配 ──
-  let segCounter = 0;
-  function uid(prefix) { return prefix + "_" + Date.now().toString(36) + "_" + (++segCounter).toString(36); }
-
-  function paletteNext() { return CHAR_PALETTE[state.characters.length % CHAR_PALETTE.length]; }
-  function charById(id) { return state.characters.find(c => c.id === id) || null; }
-
-  function newSegment(start, end, text, language) {
-    const sp = autoCharacterFor(start, end);
-    return { id: uid("s"), start, end, text: text || "", language: language || "JP",
-             speakerLabel: sp.speakerLabel, characterId: sp.characterId, mixed: !!sp.mixed };
-  }
-
-  function speakerLabelAt(t) {
-    for (const s of state.speakerSegs) if (s.label && t >= s.start && t < s.end) return s.label;
-    return null;
-  }
-  function mixedAtRange(start, end) {
-    const cover = new Map();
-    for (const s of state.speakerSegs) {
-      if (!s.label) continue;
-      const ov = Math.min(end, s.end) - Math.max(start, s.start);
-      if (ov > 0) cover.set(s.label, (cover.get(s.label) || 0) + ov);
-    }
-    if (cover.size < 2) return false;
-    const items = Array.from(cover.entries()).sort((a, b) => b[1] - a[1]);
-    const labeled = items.reduce((a, x) => a + x[1], 0);
-    const second = items[1][1];
-    return second / labeled >= 0.35 && second >= 0.25;
-  }
-  function autoCharacterFor(start, end) {
-    let best = null, bestOv = 0;
-    for (const s of state.speakerSegs) {
-      if (!s.label) continue;
-      const ov = Math.min(end, s.end) - Math.max(start, s.start);
-      if (ov > bestOv) { bestOv = ov; best = s.label; }
-    }
-    const mixed = mixedAtRange(start, end);
-    if (!best) return { characterId: null, speakerLabel: null, mixed };
-    const key = (state.currentItem ? state.currentItem.id : "") + ":" + best;
-    const ch = state.characters.find(c => (c.speakerLabels || []).includes(key));
-    return { characterId: mixed ? null : (ch ? ch.id : null), speakerLabel: best, mixed };
-  }
-
-  async function loadProject(item, force) {
-    if (!force && state.segmentsByItem.has(item.id)) {
-      state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
-      return;
-    }
-    try {
-      const proj = await api(`/api/items/${item.id}/project`);
-      state.segmentsByItem.set(item.id, proj.segments || []);
-      state.speakerSegsByItem.set(item.id, proj.speaker_segments || []);
-    } catch (e) {
-      state.segmentsByItem.set(item.id, []);
-      state.speakerSegsByItem.set(item.id, []);
-    }
-    state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
-  }
-
-  let saveTimer = null;
-  let saveInFlight = false;
-  const dirtyVer = new Map();          // itemId -> 自增版本：避免覆盖保存期间产生的新改动
-  function markDirty(id) {
-    state.dirtyItems.add(id);
-    dirtyVer.set(id, (dirtyVer.get(id) || 0) + 1);
-  }
-  function scheduleSaveProject(itemId) {
-    const id = itemId || (state.currentItem ? state.currentItem.id : null);
-    if (id) markDirty(id);
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveProjectNow, 400);
-  }
-  async function saveProjectNow() {
-    const ids = Array.from(state.dirtyItems);
-    if (!ids.length || saveInFlight) return;
-    const verAt = new Map(ids.map(id => [id, dirtyVer.get(id) || 0]));
-    saveInFlight = true;
-    try {
-      await Promise.all(ids.map(id => api(`/api/items/${id}/project`, { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ segments: segments.segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] }) })));
-      // 仅当保存期间没有新的改动时才清除脏标记，避免静默丢改动
-      ids.forEach(id => {
-        if ((dirtyVer.get(id) || 0) === verAt.get(id)) {
-          state.dirtyItems.delete(id);
-          dirtyVer.delete(id);
-        }
-      });
-    } catch (e) {
-      toast("保存失败，改动已保留待重试: " + e.message, 6000);
-    } finally {
-      saveInFlight = false;
-    }
-  }
-
-  let poolTimer = null;
-  let poolInFlight = false;
-  let poolVer = 0;
-  function scheduleSavePool() {
-    state.poolDirty = true;
-    poolVer++;
-    if (poolTimer) clearTimeout(poolTimer);
-    poolTimer = setTimeout(savePoolNow, 400);
-  }
-  async function savePoolNow() {
-    if (!state.poolDirty || !state.currentProject || poolInFlight) return;
-    const projectId = state.currentProject.id;
-    const v = poolVer;
-    poolInFlight = true;
-    try {
-      await api(`/api/projects/${projectId}/characters`, { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ characters: state.characters }) });
-      if (poolVer === v) state.poolDirty = false;
-    } catch (e) {
-      toast("角色池保存失败，改动已保留待重试: " + e.message, 6000);
-    } finally {
-      poolInFlight = false;
-    }
-  }
-  // ── 撤销 / 重做（片段 + 角色池，快照式，刷新即清空） ──
-  const UNDO_MAX = 50;
-  const undoStack = [];
-  const redoStack = [];
-  function workspaceSnapshot() {
-    const segs = {};
-    state.segmentsByItem.forEach((list, id) => { segs[id] = JSON.parse(JSON.stringify(list || [])); });
-    return { segs, characters: JSON.parse(JSON.stringify(state.characters || [])) };
-  }
-  function pushUndo() {
-    undoStack.push(workspaceSnapshot());
-    if (undoStack.length > UNDO_MAX) undoStack.shift();
-    redoStack.length = 0;
-  }
-  function restoreSnapshot(snap) {
-    const segs = new Map();
-    Object.keys(snap.segs || {}).forEach(id => segs.set(id, snap.segs[id]));
-    state.segmentsByItem = segs;
-    state.characters = snap.characters || [];
-    state.selectedSegs = new Set();
-    state.poolMerge = new Set();
-    state.segmentsByItem.forEach((_, id) => markDirty(id));
-    state.poolDirty = true;
-    poolVer++;
-    segments.renderSegments();
-    pool.renderPool();
-    saveProjectNow();
-    savePoolNow();
-  }
-  function undo() {
-    if (!undoStack.length) return toast("没有可撤销的操作");
-    redoStack.push(workspaceSnapshot());
-    restoreSnapshot(undoStack.pop());
-    toast("已撤销");
-  }
-  function redo() {
-    if (!redoStack.length) return toast("没有可重做的操作");
-    undoStack.push(workspaceSnapshot());
-    restoreSnapshot(redoStack.pop());
-    toast("已重做");
-  }
-
   let focusedSeg = null;
   function setSegFocus(tr) {
     $$(".seg-row").forEach(r => r.style.outline = "");
@@ -444,8 +282,8 @@ import { createTasks } from "/static/js/modules/tasks.js";
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     if (e.target.classList.contains("seg-text")) {
-      if (!e.target.dataset.undoed) { e.target.dataset.undoed = "1"; pushUndo(); }
-      segs[i].text = e.target.value; scheduleSaveProject(itemId);
+      if (!e.target.dataset.undoed) { e.target.dataset.undoed = "1"; store.pushUndo(); }
+      segs[i].text = e.target.value; store.scheduleSaveProject(itemId);
     }
     segments.updateSegBadge(itemId, i);
   });
@@ -457,11 +295,11 @@ import { createTasks } from "/static/js/modules/tasks.js";
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     delete e.target.dataset.undoed;
-    if (!e.target.classList.contains("seg-text")) pushUndo();
-    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; scheduleSaveProject(itemId); }
+    if (!e.target.classList.contains("seg-text")) store.pushUndo();
+    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; store.scheduleSaveProject(itemId); }
     if (e.target.classList.contains("seg-speaker")) {
       segs[i].characterId = e.target.value || null;
-      scheduleSaveProject(itemId); segments.renderSegments();
+      store.scheduleSaveProject(itemId); segments.renderSegments();
     }
   });
   function showRedirectMenu(x, y, segIds) {
@@ -545,8 +383,8 @@ import { createTasks } from "/static/js/modules/tasks.js";
       "transcribe": () => io.openTranscribeModal(),
       "dataset-export": () => io.openDatasetModal(),
       "autosplit": () => showModal("#modal-autosplit"),
-      "undo": undo,
-      "redo": redo,
+      "undo": store.undo,
+      "redo": store.redo,
       "validate": segments.renderSegments,
       "zoom-in": () => waveform.zoomIn(),
       "zoom-out": () => waveform.zoomOut(),
@@ -577,10 +415,10 @@ import { createTasks } from "/static/js/modules/tasks.js";
       if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
-        if (e.shiftKey) redo(); else undo();
+        if (e.shiftKey) store.redo(); else store.undo();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); redo(); return; }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); store.redo(); return; }
 
       // 小键盘快进：−/+快退/快进 15 秒；数字区方向键(2/4/6/8)等效主方向键（兼容 NumLock 开关）
       const code = e.code || "";
@@ -606,12 +444,12 @@ import { createTasks } from "/static/js/modules/tasks.js";
         case "ArrowUp": case "ArrowDown": e.preventDefault(); waveform.adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
           if (state.selectedSegs.size) {
-            pushUndo();
+            store.pushUndo();
             (state.items || []).forEach(item => {
               const segs = segments.segsFor(item.id);
               const before = segs.length;
               const kept = segs.filter(s => !state.selectedSegs.has(s.id));
-              if (kept.length !== before) { segs.splice(0, segs.length, ...kept); scheduleSaveProject(item.id); }
+              if (kept.length !== before) { segs.splice(0, segs.length, ...kept); store.scheduleSaveProject(item.id); }
             });
             state.selectedSegs = new Set();
             segments.renderSegments();
@@ -665,10 +503,10 @@ import { createTasks } from "/static/js/modules/tasks.js";
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
       if (confirm("清空当前素材的全部片段？")) {
-        pushUndo();
+        store.pushUndo();
         segments.segsFor(state.currentItem.id).length = 0;
         state.selectedSegs = new Set();
-        scheduleSaveProject(); segments.renderSegments();
+        store.scheduleSaveProject(); segments.renderSegments();
       }
     });
     $("#btn-transcribe").addEventListener("click", () => io.openTranscribeModal());
@@ -724,7 +562,8 @@ import { createTasks } from "/static/js/modules/tasks.js";
   let io = null;         // 输入/输出模块实例（启动区由 createIo 创建）
   let waveform = null;   // 波形/播放模块实例（启动区由 createWaveform 创建）
   let segments = null;   // 片段列表模块实例（启动区由 createSegments 创建）
-  let tasks = null;      // 任务跟踪模块实例（启动区由 createTasks 创建，最先）
+  let store = null;      // 数据层模块实例（启动区由 createStore 创建，最先）
+  let tasks = null;      // 任务跟踪模块实例（启动区由 createTasks 创建）
   let pool = null;       // 角色池模块实例（启动区由 createPool 创建）
   const PAGE_KEY = "vc.page.v1";
   let currentPage = "edit";
@@ -750,30 +589,34 @@ import { createTasks } from "/static/js/modules/tasks.js";
   }
 
   // ── 启动 ───────────────────────────────────────────────
+  store = createStore({ api, toast, state, CHAR_PALETTE,
+    segsFor: (id) => segments.segsFor(id),
+    renderSegments: () => segments.renderSegments(),
+    renderPool: () => pool.renderPool() });
   tasks = createTasks({ $, api, toast, toastBusy, state,
     renderMediaList, refreshItems, loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
     renderSubs: () => subtitles.renderSubs(),
     selectItem: (item) => waveform.selectItem(item) });
   segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
-    state, toast, charById, newSegment, pushUndo, scheduleSaveProject, setPage,
+    state, toast, charById: store.charById, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject, setPage,
     closePool: () => pool.closePool(),
     selectItem: (item) => waveform.selectItem(item) });
   pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
-    needItem, charById, uid, paletteNext, pushUndo,
-    scheduleSaveProject, scheduleSavePool, loadAllItemData, segments, subtitles });
+    needItem, charById: store.charById, uid: store.uid, paletteNext: store.paletteNext, pushUndo: store.pushUndo,
+    scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool, loadAllItemData, segments, subtitles });
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
-    speakerLabelAt, segsFor: segments.segsFor, newSegment, pushUndo, scheduleSaveProject,
+    speakerLabelAt: store.speakerLabelAt, segsFor: segments.segsFor, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject,
     renderSegments: segments.renderSegments });
   training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask: tasks.trackTask });
   io = createIo({ $, api, state, toast, trackTask: tasks.trackTask, needItem,
     selectResultItem: tasks.selectResultItem, autoAnalyzeDone: tasks.autoAnalyzeDone,
-    showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
-    renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById, scheduleSaveProject,
+    showModal, hideModal, showResult, saveProjectNow: store.saveProjectNow, pushUndo: store.pushUndo, loadProject: store.loadProject,
+    renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById: store.charById, scheduleSaveProject: store.scheduleSaveProject,
     fmtSel, fmtT });
   waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
     WaveSurfer, Timeline, Regions, Minimap,
-    renderMediaList, loadProject, saveProjectNow, savePoolNow, renderSegments: segments.renderSegments,
+    renderMediaList, loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow, renderSegments: segments.renderSegments,
     subtitles });
   setupMenus();
   setupShortcuts();
@@ -811,11 +654,11 @@ import { createTasks } from "/static/js/modules/tasks.js";
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
     clearMultiRegions: waveform.clearMultiRegions,
-    loadProject, saveProjectNow, savePoolNow,
+    loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     openPool: pool.openPool, closePool: pool.closePool, renderPool: pool.renderPool,
-    undo, redo, pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
+    undo: store.undo, redo: store.redo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject, renameProject, deleteProject,
-    doIdentifySpeakers: pool.doIdentifySpeakers, newSegment,
+    doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
     autoAnalyzeDone: tasks.autoAnalyzeDone, attachActiveTasks: tasks.attachActiveTasks,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,
