@@ -11,6 +11,7 @@ import { createTraining } from "/static/js/modules/training.js";
 import { createSubtitles } from "/static/js/modules/subtitles.js";
 import { createIo } from "/static/js/modules/io.js";
 import { createWaveform } from "/static/js/modules/waveform.js";
+import { createSegments } from "/static/js/modules/segments.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -163,7 +164,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     const v = $("#video-preview"); if (v) v.removeAttribute("src");
     $("#empty-state").classList.remove("hidden");
     $("#sub-current").textContent = "—";
-    renderSegments(); subtitles.renderSubs(); renderPool();
+    segments.renderSegments(); subtitles.renderSubs(); renderPool();
     waveform.updateTransport(); waveform.updateSelUI(); waveform.updatePlayUI();
   }
 
@@ -223,147 +224,11 @@ import { createWaveform } from "/static/js/modules/waveform.js";
         waveform.updateSelUI();
         waveform.updateTransport();
         subtitles.renderSubs();
-        renderSegments();
+        segments.renderSegments();
       }
       await refreshItems();
       toast("已删除素材");
     } catch (e) { toast("删除失败: " + e.message, 6000); }
-  }
-
-  // ── 片段列表 ───────────────────────────────────────────
-  function segsFor(itemId) {
-    if (!state.segmentsByItem.has(itemId)) state.segmentsByItem.set(itemId, []);
-    return state.segmentsByItem.get(itemId);
-  }
-  function segIssues(seg) {
-    const issues = [];
-    if (seg.mixed) issues.push("混合");
-    const dur = seg.end - seg.start;
-    if (!seg.text.trim()) issues.push("空文本");
-    if (dur < SEG_MIN) issues.push(`过短(<${SEG_MIN}s)`);
-    if (dur > SEG_MAX) issues.push(`过长(>${SEG_MAX}s)`);
-    return issues;
-  }
-  function allSegs() {
-    const out = [];
-    (state.items || []).forEach(item => {
-      (segsFor(item.id) || []).forEach(seg => out.push({ item, seg }));
-    });
-    return out;
-  }
-  function charSegs(cid) {
-    return allSegs().filter(r => (cid ? r.seg.characterId === cid : !r.seg.characterId));
-  }
-  function updateSegBadge(itemId, i) {
-    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
-    if (!tr) return;
-    const segs = segsFor(itemId);
-    const seg = segs[i];
-    if (!seg) return;
-    const issues = segIssues(seg);
-    const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
-    const tagTxt = issues.length ? issues.join("，") : "合规";
-    const cell = tr.querySelector(".tag");
-    if (cell) { cell.className = "tag " + tagCls; cell.textContent = tagTxt; }
-    tr.classList.toggle("bad", issues.length > 0);
-    const ch = charById(seg.characterId);
-    tr.style.borderLeft = ch ? "4px solid " + ch.color : "";
-  }
-
-  function renderSegments() {
-    const tb = $("#seg-tbody");
-    const empty = $("#seg-empty");
-    tb.innerHTML = "";
-    const rows = allSegs();
-    $("#seg-count").textContent = rows.length ? `(${rows.length})` : "";
-    empty.classList.toggle("hidden", rows.length > 0);
-    rows.forEach((row) => {
-      const seg = row.seg, item = row.item;
-      const i = segsFor(item.id).indexOf(seg);
-      const issues = segIssues(seg);
-      const cls = issues.length ? "bad" : "";
-      const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
-      const tagTxt = issues.length ? issues.join("，") : "合规";
-      const ch = charById(seg.characterId);
-      const tr = document.createElement("tr");
-      tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "");
-      tr.dataset.item = item.id;
-      tr.dataset.i = i;
-      if (ch) tr.style.borderLeft = "4px solid " + ch.color;
-      tr.innerHTML = `
-        <td class="seg-num">${String(i + 1).padStart(2, "0")}</td>
-        <td class="seg-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
-        <td>${fmtT(seg.start)} ~ ${fmtT(seg.end)}</td>
-        <td>${fmtDur(seg.end - seg.start)}</td>
-        <td><span class="tag ${tagCls}">${tagTxt}</span></td>
-        <td><button class="chip seg-aud" data-i="${i}">试听</button></td>
-        <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…"></td>
-        <td><select class="seg-lang" data-i="${i}">
-          ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
-        </select></td>
-        <td><select class="seg-speaker" data-i="${i}">
-          <option value="">未分配</option>
-          ${state.characters.map(c => `<option value="${esc(c.id)}" ${seg.characterId === c.id ? "selected" : ""} style="color:${esc(c.color)}">${esc(c.name)}</option>`).join("")}
-        </select></td>
-        <td class="row-actions">
-          <button class="chip seg-jump" data-i="${i}">跳转</button>
-          <button class="chip danger seg-del" data-i="${i}">删除</button>
-        </td>`;
-      tb.appendChild(tr);
-    });
-  }
-
-  function addSegmentFromSelection() {
-    if (!state.currentItem) return toast("请先导入素材");
-    if (!state.selection) return toast("请先在波形上拖拽出选区");
-    const segs = segsFor(state.currentItem.id);
-    pushUndo();
-    const list = state.multiRegions.length >= 2 ? state.multiRegions : [];
-    if (list.length) {
-      list.forEach((m) => segs.push(newSegment(m.start, m.end)));
-      scheduleSaveProject();
-      renderSegments();
-      toast(`已加入片段 ${list.length} 条`);
-      return;
-    }
-    segs.push(newSegment(state.selection.start, state.selection.end));
-    scheduleSaveProject();
-    renderSegments();
-  }
-  function deleteSegment(itemId, i) {
-    const segs = segsFor(itemId);
-    const s = segs[i];
-    if (s) state.selectedSegs.delete(s.id);
-    pushUndo();
-    segs.splice(i, 1);
-    scheduleSaveProject(itemId); renderSegments();
-  }
-  async function jumpToSegment(item, seg) {
-    if (state.currentItem && state.currentItem.id !== item.id) await waveform.selectItem(item);
-    if (!state.ws) return;
-    state.ws.setTime(seg.start);
-    $("#sel-info").textContent = fmtSel(seg);
-  }
-  async function auditionSegment(item, seg) {
-    if (!state.currentItem || state.currentItem.id !== item.id) await waveform.selectItem(item);
-    if (!state.ws) return;
-    state.ws.setTime(seg.start);
-    state.ws.play();
-    state.auditioning = { start: seg.start, end: seg.end };
-    scrollSegRow(item.id, seg.id);
-  }
-  // 从角色池/素材库等位置试听时：先回到剪辑页并选中对应素材再播放
-  async function gotoEditAndPlay(item, seg) {
-    closePool();
-    setPage("edit");
-    await auditionSegment(item, seg);
-  }
-  function scrollSegRow(itemId, segId) {
-    const segs = segsFor(itemId);
-    const i = segs.findIndex(s => s.id === segId);
-    if (i < 0) return;
-    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
-    if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   // ── 角色池 / 说话人自动匹配 ──
@@ -447,7 +312,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     try {
       await Promise.all(ids.map(id => api(`/api/items/${id}/project`, { method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ segments: segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] }) })));
+        body: JSON.stringify({ segments: segments.segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] }) })));
       // 仅当保存期间没有新的改动时才清除脏标记，避免静默丢改动
       ids.forEach(id => {
         if ((dirtyVer.get(id) || 0) === verAt.get(id)) {
@@ -511,7 +376,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     state.segmentsByItem.forEach((_, id) => markDirty(id));
     state.poolDirty = true;
     poolVer++;
-    renderSegments();
+    segments.renderSegments();
     renderPool();
     saveProjectNow();
     savePoolNow();
@@ -545,18 +410,18 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     pushUndo();
     let n = 0;
     (state.items || []).forEach(item => {
-      const segs = segsFor(item.id);
+      const segs = segments.segsFor(item.id);
       let changed = false;
       segs.forEach(s => { if (segIds.includes(s.id)) { s.characterId = characterId || null; n++; changed = true; } });
       if (changed) scheduleSaveProject(item.id);
     });
-    renderSegments(); renderPool();
+    segments.renderSegments(); renderPool();
     toast(`已重定向 ${n} 段片段`);
   }
 
   function poolCard(ch) {
     const isU = !ch;
-    const mine = charSegs(ch ? ch.id : null);
+    const mine = segments.charSegs(ch ? ch.id : null);
     const el = document.createElement("div");
     el.className = "pool-card" + (isU ? " unassigned" : "");
     el.dataset.poolChar = ch ? ch.id : "";
@@ -595,21 +460,21 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     if (!grid) return;
     grid.innerHTML = "";
     $("#pool-item-name").textContent = state.currentProject ? state.currentProject.name : "";
-    $("#pool-unassigned-count").textContent = charSegs(null).length;
+    $("#pool-unassigned-count").textContent = segments.charSegs(null).length;
     grid.appendChild(poolCard(null));
     state.characters.forEach(ch => grid.appendChild(poolCard(ch)));
     $("#pool-merge-count").textContent = (state.poolMerge || new Set()).size;
   }
 
   function poolAudition(cid) {
-    const rows = charSegs(cid);
+    const rows = segments.charSegs(cid);
     if (!rows.length) return toast("该角色暂无片段");
-    gotoEditAndPlay(rows[0].item, rows[0].seg);
+    segments.gotoEditAndPlay(rows[0].item, rows[0].seg);
   }
   function poolPlaySeg(segId, itemId) {
     const item = state.items.find(x => x.id === itemId);
-    const seg = item ? segsFor(item.id).find(s => s.id === segId) : null;
-    if (item && seg) gotoEditAndPlay(item, seg);
+    const seg = item ? segments.segsFor(item.id).find(s => s.id === segId) : null;
+    if (item && seg) segments.gotoEditAndPlay(item, seg);
   }
   function poolRename(cid) {
     const ch = charById(cid); if (!ch) return;
@@ -617,26 +482,26 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     if (name == null || !name.trim()) return;
     pushUndo();
     ch.name = name.trim();
-    scheduleSavePool(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); segments.renderSegments();
   }
   function poolDelete(cid) {
     const ch = charById(cid); if (!ch) return;
-    const n = charSegs(cid).length;
+    const n = segments.charSegs(cid).length;
     if (!confirm(`删除角色「${ch.name}」？其 ${n} 段片段将变为未分配`)) return;
     pushUndo();
     state.characters = state.characters.filter(c => c.id !== cid);
     (state.items || []).forEach(item => {
       let changed = false;
-      segsFor(item.id).forEach(s => { if (s.characterId === cid) { s.characterId = null; changed = true; } });
+      segments.segsFor(item.id).forEach(s => { if (s.characterId === cid) { s.characterId = null; changed = true; } });
       if (changed) scheduleSaveProject(item.id);
     });
-    scheduleSavePool(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); segments.renderSegments();
   }
   function poolSetColor(cid, color) {
     const ch = charById(cid); if (!ch) return;
     pushUndo();
     ch.color = color;
-    scheduleSavePool(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); segments.renderSegments();
   }
   function togglePoolMerge(cid, on) {
     state.poolMerge = state.poolMerge || new Set();
@@ -656,11 +521,11 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     state.characters = state.characters.filter(c => !ids.includes(c.id) || c.id === target.id);
     (state.items || []).forEach(item => {
       let changed = false;
-      segsFor(item.id).forEach(s => { if (ids.includes(s.characterId) && s.characterId !== target.id) { s.characterId = target.id; changed = true; } });
+      segments.segsFor(item.id).forEach(s => { if (ids.includes(s.characterId) && s.characterId !== target.id) { s.characterId = target.id; changed = true; } });
       if (changed) scheduleSaveProject(item.id);
     });
     state.poolMerge = new Set();
-    scheduleSavePool(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); segments.renderSegments();
     toast(`已合并为「${target.name}」`);
   }
   function createPoolCharacter() {
@@ -668,7 +533,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     if (name == null || !name.trim()) return;
     pushUndo();
     state.characters.push({ id: uid("char"), name: name.trim(), color: paletteNext(), speakerLabels: [], created: Date.now() });
-    scheduleSavePool(); renderPool(); renderSegments();
+    scheduleSavePool(); renderPool(); segments.renderSegments();
   }
 
   async function doIdentifySpeakers() {
@@ -679,7 +544,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
       trackTask(j.task_id, async (result) => {
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
-        renderPool(); renderSegments(); subtitles.renderSubs();
+        renderPool(); segments.renderSegments(); subtitles.renderSubs();
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
         const mixed = result.mixed || 0;
@@ -748,8 +613,8 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     e.preventDefault();
     const sid = dragSegId || e.dataTransfer.getData("text/plain");
     const item = state.items.find(x => x.id === dragSegItem);
-    const seg = item ? segsFor(item.id).find(s => s.id === sid) : null;
-    if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(item.id); renderSegments(); renderPool(); }
+    const seg = item ? segments.segsFor(item.id).find(s => s.id === sid) : null;
+    if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(item.id); segments.renderSegments(); renderPool(); }
   });
 
   let focusedSeg = null;
@@ -766,16 +631,16 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     if (!tr) return;
     const itemId = tr.dataset.item;
     const i = Number(tr.dataset.i);
-    const segs = segsFor(itemId);
+    const segs = segments.segsFor(itemId);
     const seg = segs[i];
     if (!seg) return;
     if (btn) {
-      if (btn.classList.contains("seg-aud")) { auditionSegment(state.items.find(x => x.id === itemId), seg); return; }
-      else if (btn.classList.contains("seg-jump")) { jumpToSegment(state.items.find(x => x.id === itemId), seg); return; }
-      else if (btn.classList.contains("seg-del")) { deleteSegment(itemId, i); return; }
+      if (btn.classList.contains("seg-aud")) { segments.auditionSegment(state.items.find(x => x.id === itemId), seg); return; }
+      else if (btn.classList.contains("seg-jump")) { segments.jumpToSegment(state.items.find(x => x.id === itemId), seg); return; }
+      else if (btn.classList.contains("seg-del")) { segments.deleteSegment(itemId, i); return; }
     }
     e.preventDefault();
-    const rows = allSegs();
+    const rows = segments.allSegs();
     const flatIdx = rows.findIndex(r => r.seg.id === seg.id);
     if (e.shiftKey && state.selectedSegs.size) {
       let first = 1e9;
@@ -790,34 +655,34 @@ import { createWaveform } from "/static/js/modules/waveform.js";
       state.selectedSegs = new Set([seg.id]);
     }
     setSegFocus(tr);
-    renderSegments();
+    segments.renderSegments();
   });
   $("#seg-tbody").addEventListener("input", (e) => {
     const tr = e.target.closest("tr.seg-row");
     if (!tr) return;
     const itemId = tr.dataset.item;
     const i = Number(e.target.dataset.i);
-    const segs = segsFor(itemId);
+    const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     if (e.target.classList.contains("seg-text")) {
       if (!e.target.dataset.undoed) { e.target.dataset.undoed = "1"; pushUndo(); }
       segs[i].text = e.target.value; scheduleSaveProject(itemId);
     }
-    updateSegBadge(itemId, i);
+    segments.updateSegBadge(itemId, i);
   });
   $("#seg-tbody").addEventListener("change", (e) => {
     const tr = e.target.closest("tr.seg-row");
     if (!tr) return;
     const itemId = tr.dataset.item;
     const i = Number(e.target.dataset.i);
-    const segs = segsFor(itemId);
+    const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     delete e.target.dataset.undoed;
     if (!e.target.classList.contains("seg-text")) pushUndo();
     if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; scheduleSaveProject(itemId); }
     if (e.target.classList.contains("seg-speaker")) {
       segs[i].characterId = e.target.value || null;
-      scheduleSaveProject(itemId); renderSegments();
+      scheduleSaveProject(itemId); segments.renderSegments();
     }
   });
   function showRedirectMenu(x, y, segIds) {
@@ -844,8 +709,8 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     e.preventDefault();
     const itemId = tr.dataset.item;
     const i = Number(tr.dataset.i);
-    const segs = segsFor(itemId);
-    let ids = Array.from(state.selectedSegs).filter(id => allSegs().some(r => r.seg.id === id));
+    const segs = segments.segsFor(itemId);
+    let ids = Array.from(state.selectedSegs).filter(id => segments.allSegs().some(r => r.seg.id === id));
     if (!ids.length && segs[i]) ids = [segs[i].id];
     showRedirectMenu(e.clientX, e.clientY, ids);
   });
@@ -872,7 +737,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
       }
     } catch (e) { /* 网络抖动忽略，用任务结果兜底 */ }
     await loadAllItemData();
-    renderPool(); renderSegments(); subtitles.renderSubs();
+    renderPool(); segments.renderSegments(); subtitles.renderSubs();
     const created = (result.created || []).length, merged = (result.merged || 0);
     const mixed = result.mixed || 0, cleaned = result.cleaned || 0;
     const itemN = (result.items || []).length;
@@ -1012,7 +877,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
       "autosplit": () => showModal("#modal-autosplit"),
       "undo": undo,
       "redo": redo,
-      "validate": renderSegments,
+      "validate": segments.renderSegments,
       "zoom-in": () => waveform.zoomIn(),
       "zoom-out": () => waveform.zoomOut(),
       "fit": () => waveform.zoomSet(0),
@@ -1073,15 +938,15 @@ import { createWaveform } from "/static/js/modules/waveform.js";
           if (state.selectedSegs.size) {
             pushUndo();
             (state.items || []).forEach(item => {
-              const segs = segsFor(item.id);
+              const segs = segments.segsFor(item.id);
               const before = segs.length;
               const kept = segs.filter(s => !state.selectedSegs.has(s.id));
               if (kept.length !== before) { segs.splice(0, segs.length, ...kept); scheduleSaveProject(item.id); }
             });
             state.selectedSegs = new Set();
-            renderSegments();
+            segments.renderSegments();
           } else if (focusedSeg) {
-            deleteSegment(focusedSeg.item, focusedSeg.i);
+            segments.deleteSegment(focusedSeg.item, focusedSeg.i);
             setSegFocus(null);
           }
           break;
@@ -1126,14 +991,14 @@ import { createWaveform } from "/static/js/modules/waveform.js";
     $("#btn-play-selection").addEventListener("click", () => waveform.playSelection());
     $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !e.target.checked));
-    $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
+    $("#btn-add-seg").addEventListener("click", segments.addSegmentFromSelection);
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
       if (confirm("清空当前素材的全部片段？")) {
         pushUndo();
-        segsFor(state.currentItem.id).length = 0;
+        segments.segsFor(state.currentItem.id).length = 0;
         state.selectedSegs = new Set();
-        scheduleSaveProject(); renderSegments();
+        scheduleSaveProject(); segments.renderSegments();
       }
     });
     $("#btn-transcribe").addEventListener("click", () => io.openTranscribeModal());
@@ -1188,6 +1053,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
   let subtitles = null;  // 实时字幕模块实例（启动区由 createSubtitles 创建）
   let io = null;         // 输入/输出模块实例（启动区由 createIo 创建）
   let waveform = null;   // 波形/播放模块实例（启动区由 createWaveform 创建）
+  let segments = null;   // 片段列表模块实例（启动区由 createSegments 创建）
   const PAGE_KEY = "vc.page.v1";
   let currentPage = "edit";
   try { const saved = localStorage.getItem(PAGE_KEY); if (["edit", "media", "train"].includes(saved)) currentPage = saved; } catch (e) {}
@@ -1212,15 +1078,21 @@ import { createWaveform } from "/static/js/modules/waveform.js";
   }
 
   // ── 启动 ───────────────────────────────────────────────
+  segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
+    state, toast, charById, newSegment, pushUndo, scheduleSaveProject, closePool, setPage,
+    selectItem: (item) => waveform.selectItem(item) });
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask,
-    speakerLabelAt, segsFor, newSegment, pushUndo, scheduleSaveProject, renderSegments });
+    speakerLabelAt, segsFor: segments.segsFor, newSegment, pushUndo, scheduleSaveProject,
+    renderSegments: segments.renderSegments });
   training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask });
   io = createIo({ $, api, state, toast, trackTask, needItem, selectResultItem, autoAnalyzeDone,
     showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
-    renderSegments, segsFor, charById, scheduleSaveProject, fmtSel, fmtT });
+    renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById, scheduleSaveProject,
+    fmtSel, fmtT });
   waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
     WaveSurfer, Timeline, Regions, Minimap,
-    renderMediaList, loadProject, saveProjectNow, savePoolNow, renderSegments, subtitles });
+    renderMediaList, loadProject, saveProjectNow, savePoolNow, renderSegments: segments.renderSegments,
+    subtitles });
   setupMenus();
   setupShortcuts();
   setupDrop();
@@ -1236,7 +1108,7 @@ import { createWaveform } from "/static/js/modules/waveform.js";
   function beaconSave() {
     try {
       Array.from(state.dirtyItems).forEach(id => {
-        const payload = JSON.stringify({ segments: segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] });
+        const payload = JSON.stringify({ segments: segments.segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] });
         navigator.sendBeacon(`/api/items/${id}/project`, new Blob([payload], { type: "application/json" }));
       });
       if (state.poolDirty && state.currentProject) {
@@ -1252,7 +1124,8 @@ import { createWaveform } from "/static/js/modules/waveform.js";
   boot();
 
   // 调试/自动化钩子
-  window.__vc = { state, selectItem: waveform.selectItem, selectProject, renderSegments,
+  window.__vc = { state, selectItem: waveform.selectItem, selectProject,
+    renderSegments: segments.renderSegments,
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
     clearMultiRegions: waveform.clearMultiRegions,
