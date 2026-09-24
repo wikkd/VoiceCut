@@ -61,6 +61,19 @@ def _init_runtime() -> None:
 
 
 _EMBEDDER = None
+_EMBEDDER_NAME = "ecapa"  # 实际加载成功的模型短名（eres2net-voxceleb / ecapa-voxceleb / ...）
+
+# 优先尝试的说话人模型（更强在前；需要联网/缓存下载，失败自动回退到下一个）。
+# ERES2Net 对噪声/短视频鲁棒性更好；ECAPA 为既有默认。可用 VC_SPEAKER_MODEL 钉住某个源。
+_EMBEDDER_SOURCES = [
+    "speechbrain/spkrec-eres2net-voxceleb",
+    "speechbrain/spkrec-ecapa-voxceleb",
+]
+
+
+def embedder_name() -> str:
+    """实际加载的说话人模型短名（quality 上报用，默认 ecapa）。"""
+    return _EMBEDDER_NAME
 
 
 def _cuda_available() -> bool:
@@ -71,9 +84,31 @@ def _cuda_available() -> bool:
         return False
 
 
+def _model_cached(savedir: str) -> bool:
+    return (Path(savedir) / "hyperparams.yaml").exists()
+
+
+def _model_savedir(src: str) -> str:
+    return str(Path(sys.prefix) / "share" / "voicecut" / src.split("/")[-1])
+
+
 def _load_embedder():
-    """Load (and cache) speechbrain ECAPA embedder; mirror fallback on download fail."""
-    global _EMBEDDER
+    """Load (and cache) the best available speechbrain speaker embedder.
+
+    Model choice is offline-friendly and deterministic:
+
+    * ``VC_SPEAKER_MODEL=<org/repo>`` pins one source explicitly (download
+      allowed, so this is how you opt into the stronger ERES2Net build).
+    * Otherwise only models **already cached** on disk are used, in priority
+      order (ERES2Net > ECAPA), so an offline cold start never wastes ~90s in
+      huggingface retry loops before falling back.
+    * If nothing is cached yet (first run on a networked machine) every source
+      is attempted in order, with an hf-mirror retry per source.
+
+    The loaded model's short name is reported by :func:`embedder_name` so the
+    ``quality`` string stays truthful.  Raises if every source fails.
+    """
+    global _EMBEDDER, _EMBEDDER_NAME
     if _EMBEDDER is not None:
         return _EMBEDDER
 
@@ -81,24 +116,42 @@ def _load_embedder():
     from speechbrain.inference.speaker import EncoderClassifier
     from speechbrain.utils.fetching import LocalStrategy
 
-    savedir = str(Path(sys.prefix) / "share" / "voicecut" / "ecapa")
     device = "cuda:0" if _cuda_available() else "cpu"
+    pin = os.environ.get("VC_SPEAKER_MODEL", "").strip()
+    if pin:
+        # 显式指定：允许下载（失败才回退）
+        sources = [pin]
+    else:
+        # 默认只用「已缓存」的模型，避免离线时在下载重试上白等 ~90s；
+        # 一个都没缓存（首次运行且联网）才按优先级尝试下载。
+        cached = [s for s in _EMBEDDER_SOURCES if _model_cached(_model_savedir(s))]
+        sources = cached or list(_EMBEDDER_SOURCES)
+    errors: list[tuple[str, Exception]] = []
+    for src in sources:
+        savedir = _model_savedir(src)
 
-    def _attempt():
-        return EncoderClassifier.from_hparams(
-            source="speechbrain/spkrec-ecapa-voxceleb",
-            savedir=savedir,
-            run_opts={"device": device},
-            local_strategy=LocalStrategy.COPY,  # Windows 无管理员时 symlink 失败，改复制
-        )
+        def _attempt(s=src, d=savedir):
+            return EncoderClassifier.from_hparams(
+                source=s, savedir=d,
+                run_opts={"device": device},
+                local_strategy=LocalStrategy.COPY,  # Windows 无管理员时 symlink 失败，改复制
+            )
 
-    try:
-        _EMBEDDER = _attempt()
-    except Exception:
-        os.environ["HF_ENDPOINT"] = os.environ.get("VC_HF_ENDPOINT", "https://hf-mirror.com")
-        os.environ["HF_HUB_DISABLE_XET"] = "1"
-        _EMBEDDER = _attempt()
-    return _EMBEDDER
+        for attempt in (0, 1):  # 0: 默认源；1: hf-mirror 回退
+            try:
+                _EMBEDDER = _attempt()
+                _EMBEDDER_NAME = src.split("/")[-1]
+                return _EMBEDDER
+            except Exception as exc:  # noqa: BLE001
+                errors.append((src, exc))
+                os.environ["HF_ENDPOINT"] = os.environ.get("VC_HF_ENDPOINT", "https://hf-mirror.com")
+                os.environ["HF_HUB_DISABLE_XET"] = "1"
+    raise RuntimeError(
+        "说话人模型加载失败（尝试: %s）: %s"
+        % (", ".join(s for s, _ in errors), errors[-1][1])
+    )
+
+
 def read_mono16k(wav_path):
     """Decode WAV -> (mono float32 at 16k, 16000) via ffmpeg.
 
@@ -244,15 +297,97 @@ def bind_segments(segments, speaker_segments, char_of_label):
     return out, mixed_count
 
 
+def _silhouette_score(X: np.ndarray, labels) -> float:
+    """Mean centroid silhouette of a partition (cosine distance).
+
+    a(i) = distance of sample i to its own cluster centroid,
+    b(i) = min distance to the other cluster centroids, s(i) = (b-a)/max(a,b).
+
+    Compared with a raw "intra similarity - inter similarity" score, the
+    silhouette properly penalizes merging two similar-but-distinct speakers
+    whose samples are sparse: a voice that appears only once is not silently
+    swallowed by the nearest big cluster (the old score preferred exactly that
+    merge because the merged cluster still looked tight).
+    """
+    labels = np.asarray(labels)
+    uniq = sorted(set(int(x) for x in labels))
+    k = len(uniq)
+    if k <= 1:
+        return -1.0
+    centroids: dict[int, np.ndarray] = {}
+    for c in uniq:
+        m = X[labels == c].mean(axis=0)
+        cn = float(np.linalg.norm(m)) + 1e-9
+        centroids[c] = m / cn
+    scores: list[float] = []
+    for i in range(len(X)):
+        li = labels[i]
+        if int(np.sum(labels == li)) <= 1:
+            continue  # singleton clusters have no silhouette
+        a = 1.0 - float(X[i] @ centroids[li])
+        b = min(1.0 - float(X[i] @ centroids[c]) for c in uniq if c != li)
+        scores.append((b - a) / max(a, b, 1e-9))
+    return float(np.mean(scores)) if scores else -1.0
+
+
+def _renumber_by_appearance(labels) -> list:
+    """Renumber cluster ids so id 0 is the first cluster to appear."""
+    order: dict[int, int] = {}
+    out: list = []
+    for x in labels:
+        if x not in order:
+            order[x] = len(order)
+        out.append(order[x])
+    return out
+
+
+def _merge_similar_clusters(X: np.ndarray, labels, merge_thr: float = 0.95) -> list:
+    """Iteratively merge clusters whose centroids are almost identical.
+
+    Anime voice-lines can legitimately vary a lot, so an adaptive cut sometimes
+    splits ONE speaker into two clusters (over-segmentation).  Two clusters
+    whose normalized centroids have cosine >= ``merge_thr`` are almost certainly
+    the same voice -> merge them (keeping the first-appearing id).
+
+    The default is deliberately high (0.95): measured ECAPA intra-speaker
+    consistency on real audio bottoms out around 0.93, so a lower bar would
+    merge genuinely distinct-but-similar voices instead of only undoing
+    over-segmentation.
+    """
+    labels = [int(x) for x in labels]
+    changed = True
+    while changed:
+        changed = False
+        uniq = sorted(set(labels))
+        centroids: dict[int, np.ndarray] = {}
+        for c in uniq:
+            m = X[np.array(labels) == c].mean(axis=0)
+            cn = float(np.linalg.norm(m)) + 1e-9
+            centroids[c] = m / cn
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                a, b = uniq[i], uniq[j]
+                if float(centroids[a] @ centroids[b]) >= merge_thr:
+                    labels = [a if x == b else x for x in labels]
+                    changed = True
+                    break
+            if changed:
+                break
+    return _renumber_by_appearance(labels)
+
+
 def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
                   max_k=_CLUSTER_MAX_K):
     """Agglomerative clustering (average linkage, cosine) -> cluster id per embedding.
 
-    Cut the dendrogram at ``thr`` cosine distance.  Because anime window /
-    subtitle embeddings vary a lot, the count is adjusted adaptively: if the
-    cutoff over-merges (< ``min_k`` clusters) we tighten it; if it over-
-    fragments (> ``max_k`` clusters, e.g. one speaker per window) we loosen it.
-    Returns arbitrary cluster ids; callers renumber by first appearance.
+    Instead of cutting the dendrogram at one fixed distance threshold, we scan
+    many cutoffs and keep the partition (within ``min_k``..``max_k`` clusters)
+    that maximizes separation (intra-cluster similarity - inter-cluster
+    similarity).  This adapts to how similar the actual voices are, so we no
+    longer hard-code a "0.60 = different speaker" assumption.  Finally clusters
+    with near-identical centroids are merged to undo over-segmentation.
+    Falls back to the original adaptive-threshold logic when no scan candidate
+    fits the desired cluster-count band.
     """
     from scipy.cluster.hierarchy import fcluster, linkage
 
@@ -268,21 +403,39 @@ def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
     def _cut(t: float):
         return [int(x) - 1 for x in fcluster(Z, t=t, criterion="distance")]
 
+    # 1) separation-optimal scan (wide cutoff sweep so very similar voices at
+    # cosine ~0.8 can still be separated: their dendrogram merge happens at a
+    # distance well below 0.28).  k >= 2 (a single cluster has no separation
+    # and is left to the fallback); ``min_k`` is only a preference band, not a
+    # hard floor -- a legitimately 2-speaker project must not be force-split.
+    best, best_score = None, -1.0
+    for t in np.arange(0.04, 0.94, 0.02):
+        lab = _cut(float(t))
+        k = len(set(lab))
+        if k < 2 or k > max_k:
+            continue
+        score = _silhouette_score(X, lab)
+        if score > best_score:
+            best_score, best = score, lab
+    if best is not None:
+        return _merge_similar_clusters(X, best)
+
+    # 2) fallback: original adaptive tightening / loosening
     lab = _cut(thr)
     k = len(set(lab))
     if k < min_k:
-        for t in (0.55, 0.50, 0.45, 0.40, 0.35, 0.30):
+        for t in (0.50, 0.45, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15, 0.10, 0.05):
             lab = _cut(t)
             if len(set(lab)) >= min_k:
-                return lab
+                return _merge_similar_clusters(X, lab)
     elif k > max_k:
         for t in (0.65, 0.70, 0.75, 0.80, 0.85, 0.90):
             lab = _cut(t)
             if len(set(lab)) == 1:
                 break
             if 2 <= len(set(lab)) <= max_k:
-                return lab
-    return lab
+                return _merge_similar_clusters(X, lab)
+    return _merge_similar_clusters(X, lab)
 
 
 def stale_characters(item_id: str, characters: list) -> list:
@@ -312,8 +465,37 @@ def stale_characters(item_id: str, characters: list) -> list:
     return out
 
 
+def _aggregate_subtitle_embedding(vecs) -> np.ndarray | None:
+    """Robust subtitle-level embedding from its window embeddings.
+
+    Plain averaging lets a single contaminated window (BGM / cross-talk / a
+    subtitle that really mixes two speakers) drag the subtitle centroid off,
+    which used to split or merge speakers in the clustering stage.  We instead
+    keep only the windows most consistent with the bulk of the subtitle
+    (trimmed mean, keep 75%) and L2-normalize.  On uniform window vectors this
+    degenerates to the plain mean, so existing behaviour is preserved.
+    """
+    if not vecs:
+        return None
+    embs = np.stack([v[2] for v in vecs])
+    if embs.shape[0] == 1:
+        out = embs[0]
+    else:
+        center = embs.mean(axis=0)
+        cn = float(np.linalg.norm(center)) + 1e-9
+        center = center / cn
+        norms = np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9
+        embs_n = embs / norms
+        sims = embs_n @ center
+        keep = max(1, int(np.ceil(embs.shape[0] * 0.75)))
+        idx = np.argsort(-sims)[:keep]
+        out = embs[idx].mean(axis=0)
+    n = float(np.linalg.norm(out)) + 1e-9
+    return out / n
+
+
 def _collect_source(emb_fn, mono, sr, subs, base, total, progress_cb=None):
-    """Compute per-subtitle windows + a stable subtitle-level averaged embedding."""
+    """Compute per-subtitle windows + a stable subtitle-level embedding."""
     acc = {}            # sub_idx -> [(ws, we, emb)]
     sub_embs = [None] * len(subs)
     for i, s in enumerate(subs):
@@ -326,7 +508,7 @@ def _collect_source(emb_fn, mono, sr, subs, base, total, progress_cb=None):
                 vecs.append((ws, we, emb))
         if vecs:
             acc[i] = vecs
-            sub_embs[i] = np.mean(np.stack([v[2] for v in vecs]), axis=0)
+            sub_embs[i] = _aggregate_subtitle_embedding(vecs)
     return acc, sub_embs
 
 
@@ -360,7 +542,7 @@ def generate_speakers_project(sources, *, progress_cb=None):
             base += len(src["subs"])
         return out
 
-    quality = "ecapa"
+    quality = embedder_name()
     try:
         collected = _collect_all(_ecapa_embedding)
     except Exception:  # noqa: BLE001
@@ -597,3 +779,58 @@ def match_labels_to_pool(item_id, label_embeddings, characters, threshold=0.82):
             assignments[label] = cid
             created.append(cid)
     return assignments, characters, created
+
+
+def match_labels_strong(item_id, label_embeddings, characters,
+                        threshold=0.80, margin=0.05):
+    """Memory pre-assignment: bind labels to existing pool characters strongly.
+
+    This is the "memory" half of re-identification.  When speaker detection is
+    re-run on a project, a voice that already lives in the pool should be
+    assigned to the SAME character right away, instead of being re-clustered
+    and only weakly matched afterwards (which used to create duplicate
+    characters whenever a repeat voice hovered just under the weak-match bar).
+
+    A label is strongly assigned when its best cosine against a pool character
+    is >= ``threshold`` AND clearly better than the runner-up (``margin``), so a
+    genuinely new voice never gets force-merged into the nearest existing
+    character just because the pool has a "least-bad" match.
+
+    Returns (assignments, characters, matched):
+      assignments  : {label: character_id} for strongly matched labels only
+      characters   : updated pool (new list; caller persists it)
+      matched      : list of labels that got a strong assignment
+    """
+    characters = [dict(c) for c in characters]
+    assignments: dict[str, str] = {}
+    matched: list[str] = []
+    for label, emb in sorted((label_embeddings or {}).items()):
+        if emb is None:
+            continue
+        emb = np.asarray(emb, dtype=np.float32)
+        best, best_sim, second = None, -1.0, -1.0
+        for c in characters:
+            ce = embedding_from_b64(c.get("embedding"))
+            if ce is None:
+                continue
+            sim = _cos(emb, ce)
+            if sim > best_sim:
+                second = best_sim
+                best, best_sim = c, sim
+            elif sim > second:
+                second = sim
+        if best is None or best_sim < threshold or (best_sim - second) < margin:
+            continue
+        assignments[label] = best["id"]
+        key = f"{item_id}:{label}"
+        labels = best.get("speakerLabels") or []
+        if key not in labels:
+            labels.append(key)
+        best["speakerLabels"] = labels
+        cnt = int(best.get("emb_count") or 1)
+        old = embedding_from_b64(best.get("embedding"))
+        if old is not None:
+            best["embedding"] = embedding_to_b64((old * cnt + emb) / (cnt + 1))
+        best["emb_count"] = cnt + 1
+        matched.append(label)
+    return assignments, characters, matched

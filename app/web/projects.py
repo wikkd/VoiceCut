@@ -249,7 +249,7 @@ def _speakers_worker(c, item_id: str) -> dict:
     pool = project_mod.load_pool(c.cfg.workdir, project_id)
     label_embeds = res.get("label_embeddings") or {}
     cleaned = 0
-    if res.get("quality") == "ecapa" and label_embeds:
+    if res.get("quality") != "mfcc" and label_embeds:
         # 清理旧版本产生的“一人一窗口”垃圾角色：只删自动命名(说话人N)、仅归属
         # 本素材、从未合并(emb_count<=1)、且未训练(无 exp)的角色；清空引用它们
         # 的片段绑定，让本次识别重新分配。
@@ -267,8 +267,13 @@ def _speakers_worker(c, item_id: str) -> dict:
                     changed = True
             if changed:
                 project_mod.save_project(c.cfg.workdir, item.id, proj_tmp)
-        assignments, chars, created = speakers_mod.match_labels_to_pool(
+        # 记忆强绑定：与角色池已有角色高度相似（且唯一最优）的标签直接归并，
+        # 跨次识别同人自动并入同一角色，不再每次从零聚类后仅靠弱匹配。
+        strong_assign, chars, _matched = speakers_mod.match_labels_strong(
             item.id, label_embeds, pool["characters"])
+        remaining = {lb: e for lb, e in label_embeds.items() if lb not in strong_assign}
+        assignments, chars, created = speakers_mod.match_labels_to_pool(
+            item.id, remaining, chars)
         merged = max(0, len(assignments) - len(created))
     else:
         # MFCC fallback / no embeddings: one project character per label
@@ -422,9 +427,15 @@ def _project_speakers_run(c, project_id: str) -> dict:
             if changed:
                 project_mod.save_project(c.cfg.workdir, it.id, proj_tmp)
     label_embeds = res.get("label_embeddings") or {}
-    if res.get("quality") == "ecapa" and label_embeds:
-        assignments, chars, created = speakers_mod.match_labels_to_pool(
+    if res.get("quality") != "mfcc" and label_embeds:
+        # 记忆强绑定：与角色池已有角色高度相似（且唯一最优）的标签直接归并，
+        # 跨次识别时同人自动并入同一角色，不再每次从零聚类后仅靠弱匹配。
+        strong_assign, chars, _matched = speakers_mod.match_labels_strong(
             project_id, label_embeds, chars)
+        remaining = {lb: e for lb, e in label_embeds.items() if lb not in strong_assign}
+        weak_assign, chars, created = speakers_mod.match_labels_to_pool(
+            project_id, remaining, chars)
+        assignments = {**strong_assign, **weak_assign}
         merged = max(0, len(assignments) - len(created))
     else:
         # MFCC fallback / no embeddings: one project character per label

@@ -55,12 +55,14 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     @app.get("/api/config")
     def api_config() -> object:
+        from app.bilibili import downloader_status  # 延迟导入避免循环依赖
         return jsonify({
             "ffmpeg": cfg.ffmpeg_path,
             "sample_rates": list(cfg.sample_rates),
             "dataset_sample_rate": cfg.dataset_sample_rate,
             "workdir": str(cfg.workdir),
             "models": {"whisper": ["medium", "large-v3"], "demucs": "htdemucs"},
+            "downloader": downloader_status(),
         })
 
     # ── Blueprint 注册 ───────────────────────────────────────

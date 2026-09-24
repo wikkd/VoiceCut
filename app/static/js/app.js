@@ -1481,37 +1481,30 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
 
   // ── B 站 ───────────────────────────────────────────────
   // ── 网络 URL 导入（多平台 / 批量） ──
+  // 导入后在后台自动完成：解析 → 下载音频（立刻可剪辑）→ 下载完整视频（本地预览）。
   async function doUrlOpen() {
     const raw = $("#bb-url").value.trim();
     const urls = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (!urls.length) return toast("请输入至少一个视频链接");
     hideModal("#modal-bilibili");
-    toast(`解析 ${urls.length} 个链接…`);
+    toast(`已提交 ${urls.length} 个链接，后台下载中…`);
     try {
       const j = await api("/api/url/open", { method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ urls, project_id: state.currentProject ? state.currentProject.id : undefined }) });
       const results = j.results || [];
-      const firstOk = results.find(r => r.ok);
-      if (firstOk && firstOk.video_proxy_url) {
-        // 立即用代理流播放第一个视频预览
-        const v = $("#video-preview");
-        $("#video-panel").classList.remove("no-video");
-        v.src = firstOk.video_proxy_url;
-        v.load(); v.play().catch(() => {});
-        $("#dur-info").textContent = "获取中…";
-      }
       let ok = 0, fail = 0;
       results.forEach(r => {
         if (r.ok) {
           ok++;
+          // 后台下载：完成音频即出素材，视频随后补齐本地预览
           trackTask(r.task_id, (res) => {
             selectResultItem(res);
             if (res && res.auto_task_id) trackTask(res.auto_task_id, autoAnalyzeDone);
           });
-        } else { fail++; toast(`解析失败: ${r.url} — ${r.error}`, 6000); }
+        } else { fail++; toast(`提交失败: ${r.url} — ${r.error}`, 6000); }
       });
-      toast(`已提交 ${ok} 个链接，${fail} 个失败`);
+      toast(`已提交 ${ok} 个链接后台下载${fail ? `，${fail} 个失败` : ""}`);
     } catch (e) { toast("URL 导入失败: " + e.message, 6000); }
   }
 

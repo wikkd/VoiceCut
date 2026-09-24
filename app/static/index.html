@@ -317,11 +317,13 @@
   <div id="modal-bilibili" class="modal-mask hidden">
     <div class="modal">
       <h3>从 URL 导入</h3>
-      <p class="muted">支持 B 站 / YouTube / 腾讯 / 优酷 / 爱奇艺 / Vimeo / 抖音 / 快手等（每行一个，可批量）。免登录通常仅低清晰度；需登录 / DRM 的内容会明确报错。</p>
+      <p class="muted">支持 B 站 / YouTube / 腾讯 / 优酷 / 爱奇艺 / Vimeo / 抖音 / 快手等（每行一个，可批量）。
+        导入后在<strong>后台自动下载</strong>：先取音频（很快就能剪辑），再下完整视频并生成本地预览，此后播放不再依赖网络。
+        免登录通常仅低清晰度；需登录 / DRM 的内容会明确报错。</p>
       <textarea id="bb-url" rows="5" placeholder="https://www.bilibili.com/video/BV…&#10;https://www.youtube.com/watch?v=…"></textarea>
       <div class="modal-actions">
         <button class="btn" data-close>取消</button>
-        <button class="btn primary" id="bb-open">打开</button>
+        <button class="btn primary" id="bb-open">后台下载</button>
       </div>
     </div>
   </div>
