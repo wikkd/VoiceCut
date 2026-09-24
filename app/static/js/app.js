@@ -10,6 +10,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
 import { createTraining } from "/static/js/modules/training.js";
 import { createSubtitles } from "/static/js/modules/subtitles.js";
 import { createIo } from "/static/js/modules/io.js";
+import { createWaveform } from "/static/js/modules/waveform.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -51,7 +52,7 @@ import { createIo } from "/static/js/modules/io.js";
       <div class="m-meta"><span class="m-badge">${kindMap[item.kind] || item.kind}</span>
       <span>${fmtDur(item.duration)}</span>
       <button class="m-del" title="删除素材">✕</button></div>`;
-    li.addEventListener("click", () => selectItem(item));
+    li.addEventListener("click", () => waveform.selectItem(item));
     li.addEventListener("contextmenu", (e) => { e.preventDefault(); showMediaMenu(e.clientX, e.clientY, item); });
     li.querySelector(".m-del").addEventListener("click", (e) => {
       e.stopPropagation();
@@ -81,7 +82,7 @@ import { createIo } from "/static/js/modules/io.js";
     btnAdd.onclick = () => {
       hideMediaMenu();
       if (state.currentItem && state.currentItem.id === item.id) toast("该素材已在当前工作区");
-      else selectItem(item);
+      else waveform.selectItem(item);
     };
     const isCurrent = !!(state.currentItem && state.currentItem.id === item.id);
     btnAdd.disabled = isCurrent;
@@ -144,7 +145,7 @@ import { createIo } from "/static/js/modules/io.js";
     state.speakerSegsByItem = new Map();
     renderMediaList();
     await loadAllItemData();
-    if (state.items.length) await selectItem(state.items[0]);
+    if (state.items.length) await waveform.selectItem(state.items[0]);
     else clearWorkbench();
     attachActiveTasks();
   }
@@ -162,7 +163,8 @@ import { createIo } from "/static/js/modules/io.js";
     const v = $("#video-preview"); if (v) v.removeAttribute("src");
     $("#empty-state").classList.remove("hidden");
     $("#sub-current").textContent = "—";
-    renderSegments(); subtitles.renderSubs(); renderPool(); updateTransport(); updateSelUI(); updatePlayUI();
+    renderSegments(); subtitles.renderSubs(); renderPool();
+    waveform.updateTransport(); waveform.updateSelUI(); waveform.updatePlayUI();
   }
 
   async function createProject() {
@@ -217,343 +219,15 @@ import { createIo } from "/static/js/modules/io.js";
         const v = $("#video-preview"); v.removeAttribute("src");
         $("#empty-state").classList.remove("hidden");
         $("#sub-current").textContent = "—";
-        updatePlayUI();
-        updateSelUI();
-        updateTransport();
+        waveform.updatePlayUI();
+        waveform.updateSelUI();
+        waveform.updateTransport();
         subtitles.renderSubs();
         renderSegments();
       }
       await refreshItems();
       toast("已删除素材");
     } catch (e) { toast("删除失败: " + e.message, 6000); }
-  }
-
-  // ── 选择素材 / 波形加载 ────────────────────────────────
-  async function selectItem(item) {
-    if ((state.dirtyItems.size || state.poolDirty) && state.currentItem && state.currentItem.id !== item.id) {
-      await saveProjectNow();   // 切换素材前先浮存旧素材项目
-      await savePoolNow();
-    }
-    state.currentItem = item;
-    state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
-    renderMediaList();
-
-    // 视频预览
-    const vp = $("#video-panel"), v = $("#video-preview");
-    if (item.video_url) {
-      vp.classList.remove("no-video");
-      if (v.src !== location.origin + item.video_url) v.src = item.video_url;
-      videoSeekByAudio = false;
-      v.load();
-    } else {
-      vp.classList.add("no-video");
-      v.removeAttribute("src");
-    }
-
-    let peaks = item.peaks;
-    if (!peaks) {
-      try { const pj = await api(item.peaks_url); peaks = pj.peaks; item.peaks = peaks; } catch (e) { peaks = []; }
-    }
-    await loadProject(item);
-    loadWavesurfer(item, peaks);
-    renderSegments();
-    updateTransport();
-
-    // 实时字幕
-    state.subs = []; state.currentSubIdx = -1;
-    subtitles.renderSubs();
-    if (item.subs_url) {
-      try {
-        const sj = await api(item.subs_url);
-        state.subs = sj.subs || [];
-      } catch (e) { state.subs = []; }
-      subtitles.renderSubs();
-    }
-  }
-
-  function loadWavesurfer(item, peaks) {
-    if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
-    state.selection = null; state.selectionRegion = null;
-    state.dragRegion = null;
-    state.multiRegions = []; state.ctrlMarking = false;
-    state.auditionSeq = null; state.auditionIdx = 0;
-    $("#empty-state").classList.add("hidden");
-
-    const timeline = Timeline.create({ container: "#timeline", height: 24 });
-    state.regions = Regions.create({ color: "rgba(108,156,255,0.25)" });
-    const minimap = Minimap.create({
-      container: "#minimap", height: 44,
-      waveColor: "#3a3a55", progressColor: "#6c9cff",
-      interact: false,   // 总览条的点击/拖动由本页面操作（M6 播放头）
-    });
-
-    const ws = WaveSurfer.create({
-      container: "#waveform",
-      height: 150,
-      waveColor: "#6a6a8c",
-      progressColor: "#6c9cff",
-      cursorColor: "#ffd166",
-      cursorWidth: 1,
-      backend: "MediaElement",
-      url: item.audio_url,
-      peaks: (peaks && peaks.length ? peaks.map((p) => Math.max(Math.abs(p[0]), Math.abs(p[1]))) : undefined),
-      duration: item.duration,
-      plugins: [timeline, state.regions, minimap],
-    });
-    state.ws = ws;
-
-    // 时间轴与波形同步：放大后刻度按绝对坐标定位，需要让容器宽度跟随波形总宽度并随滚动偏移
-    const syncTimeline = () => {
-      const tl = document.querySelector("#timeline [part='timeline']");
-      if (!tl || !ws.getWrapper()) return;
-      tl.style.width = ws.getWrapper().scrollWidth + "px";
-      tl.style.transform = "translateX(" + (-ws.getScroll()) + "px)";
-    };
-    ws.on("redraw", syncTimeline);
-    ws.on("scroll", syncTimeline);
-
-    // 选区
-    state.regions.enableDragSelection({ color: "rgba(108,156,255,0.25)" });
-    // 拖拽进行中（未松手）会先触发 region-initialized，记录以便右键取消
-    state.regions.on("region-initialized", (region) => { state.dragRegion = region; });
-    state.regions.on("region-created", (region) => {
-      state.dragRegion = null;
-      if (!state.ctrlMarking) {                       // Ctrl 快进多选：保留之前标记
-        if (state.selectionRegion && state.selectionRegion !== region) {
-          try { state.selectionRegion.remove(); } catch (e) {}
-        }
-        clearMultiRegions();                          // 普通拖选：清空多选标记
-      }
-      state.selectionRegion = region;
-      state.selection = { start: region.start, end: region.end };
-      updateSelUI();
-    });
-    state.regions.on("region-updated", (region) => {
-      if (region === state.selectionRegion) {
-        const m = state.multiRegions.find((x) => x.region === region);
-        if (m) { m.start = region.start; m.end = region.end; }
-        state.selection = { start: region.start, end: region.end };
-        updateSelUI();
-      }
-    });
-    state.regions.on("region-removed", (region) => {
-      const i = state.multiRegions.findIndex((m) => m.region === region);
-      if (i >= 0) { state.multiRegions.splice(i, 1); updateSelUI(); }
-    });
-
-    ws.on("play", () => { state.playing = true; updatePlayUI(); videoPlay(); });
-    ws.on("pause", () => { state.playing = false; updatePlayUI(); videoPause(); });
-    ws.on("finish", () => { state.playing = false; updatePlayUI(); });
-    ws.on("timeupdate", (t) => {
-      $("#cur-time").textContent = fmtT(t);
-      videoSync(t);
-      loopCheck(t);
-      subtitles.updateCurrentSub(t);
-      auditionCheck(t);
-      updateMMCursor(t);
-    });
-    ws.on("ready", () => { updateTransport(); updateMMCursor(0); });
-    ws.on("error", (e) => toast("播放错误: " + (e && e.message ? e.message : e)));
-  }
-
-  // ── 播放控制 ───────────────────────────────────────────
-  function togglePlay() { if (state.ws) { if (state.playing) state.ws.pause(); else state.ws.play(); } }
-  function updatePlayUI() {
-    const icon = state.playing ? "⏸" : "▶";
-    $("#btn-play2").textContent = icon;
-    $("#btn-loop").classList.toggle("primary", state.loop);
-    $("#btn-loop").textContent = state.loop ? "循环中" : "循环";
-  }
-  function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
-  function playSelection() {
-    if (!state.ws || !state.selection) return toast("请先拖拽出选区");
-    if (state.multiRegions.length >= 2) {       // 多选：顺序试听全部标记段
-      state.auditionSeq = state.multiRegions.slice();
-      state.auditionIdx = 0;
-      playSeqItem();
-      return;
-    }
-    if (!state.loop) state.auditioning = { start: state.selection.start, end: state.selection.end };
-    state.ws.setTime(state.selection.start);
-    state.ws.play();
-  }
-  function playSeqItem() {
-    const m = state.auditionSeq && state.auditionSeq[state.auditionIdx];
-    if (!m) { state.auditionSeq = null; return; }
-    state.ws.setTime(m.start);
-    state.ws.play();
-    state.auditioning = { start: m.start, end: m.end };
-  }
-  function loopCheck(t) {
-    if (state.loop && state.selection && state.selection.end - state.selection.start > 0.02
-        && t >= state.selection.end - 0.03) {
-      state.auditioning = null;
-      state.ws.setTime(state.selection.start);
-    }
-  }
-  function auditionCheck(t) {
-    if (state.auditioning && t >= state.auditioning.end - 0.02) {
-      if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
-        state.auditionIdx++;
-        playSeqItem();
-      } else {
-        state.ws.pause();
-        state.auditioning = null;
-        state.auditionSeq = null;
-      }
-    }
-  }
-  function updateTransport() {
-    if (!state.currentItem) { $("#dur-info").textContent = "—"; return; }
-    $("#dur-info").textContent = fmtDur(state.currentItem.duration);
-  }
-
-  // ── 总览条播放头（M6） ──
-  function updateMMCursor(t) {
-    const w = document.querySelector("#minimap-wrap");
-    const c = document.querySelector("#mm-cursor");
-    if (!w || !c) return;
-    if (!state.ws || !state.currentItem) { c.classList.add("hidden"); return; }
-    const cur = (t == null ? state.ws.getCurrentTime() : t);
-    const dur = state.currentItem.duration || 1;
-    const x = Math.max(0, Math.min(1, cur / dur));
-    c.classList.remove("hidden");
-    c.style.left = (x * 100) + "%";
-    const tt = document.querySelector("#mm-time");
-    if (tt) tt.textContent = fmtT(cur);
-  }
-  function mmSeekFromEvent(e) {
-    if (!state.ws || !state.currentItem) return;
-    const w = document.querySelector("#minimap-wrap");
-    if (!w) return;
-    const r = w.getBoundingClientRect();
-    if (r.width <= 0) return;
-    const f = clampN((e.clientX - r.left) / r.width, 0, 1);
-    state.ws.setTime(f * state.currentItem.duration);
-  }
-  let mmDragging = false;
-  function mmSeekDown(e) { mmDragging = true; mmSeekFromEvent(e); try { document.querySelector("#minimap-wrap").setPointerCapture(e.pointerId); } catch (err) {} }
-  function mmSeekMove(e) { if (mmDragging) mmSeekFromEvent(e); }
-  function mmSeekUp(e) { mmDragging = false; try { document.querySelector("#minimap-wrap").releasePointerCapture(e.pointerId); } catch (err) {} }
-  function setupMMSeek() {
-    const w = document.querySelector("#minimap-wrap");
-    if (!w || w.dataset.mm) return;
-    w.dataset.mm = "1";
-    w.addEventListener("pointerdown", mmSeekDown);
-    w.addEventListener("pointermove", mmSeekMove);
-    w.addEventListener("pointerup", mmSeekUp);
-    w.addEventListener("pointercancel", mmSeekUp);
-    window.addEventListener("resize", () => updateMMCursor(state.ws ? state.ws.getCurrentTime() : 0));
-  }
-  function updateSelUI() {
-    const n = state.multiRegions.length;
-    $("#sel-info").textContent = (n >= 2 ? `多选 ${n} 段 · ` : "") + fmtSel(state.selection);
-  }
-
-  // 快退/快进：平移播放头（夹在 0 ~ 时长内），视频经 timeupdate 联动
-  function seekBy(delta) {
-    if (!state.ws) return toast("请先导入素材");
-    const dur = state.currentItem ? state.currentItem.duration : state.ws.getDuration();
-    state.ws.setTime(clampN(state.ws.getCurrentTime() + delta, 0, dur || 0));
-  }
-  // 音量 ±：波形与视频音量同步调整
-  function adjVolume(delta) {
-    if (!state.ws) return toast("请先导入素材");
-    const v = clampN(state.ws.getVolume() + delta, 0, 1);
-    state.ws.setVolume(v);
-    toast("音量 " + Math.round(v * 100) + "%", 1200);
-  }
-
-  // ── Ctrl+→ 多选快进：每按一次标记一段并前进，可连续累积多段 ──
-  const MULTI_COLOR = "rgba(255,170,80,0.4)"; // 多选标记色（橙），区别于普通选区（蓝）
-  function markForward() {
-    if (!state.ws) return toast("请先导入素材");
-    const dur = state.currentItem ? state.currentItem.duration : state.ws.getDuration();
-    const t = state.ws.getCurrentTime();
-    const start = t, end = Math.min(dur, t + SEEK_STEP);
-    if (end - start < 0.05) return toast("已到末尾");
-    state.ctrlMarking = true;
-    const region = state.regions.addRegion({ start, end, color: MULTI_COLOR, drag: true, resize: true });
-    state.ctrlMarking = false;
-    state.multiRegions.push({ start, end, region });
-    state.selectionRegion = region;
-    state.selection = { start, end };
-    state.ws.setTime(end);
-    updateSelUI();
-  }
-  function unmarkLast() {
-    if (!state.multiRegions.length) { seekBy(-SEEK_STEP); return; }
-    const last = state.multiRegions.pop();
-    try { last.region.remove(); } catch (e) {}
-    const prev = state.multiRegions[state.multiRegions.length - 1];
-    state.selectionRegion = prev ? prev.region : null;
-    state.selection = prev ? { start: prev.start, end: prev.end } : null;
-    state.ws.setTime(prev ? prev.start : Math.max(0, (last ? last.start : 0) - SEEK_STEP));
-    updateSelUI();
-  }
-  function clearMultiRegions() {
-    state.multiRegions.slice().forEach((m) => { try { m.region.remove(); } catch (e) {} });
-    state.multiRegions = [];
-    updateSelUI();
-  }
-
-  function clearSelection() {
-    if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} }
-    state.selectionRegion = null;
-    state.selection = null;
-    state.dragRegion = null;
-    state.auditionSeq = null; state.auditionIdx = 0;
-    clearMultiRegions();
-    updateSelUI();
-  }
-
-  // 视频同步
-  let lastVidSync = 0;
-  function videoPlay() {
-    const v = $("#video-preview");
-    if (v && v.src && v.paused) v.play().catch(() => {});
-  }
-  function videoPause() { const v = $("#video-preview"); if (v) v.pause(); }
-  function videoSync(t) {
-    const v = $("#video-preview");
-    if (!v || !v.src) return;
-    const now = performance.now();
-    if (now - lastVidSync < 120) return;
-    lastVidSync = now;
-    if (Math.abs(v.currentTime - t) > 0.05) {
-      videoSeekByAudio = true;
-      v.currentTime = t;
-    }
-  }
-
-  // 视频 → 音频/波形联动：拖动视频进度条 / 点击播放暂停时同步波形
-  let videoSeekByAudio = false;   // 标记当前视频 seek 是否由音频同步触发
-  function videoToAudioSync() {
-    if (!state.ws) return;
-    const v = $("#video-preview");
-    if (!v || !v.src) return;
-    if (Math.abs(v.currentTime - state.ws.getCurrentTime()) > 0.15) {
-      state.ws.setTime(v.currentTime);
-    }
-  }
-
-  // 缩放
-  function zoomSet(lv) {
-    if (!state.ws) return;
-    state.zoomLevel = Math.max(0, Math.min(200, lv));
-    state.ws.zoom(state.zoomLevel);
-  }
-  function zoomIn() { zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5); }
-  function zoomOut() { zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5); }
-  function nudgeSelection(delta, mode) {
-    if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先拖拽出选区");
-    let { start, end } = state.selection;
-    const dur = state.currentItem ? state.currentItem.duration : end;
-    if (mode === "move") { start = Math.max(0, Math.min(dur, start + delta)); end = Math.max(0, Math.min(dur, end + delta)); }
-    else { end = Math.max(start + 0.05, Math.min(dur, end + delta)); }
-    state.selectionRegion.setExtent(start, end);
-    state.selection = { start, end };
-    updateSelUI();
   }
 
   // ── 片段列表 ───────────────────────────────────────────
@@ -665,13 +339,13 @@ import { createIo } from "/static/js/modules/io.js";
     scheduleSaveProject(itemId); renderSegments();
   }
   async function jumpToSegment(item, seg) {
-    if (state.currentItem && state.currentItem.id !== item.id) await selectItem(item);
+    if (state.currentItem && state.currentItem.id !== item.id) await waveform.selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     $("#sel-info").textContent = fmtSel(seg);
   }
   async function auditionSegment(item, seg) {
-    if (!state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
+    if (!state.currentItem || state.currentItem.id !== item.id) await waveform.selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.ws.play();
@@ -1282,7 +956,7 @@ import { createIo } from "/static/js/modules/io.js";
       state.items.push(item);
       renderMediaList();
     }
-    if (item) selectItem(item);
+    if (item) waveform.selectItem(item);
   }
 
   // ── 通用守卫 ───────────────────────────────────────────
@@ -1339,10 +1013,10 @@ import { createIo } from "/static/js/modules/io.js";
       "undo": undo,
       "redo": redo,
       "validate": renderSegments,
-      "zoom-in": zoomIn,
-      "zoom-out": zoomOut,
-      "fit": () => zoomSet(0),
-      "zoom-sel": () => { if (state.selection) { zoomSet(0); state.ws.setTime(state.selection.start); } },
+      "zoom-in": () => waveform.zoomIn(),
+      "zoom-out": () => waveform.zoomOut(),
+      "fit": () => waveform.zoomSet(0),
+      "zoom-sel": () => { if (state.selection) { waveform.zoomSet(0); state.ws.setTime(state.selection.start); } },
       "toggle-minimap": () => $("#minimap-wrap").classList.toggle("hidden"),
       "panel-toggle": (b) => togglePanel(b.dataset.panel),
       "layout-reset": resetLayout,
@@ -1359,9 +1033,9 @@ import { createIo } from "/static/js/modules/io.js";
       // Ctrl/Cmd + +/-/0: 屏蔽浏览器页面缩放，改为时间轴缩放
       if (e.ctrlKey || e.metaKey) {
         const k = e.key;
-        if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); zoomIn(); return; }
-        if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); zoomOut(); return; }
-        if (k === "0") { e.preventDefault(); zoomSet(0); return; }
+        if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); waveform.zoomIn(); return; }
+        if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); waveform.zoomOut(); return; }
+        if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
       }
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
@@ -1375,26 +1049,26 @@ import { createIo } from "/static/js/modules/io.js";
 
       // 小键盘快进：−/+快退/快进 15 秒；数字区方向键(2/4/6/8)等效主方向键（兼容 NumLock 开关）
       const code = e.code || "";
-      if (code === "NumpadSubtract") { e.preventDefault(); seekBy(-SEEK_FAST); return; }
-      if (code === "NumpadAdd") { e.preventDefault(); seekBy(SEEK_FAST); return; }
-      if (code === "Numpad4" || code === "Numpad6") { e.preventDefault(); seekBy(code === "Numpad6" ? SEEK_STEP : -SEEK_STEP); return; }
-      if (code === "Numpad8" || code === "Numpad2") { e.preventDefault(); adjVolume(code === "Numpad8" ? VOL_STEP : -VOL_STEP); return; }
+      if (code === "NumpadSubtract") { e.preventDefault(); waveform.seekBy(-SEEK_FAST); return; }
+      if (code === "NumpadAdd") { e.preventDefault(); waveform.seekBy(SEEK_FAST); return; }
+      if (code === "Numpad4" || code === "Numpad6") { e.preventDefault(); waveform.seekBy(code === "Numpad6" ? SEEK_STEP : -SEEK_STEP); return; }
+      if (code === "Numpad8" || code === "Numpad2") { e.preventDefault(); waveform.adjVolume(code === "Numpad8" ? VOL_STEP : -VOL_STEP); return; }
 
       switch (e.key) {
-        case " ": e.preventDefault(); togglePlay(); break;
-        case "l": case "L": toggleLoop(); break;
+        case " ": e.preventDefault(); waveform.togglePlay(); break;
+        case "l": case "L": waveform.toggleLoop(); break;
         case "e": case "E": io.openExportModal(); break;
         case "n": case "N": io.doDenoise(); break;
         case "v": case "V": io.doSeparate(); break;
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
           const d = e.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
-          if (e.ctrlKey) { (e.key === "ArrowRight" ? markForward() : unmarkLast()); } // Ctrl+→ 快进多选 / Ctrl+← 撤销上一段
-          else if (e.shiftKey) nudgeSelection(d, "end"); // Shift+←→ 微调选区终点边界
-          else seekBy(d);                                // ←→ 快退 / 快进 5 秒
+          if (e.ctrlKey) { (e.key === "ArrowRight" ? waveform.markForward() : waveform.unmarkLast()); } // Ctrl+→ 快进多选 / Ctrl+← 撤销上一段
+          else if (e.shiftKey) waveform.nudgeSelection(d, "end"); // Shift+←→ 微调选区终点边界
+          else waveform.seekBy(d);                                // ←→ 快退 / 快进 5 秒
           break;
         }
-        case "ArrowUp": case "ArrowDown": e.preventDefault(); adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
+        case "ArrowUp": case "ArrowDown": e.preventDefault(); waveform.adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
           if (state.selectedSegs.size) {
             pushUndo();
@@ -1445,11 +1119,11 @@ import { createIo } from "/static/js/modules/io.js";
     $("#btn-import").addEventListener("click", () => io.importDialog());
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
     $("#btn-export-dataset").addEventListener("click", () => io.openDatasetModal());
-    $("#btn-play2").addEventListener("click", togglePlay);
+    $("#btn-play2").addEventListener("click", () => waveform.togglePlay());
     $("#btn-prev").addEventListener("click", () => state.ws && state.ws.setTime(0));
     $("#btn-next").addEventListener("click", () => state.ws && state.ws.setTime(state.currentItem ? state.currentItem.duration : 0));
-    $("#btn-loop").addEventListener("click", toggleLoop);
-    $("#btn-play-selection").addEventListener("click", playSelection);
+    $("#btn-loop").addEventListener("click", () => waveform.toggleLoop());
+    $("#btn-play-selection").addEventListener("click", () => waveform.playSelection());
     $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !e.target.checked));
     $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
@@ -1478,24 +1152,9 @@ import { createIo } from "/static/js/modules/io.js";
     $("#ds-start").addEventListener("click", () => io.doDatasetExport());
     $("#as-start").addEventListener("click", () => io.doAutosplit());
     $("#ex-start").addEventListener("click", () => io.doExportSelection());
-    // 视频 ↔ 音频双向联动
-    const vp = $("#video-preview");
-    vp.addEventListener("volumechange", () => { if (!vp.muted) vp.muted = true; });
-    vp.addEventListener("seeked", () => {
-      const drift = state.ws ? Math.abs(vp.currentTime - state.ws.getCurrentTime()) : 0;
-      if (videoSeekByAudio && drift <= 0.3) { videoSeekByAudio = false; return; }
-      videoSeekByAudio = false;
-      videoToAudioSync();
-    });
-    vp.addEventListener("play", () => { videoToAudioSync(); if (state.ws) state.ws.play(); });
-    vp.addEventListener("pause", () => { if (state.ws) state.ws.pause(); });
-    // 屏蔽 Ctrl+滚轮 页面缩放，改为时间轴缩放
-    window.addEventListener("wheel", (e) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      if (!state.ws) return;
-      if (e.deltaY < 0) zoomIn(); else zoomOut();
-    }, { passive: false });
+    // 视频 ↔ 音频双向联动 / Ctrl+滚轮时间轴缩放（波形模块内绑定）
+    waveform.bindVideoPreview();
+    waveform.bindZoomWheel();
 
     $$(".modal-mask").forEach((mask) => mask.addEventListener("click", (e) => {
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
@@ -1519,24 +1178,8 @@ import { createIo } from "/static/js/modules/io.js";
       else if (btn && btn.classList.contains("sub-add")) subtitles.addSubToSegments(i);
       else subtitles.selectSubRange(i);
     });
-    // 波形区域内右键：不弹浏览器菜单，始终取消选区/本次拖拽
-    $("#wave-box").addEventListener("contextmenu", (e) => {
-      e.preventDefault();
-      if (state.dragRegion) {
-        try { state.dragRegion.remove(); } catch (err) {}
-        if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (err) {} }
-        state.dragRegion = null;
-        state.selectionRegion = null;
-        state.selection = null;
-        updateSelUI();
-        toast("已取消选区");
-        return;
-      }
-      if (state.selection && state.selectionRegion) {
-        clearSelection();
-        toast("已取消选区");
-      }
-    });
+    // 波形区域内右键取消选区（波形模块内绑定）
+    waveform.bindWaveBox();
   }
 
 
@@ -1544,6 +1187,7 @@ import { createIo } from "/static/js/modules/io.js";
   let training = null;   // 训练交付页模块实例（启动区由 createTraining 创建）
   let subtitles = null;  // 实时字幕模块实例（启动区由 createSubtitles 创建）
   let io = null;         // 输入/输出模块实例（启动区由 createIo 创建）
+  let waveform = null;   // 波形/播放模块实例（启动区由 createWaveform 创建）
   const PAGE_KEY = "vc.page.v1";
   let currentPage = "edit";
   try { const saved = localStorage.getItem(PAGE_KEY); if (["edit", "media", "train"].includes(saved)) currentPage = saved; } catch (e) {}
@@ -1574,12 +1218,15 @@ import { createIo } from "/static/js/modules/io.js";
   io = createIo({ $, api, state, toast, trackTask, needItem, selectResultItem, autoAnalyzeDone,
     showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
     renderSegments, segsFor, charById, scheduleSaveProject, fmtSel, fmtT });
+  waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
+    WaveSurfer, Timeline, Regions, Minimap,
+    renderMediaList, loadProject, saveProjectNow, savePoolNow, renderSegments, subtitles });
   setupMenus();
   setupShortcuts();
   setupDrop();
   bindUI();
   initWorkspace();
-  setupMMSeek();
+  waveform.setupMMSeek();
   setupPagebar();
   setInterval(() => {
     if (currentPage === "train" && !document.getElementById("page-train").classList.contains("hidden")) {
@@ -1605,8 +1252,10 @@ import { createIo } from "/static/js/modules/io.js";
   boot();
 
   // 调试/自动化钩子
-  window.__vc = { state, selectItem, selectProject, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
-    markForward, unmarkLast, clearMultiRegions,
+  window.__vc = { state, selectItem: waveform.selectItem, selectProject, renderSegments,
+    WaveSurfer, Timeline, Regions, Minimap,
+    markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
+    clearMultiRegions: waveform.clearMultiRegions,
     loadProject, saveProjectNow, savePoolNow, openPool, closePool, renderPool,
     undo, redo, pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject, renameProject, deleteProject, doIdentifySpeakers, newSegment,
