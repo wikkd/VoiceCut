@@ -7,7 +7,7 @@
 
 ```
 素材(动漫/歌曲/广播剧)
-  → ① 导入: 本地拖拽 / B站直链代理（后台自动生成字幕 + 识别说话人）
+  → ① 导入: 本地拖拽 / URL 批量导入（导入即后台下载音频+视频到本地；自动生成字幕 + 识别说话人）
   → ② 清洗: 人声分离(demucs htdemucs) / 保守降噪(noisereduce) / 去头尾静音+响度标准化
   → ③ 精切: 波形+视频同步, 选区→片段列表, 可自动按静音切分
   → ④ 转写: faster-whisper 批量转写(JP), 文本人工校对
@@ -51,7 +51,7 @@ uv pip install --python .venv\Scripts\python.exe -r requirements.txt
 | 降噪 | noisereduce |
 | 人声分离 | demucs htdemucs (GPU: RTX 5060 Ti, Blackwell sm_120) |
 | 转写 | faster-whisper (默认 medium, 可选 large-v3) |
-| B站流 | yt-dlp 解析 + 后端 Range 代理 |
+| B站流 | yt-dlp 解析 + 导入即后台下载（可选 BBDown/yutto 外部下载器） |
 
 ## 文档
 

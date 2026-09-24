@@ -371,3 +371,140 @@ def test_read_mono16k_decodes_via_ffmpeg(tmp_path: Path) -> None:
     assert np.isfinite(mono).all()
     assert float(np.max(np.abs(mono))) > 0.05  # 440Hz 正弦被保留
 
+
+# ── 新算法：稳健嵌入聚合 / 分离度最优聚类 / 相似簇合并 / 记忆强绑定 ──────────
+
+def test_aggregate_subtitle_embedding_trims_outlier_window() -> None:
+    """被一个正交噪声窗口污染的字幕，聚合嵌入仍贴近主体方向（而非被平均拉偏）。"""
+    main = np.array([1.0, 0.0, 0.0, 0.0])
+    noise = np.array([0.0, 1.0, 0.0, 0.0])
+    vecs = [(0.0, 0.5, main), (0.5, 1.0, main), (1.0, 1.5, main), (1.5, 2.0, noise)]
+    agg = speakers._aggregate_subtitle_embedding(vecs)
+    assert agg is not None
+    assert speakers._cos(agg, main) > 0.95
+    # 单一窗口时保持原向量
+    assert speakers._cos(speakers._aggregate_subtitle_embedding([(0.0, 1.0, main)]), main) > 0.999
+
+
+def test_cluster_separates_similar_but_distinct_speakers() -> None:
+    """两个余弦 0.8 的相似说话人应分开，不会被固定阈值误并成一个角色。"""
+    rng = np.random.default_rng(0)
+    c1 = np.array([1.0, 0.0, 0.0, 0.0])
+    c2 = np.array([0.8, 0.6, 0.0, 0.0])
+    c2 = c2 / np.linalg.norm(c2)
+    X: list = []
+    for c in (c1, c2):
+        for _ in range(6):
+            v = c + rng.normal(0, 0.04, 4)
+            X.append(v / np.linalg.norm(v))
+    labels = speakers._cluster_labels(X, min_k=2, max_k=15)
+    assert len(set(labels)) == 2
+    assert len(set(labels[:6])) == 1
+    assert len(set(labels[6:])) == 1
+
+
+def test_merge_similar_clusters_merges_split_voice() -> None:
+    """同一声线因波动被拆成两个相似簇（质心余弦 >= 0.90）时自动补并。"""
+    X = np.stack([
+        np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]), np.array([1.0, 0.0, 0.0]),
+        np.array([0.92, 0.39, 0.0]), np.array([0.92, 0.39, 0.0]),
+        np.array([0.0, 1.0, 0.0]), np.array([0.0, 1.0, 0.0]),
+    ])
+    labels = [0, 0, 0, 1, 1, 2, 2]
+    out = speakers._merge_similar_clusters(X, labels, merge_thr=0.90)
+    assert len(set(out)) == 2
+    assert out[0] == out[3]   # 簇 0 与簇 1 合并
+    assert out[5] != out[0]   # 簇 2 保持独立
+
+
+def test_match_labels_strong_reuses_existing_character() -> None:
+    """记忆强绑定：高相似度（且唯一最优）的标签直接并入已有角色，不新建。"""
+    chars = [{
+        "id": "char_1", "name": "A", "speakerLabels": [],
+        "embedding": speakers.embedding_to_b64(np.array([1.0, 0.0, 0.0], dtype=np.float32)),
+        "emb_count": 1,
+    }]
+    label_emb = {"说话人1": np.array([0.95, 0.31, 0.0], dtype=np.float32)}  # 与 [1,0,0] 余弦 ≈0.95
+    assign, chars_out, matched = speakers.match_labels_strong("p1", label_emb, chars)
+    assert assign == {"说话人1": "char_1"}
+    assert matched == ["说话人1"]
+    assert len(chars_out) == 1
+    assert chars_out[0]["emb_count"] == 2  # 代表声纹被运行平均更新
+
+
+def test_project_rerun_reuses_character_via_memory() -> None:
+    """跨次识别：第一次新建角色，第二次同一声线（带轻微变化）经强绑定自动归并。"""
+    emb1 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    _assign1, chars, _created = speakers.match_labels_to_pool("p1", {"说话人1": emb1}, [])
+    assert len(chars) == 1
+    emb2 = np.array([0.98, 0.2, 0.0], dtype=np.float32)  # 同人、略有变化
+    strong, chars2, matched = speakers.match_labels_strong("p1", {"说话人1": emb2}, chars)
+    assert strong == {"说话人1": chars[0]["id"]}
+    assert matched == ["说话人1"]
+    assert len(chars2) == 1
+    assert chars2[0]["emb_count"] == 2
+
+
+def test_match_labels_strong_requires_clear_winner() -> None:
+    """两个候选角色都同样接近时（无显著胜者），不强制归并，留给人工/弱匹配。"""
+    chars = [
+        {"id": "char_a", "name": "A", "speakerLabels": [],
+         "embedding": speakers.embedding_to_b64(np.array([0.9, 0.1, 0.0], dtype=np.float32)), "emb_count": 1},
+        {"id": "char_b", "name": "B", "speakerLabels": [],
+         "embedding": speakers.embedding_to_b64(np.array([0.9, -0.1, 0.0], dtype=np.float32)), "emb_count": 1},
+    ]
+    label_emb = {"说话人1": np.array([1.0, 0.0, 0.0], dtype=np.float32)}  # 与两者余弦几乎相同
+    assign, _chars_out, matched = speakers.match_labels_strong("p1", label_emb, chars)
+    assert assign == {} and matched == []
+
+
+def test_match_labels_strong_low_similarity_not_bound() -> None:
+    """相似度过低（< 0.80）不自动归并。"""
+    chars = [{
+        "id": "char_a", "name": "A", "speakerLabels": [],
+        "embedding": speakers.embedding_to_b64(np.array([1.0, 0.0, 0.0], dtype=np.float32)), "emb_count": 1,
+    }]
+    label_emb = {"说话人1": np.array([0.5, 0.87, 0.0], dtype=np.float32)}  # 余弦 ≈0.5
+    assign, _chars_out, matched = speakers.match_labels_strong("p1", label_emb, chars)
+    assert assign == {} and matched == []
+
+
+def test_merge_similar_clusters_default_is_conservative() -> None:
+    """默认合并阈值(0.95)不应把「相似但不同」的两个声音(余弦 0.92)并成一个。
+
+    实测真实 ECAPA 的同类内一致性低至 ~0.93、异类可达 ~0.90，因此合并阈值
+    必须高于异类相似度，只用来修补「同一人因噪声被拆簇」的过分割。
+    """
+    sim = 0.92  # 相似但不同
+    X = np.stack([
+        np.array([1.0, 0.0, 0.0]),
+        np.array([1.0, 0.0, 0.0]),
+        np.array([sim, float(np.sqrt(1 - sim * sim)), 0.0]),
+        np.array([sim, float(np.sqrt(1 - sim * sim)), 0.0]),
+    ])
+    labels = [0, 0, 1, 1]
+    out = speakers._merge_similar_clusters(X, labels)   # 使用默认阈值
+    assert len(set(out)) == 2  # 不误并
+
+
+def test_cluster_handles_compressed_similarity_regime() -> None:
+    """真实 ECAPA 相似度整体偏高（同类 0.95+、异类 0.85~0.92）时，
+    聚类仍应按「相对分离度」而不是绝对阈值把结构分出来。"""
+    rng = np.random.default_rng(3)
+    d = 8
+    # 三个说话人方向：两两余弦约 0.88 / 0.85 / 0.9（压缩区间）
+    c1 = np.zeros(d); c1[0] = 1.0
+    c2 = np.zeros(d); c2[0] = 0.88; c2[1] = float(np.sqrt(1 - 0.88**2))
+    c3 = np.zeros(d); c3[0] = 0.85; c3[1] = -0.20; c3[2] = float(np.sqrt(max(0.0, 1 - 0.85**2 - 0.04)))
+    X: list = []
+    for c in (c1, c2, c3):
+        for _ in range(5):
+            v = c + rng.normal(0, 0.015, d)   # 同类内一致性 ~0.97
+            X.append(v / np.linalg.norm(v))
+    labels = speakers._cluster_labels(X, min_k=2, max_k=15)
+    # 至少要把最疏远的那一组分出来，不能全部塌成 1 个
+    assert len(set(labels)) >= 2
+    # 同类样本应聚在一起
+    assert len(set(labels[:5])) == 1
+    assert len(set(labels[10:])) == 1
+
