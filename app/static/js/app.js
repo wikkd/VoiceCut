@@ -9,6 +9,7 @@ import { state, toast, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
 import { createTraining } from "/static/js/modules/training.js";
 import { createSubtitles } from "/static/js/modules/subtitles.js";
+import { createIo } from "/static/js/modules/io.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -1284,202 +1285,8 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
     if (item) selectItem(item);
   }
 
-  // ── 导入 ───────────────────────────────────────────────
-  function importDialog() { $("#file-input").click(); }
-  async function uploadFile(file) {
-    const fd = new FormData();
-    fd.append("file", file);
-    if (state.currentProject) fd.append("project_id", state.currentProject.id);
-    toast(`导入中: ${file.name}`);
-    try {
-      const j = await api("/api/import", { method: "POST", body: fd });
-      trackTask(j.task_id, (result) => {
-        selectResultItem(result);
-        if (result && result.auto_task_id) trackTask(result.auto_task_id, autoAnalyzeDone);
-      });
-    } catch (e) { toast("导入失败: " + e.message); }
-  }
-
-  // ── 清洗动作 ───────────────────────────────────────────
+  // ── 通用守卫 ───────────────────────────────────────────
   function needItem() { if (!state.currentItem) { toast("请先选择素材"); return false; } return true; }
-  function doDenoise() {
-    if (!needItem()) return;
-    toast("开始降噪…");
-    api("/api/denoise", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: state.currentItem.id }) })
-      .then(j => trackTask(j.task_id, r => selectResultItem(r)))
-      .catch(e => toast("降噪失败: " + e.message));
-  }
-  function doSeparate() {
-    if (!needItem()) return;
-    toast("开始人声分离（GPU，首次含模型加载）…");
-    api("/api/separate", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: state.currentItem.id }) })
-      .then(j => trackTask(j.task_id, r => selectResultItem(r)))
-      .catch(e => toast("分离失败: " + e.message));
-  }
-  function doTrim() {
-    if (!needItem()) return;
-    api("/api/trim", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ item_id: state.currentItem.id }) })
-      .then(j => trackTask(j.task_id, r => selectResultItem(r)))
-      .catch(e => toast("去静音失败: " + e.message));
-  }
-
-  async function doAutosplit() {
-    if (!needItem()) return;
-    const item = state.currentItem;
-    const threshold_db = Number($("#as-threshold").value);
-    const min_silence = Number($("#as-min-silence").value);
-    const min_len = Number($("#as-min-len").value);
-    const max_len = Number($("#as-max-len").value);
-    if (!(min_len > 0) || !(max_len >= min_len)) return toast("最短片段需 >0 且不能大于最长片段");
-    hideModal("#modal-autosplit");
-    if (!confirm("将替换当前素材「" + item.name + "」的全部片段，确定继续？")) return;
-    await saveProjectNow();
-    toast("开始按静音自动切分…");
-    pushUndo();
-    try {
-      const j = await api(`/api/items/${item.id}/autosplit`, { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          threshold_db: threshold_db || -35,
-          min_silence: min_silence || 0.5,
-          min_len: min_len || 0.8,
-          max_len: max_len || 15,
-          language: $("#as-language").value || "JP",
-        }) });
-      trackTask(j.task_id, async (result) => {
-        state.dirtyItems.delete(item.id);
-        await loadProject(item, true);
-        renderSegments();
-        toast("自动切分完成：" + (result.count || 0) + " 段");
-      });
-    } catch (e) { toast("自动切分启动失败: " + e.message, 6000); }
-  }
-
-  // ── 导出选区 ───────────────────────────────────────────
-  function openExportModal() {
-    if (!needItem()) return;
-    if (!state.selection) return toast("请先拖拽出选区");
-    $("#ex-range").textContent = fmtSel(state.selection);
-    showModal("#modal-export");
-  }
-  async function doExportSelection() {
-    if (!state.currentItem || !state.selection) return;
-    const fmt = $("#ex-fmt").value, sr = $("#ex-sr").value;
-    hideModal("#modal-export");
-    try {
-      const j = await api("/api/export", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: state.currentItem.id,
-          start: state.selection.start, end: state.selection.end,
-          format: fmt, sample_rate: Number(sr) }) });
-      showResult("导出成功", `文件：${j.name}\n位置：${j.path}\n\n[下载](${j.download_url})`,
-        `<a class="btn primary" href="${j.download_url}" download>保存到浏览器</a>`);
-    } catch (e) { toast("导出失败: " + e.message); }
-  }
-
-  // ── B 站 ───────────────────────────────────────────────
-  // ── 网络 URL 导入（多平台 / 批量） ──
-  // 导入后在后台自动完成：解析 → 下载音频（立刻可剪辑）→ 下载完整视频（本地预览）。
-  async function doUrlOpen() {
-    const raw = $("#bb-url").value.trim();
-    const urls = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    if (!urls.length) return toast("请输入至少一个视频链接");
-    hideModal("#modal-bilibili");
-    toast(`已提交 ${urls.length} 个链接，后台下载中…`);
-    try {
-      const j = await api("/api/url/open", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ urls, project_id: state.currentProject ? state.currentProject.id : undefined }) });
-      const results = j.results || [];
-      let ok = 0, fail = 0;
-      results.forEach(r => {
-        if (r.ok) {
-          ok++;
-          // 后台下载：完成音频即出素材，视频随后补齐本地预览
-          trackTask(r.task_id, (res) => {
-            selectResultItem(res);
-            if (res && res.auto_task_id) trackTask(res.auto_task_id, autoAnalyzeDone);
-          });
-        } else { fail++; toast(`提交失败: ${r.url} — ${r.error}`, 6000); }
-      });
-      toast(`已提交 ${ok} 个链接后台下载${fail ? `，${fail} 个失败` : ""}`);
-    } catch (e) { toast("URL 导入失败: " + e.message, 6000); }
-  }
-
-  // ── 转写 ───────────────────────────────────────────────
-  function openTranscribeModal() {
-    if (!state.currentProject) return toast("请先选择项目");
-    const n = (state.items || []).reduce((a, item) => a + segsFor(item.id).filter(s => !s.text.trim()).length, 0);
-    if (!n) return toast("片段列表为空或都已填写文本");
-    showModal("#modal-transcribe");
-  }
-  async function doTranscribe() {
-    if (!state.currentProject) return;
-    const model = $("#tr-model").value;
-    hideModal("#modal-transcribe");
-    pushUndo();
-    let total = 0;
-    (state.items || []).forEach((item) => {
-      const segs = segsFor(item.id);
-      const todo = segs.map((s, i) => ({ ...s, idx: i })).filter(x => !x.text.trim());
-      if (!todo.length) return;
-      total += todo.length;
-      api("/api/transcribe", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: item.id, segments: todo.map(s => ({ start: s.start, end: s.end })), model }) })
-        .then(j => trackTask(j.task_id, (result) => {
-          const cur = segsFor(item.id);
-          (result.texts || []).forEach((text, k) => { cur[todo[k].idx].text = text; });
-          scheduleSaveProject(item.id);
-          renderSegments();
-        }))
-        .catch(e => toast("转写启动失败: " + e.message));
-    });
-    toast(`转写 ${total} 段（${model}）…`);
-  }
-
-  // ── 训练集导出 ─────────────────────────────────────────
-  function openDatasetModal() {
-    if (!state.currentProject) return toast("请先选择项目");
-    const n = (state.items || []).reduce((a, item) => a + segsFor(item.id).length, 0);
-    if (!n) return toast("片段列表为空");
-    showModal("#modal-dataset");
-  }
-  async function doDatasetExport() {
-    if (!state.currentProject) return;
-    hideModal("#modal-dataset");
-    const clips = [];
-    (state.items || []).forEach(item => {
-      segsFor(item.id).forEach(s => clips.push({
-        item_id: item.id, start: s.start, end: s.end, text: s.text,
-        language: s.language, speaker: (charById(s.characterId) || {}).name || "",
-      }));
-    });
-    toast("导出训练集…");
-    try {
-      const j = await api("/api/dataset/export", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          project_id: state.currentProject.id,
-          clips,
-          speaker: $("#ds-speaker").value.trim() || "speaker",
-          language: $("#ds-language").value,
-          layout: $("#ds-per-speaker").checked ? "per_speaker" : "flat",
-          val_ratio: Number($("#ds-val-ratio").value) || 0,
-          out_dir: $("#ds-outdir").value.trim() || undefined,
-        }) });
-      trackTask(j.task_id, (result) => {
-        const skipped = (result.skipped || []).map(s => `  - [跳过] ${s.reason}（${fmtT(s.seg.start)}~${fmtT(s.seg.end)}）`).join("\n") || "  （无跳过）";
-        const spk = (result.speakers || []).map(s => `  - ${s.name}: train ${s.train} / val ${s.val}`).join("\n") || "  （无）";
-        showResult("训练集导出完成",
-          `输出目录：${result.out_dir}\n成功片段：${result.count}\n\n角色分布：\n${spk}\n\n${skipped}\n\nlist.txt：${result.list_file}`,
-          null, 600);
-      });
-    } catch (e) { toast("导出训练集失败: " + e.message); }
-  }
 
   // ── 弹窗 ───────────────────────────────────────────────
   function showModal(sel) { $(sel).classList.remove("hidden"); }
@@ -1514,7 +1321,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
     document.addEventListener("keydown", (e) => { if (e.key === "Escape") $$(".menu").forEach(x => x.classList.remove("open")); });
 
     const actions = {
-      "import": importDialog,
+      "import": () => io.importDialog(),
       "bilibili": () => showModal("#modal-bilibili"),
       "url-open": () => showModal("#modal-bilibili"),
       "project-new": createProject,
@@ -1522,12 +1329,12 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
       "project-delete": deleteProject,
       "pool": openPool,
       "identify-speakers": doIdentifySpeakers,
-      "export-selection": openExportModal,
-      "denoise": doDenoise,
-      "separate": doSeparate,
-      "trim": doTrim,
-      "transcribe": openTranscribeModal,
-      "dataset-export": openDatasetModal,
+      "export-selection": () => io.openExportModal(),
+      "denoise": () => io.doDenoise(),
+      "separate": () => io.doSeparate(),
+      "trim": () => io.doTrim(),
+      "transcribe": () => io.openTranscribeModal(),
+      "dataset-export": () => io.openDatasetModal(),
       "autosplit": () => showModal("#modal-autosplit"),
       "undo": undo,
       "redo": redo,
@@ -1558,7 +1365,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
       }
       const tag = (e.target.tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); importDialog(); return; }
+      if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) redo(); else undo();
@@ -1576,9 +1383,9 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
       switch (e.key) {
         case " ": e.preventDefault(); togglePlay(); break;
         case "l": case "L": toggleLoop(); break;
-        case "e": case "E": openExportModal(); break;
-        case "n": case "N": doDenoise(); break;
-        case "v": case "V": doSeparate(); break;
+        case "e": case "E": io.openExportModal(); break;
+        case "n": case "N": io.doDenoise(); break;
+        case "v": case "V": io.doSeparate(); break;
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
           const d = e.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
@@ -1617,10 +1424,10 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
     window.addEventListener("drop", (e) => {
       e.preventDefault(); dragCount = 0;
       const files = Array.from(e.dataTransfer.files || []);
-      files.forEach(uploadFile);
+      files.forEach((f) => io.uploadFile(f));
     });
     $("#file-input").addEventListener("change", () => {
-      Array.from($("#file-input").files).forEach(uploadFile);
+      Array.from($("#file-input").files).forEach((f) => io.uploadFile(f));
       $("#file-input").value = "";
     });
   }
@@ -1635,15 +1442,15 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
       });
     });
     $("#btn-cancel-task").addEventListener("click", cancelAllTasks);
-    $("#btn-import").addEventListener("click", importDialog);
+    $("#btn-import").addEventListener("click", () => io.importDialog());
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
-    $("#btn-export-dataset").addEventListener("click", openDatasetModal);
+    $("#btn-export-dataset").addEventListener("click", () => io.openDatasetModal());
     $("#btn-play2").addEventListener("click", togglePlay);
     $("#btn-prev").addEventListener("click", () => state.ws && state.ws.setTime(0));
     $("#btn-next").addEventListener("click", () => state.ws && state.ws.setTime(state.currentItem ? state.currentItem.duration : 0));
     $("#btn-loop").addEventListener("click", toggleLoop);
     $("#btn-play-selection").addEventListener("click", playSelection);
-    $("#btn-export-selection").addEventListener("click", openExportModal);
+    $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !e.target.checked));
     $("#btn-add-seg").addEventListener("click", addSegmentFromSelection);
     $("#btn-clear-segs").addEventListener("click", () => {
@@ -1655,7 +1462,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
         scheduleSaveProject(); renderSegments();
       }
     });
-    $("#btn-transcribe").addEventListener("click", openTranscribeModal);
+    $("#btn-transcribe").addEventListener("click", () => io.openTranscribeModal());
     $("#btn-pool").addEventListener("click", openPool);
     $("#btn-identify-speakers").addEventListener("click", doIdentifySpeakers);
     $("#btn-auto-analyze").addEventListener("click", toggleAutoAnalyze);
@@ -1666,11 +1473,11 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
     $("#pool-merge").addEventListener("click", mergePoolSelected);
     $("#pool-identify").addEventListener("click", doIdentifySpeakers);
 
-    $("#bb-open").addEventListener("click", doUrlOpen);
-    $("#tr-start").addEventListener("click", doTranscribe);
-    $("#ds-start").addEventListener("click", doDatasetExport);
-    $("#as-start").addEventListener("click", doAutosplit);
-    $("#ex-start").addEventListener("click", doExportSelection);
+    $("#bb-open").addEventListener("click", () => io.doUrlOpen());
+    $("#tr-start").addEventListener("click", () => io.doTranscribe());
+    $("#ds-start").addEventListener("click", () => io.doDatasetExport());
+    $("#as-start").addEventListener("click", () => io.doAutosplit());
+    $("#ex-start").addEventListener("click", () => io.doExportSelection());
     // 视频 ↔ 音频双向联动
     const vp = $("#video-preview");
     vp.addEventListener("volumechange", () => { if (!vp.muted) vp.muted = true; });
@@ -1693,7 +1500,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
     $$(".modal-mask").forEach((mask) => mask.addEventListener("click", (e) => {
       if (e.target === mask || e.target.closest("[data-close]")) mask.classList.add("hidden");
     }));
-    $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doUrlOpen(); } });
+    $("#bb-url").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); io.doUrlOpen(); } });
     // 实时字幕
     $("#btn-sub-open").addEventListener("click", () => $("#sub-file").click());
     $("#btn-sub-generate").addEventListener("click", subtitles.generateSubs);
@@ -1736,6 +1543,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
   // ── 页面切换（素材库 / 剪辑 / 训练交付） ──
   let training = null;   // 训练交付页模块实例（启动区由 createTraining 创建）
   let subtitles = null;  // 实时字幕模块实例（启动区由 createSubtitles 创建）
+  let io = null;         // 输入/输出模块实例（启动区由 createIo 创建）
   const PAGE_KEY = "vc.page.v1";
   let currentPage = "edit";
   try { const saved = localStorage.getItem(PAGE_KEY); if (["edit", "media", "train"].includes(saved)) currentPage = saved; } catch (e) {}
@@ -1752,7 +1560,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
   }
   function setupPagebar() {
     $$("#pagebar .page-btn").forEach(b => b.addEventListener("click", () => setPage(b.dataset.page)));
-    const b2 = $("#btn-import2"); if (b2) b2.addEventListener("click", importDialog);
+    const b2 = $("#btn-import2"); if (b2) b2.addEventListener("click", () => io.importDialog());
     const u2 = $("#btn-url2"); if (u2) u2.addEventListener("click", () => showModal("#modal-bilibili"));
     const p2 = $("#btn-pool2"); if (p2) p2.addEventListener("click", openPool);
     const rf = $("#btn-train-refresh"); if (rf) rf.addEventListener("click", () => training && training.loadTraining(true));
@@ -1763,6 +1571,9 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask,
     speakerLabelAt, segsFor, newSegment, pushUndo, scheduleSaveProject, renderSegments });
   training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask });
+  io = createIo({ $, api, state, toast, trackTask, needItem, selectResultItem, autoAnalyzeDone,
+    showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
+    renderSegments, segsFor, charById, scheduleSaveProject, fmtSel, fmtT });
   setupMenus();
   setupShortcuts();
   setupDrop();
@@ -1797,7 +1608,7 @@ import { createSubtitles } from "/static/js/modules/subtitles.js";
   window.__vc = { state, selectItem, selectProject, renderSegments, WaveSurfer, Timeline, Regions, Minimap,
     markForward, unmarkLast, clearMultiRegions,
     loadProject, saveProjectNow, savePoolNow, openPool, closePool, renderPool,
-    undo, redo, pushUndo, doAutosplit, uploadFile,
+    undo, redo, pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject, renameProject, deleteProject, doIdentifySpeakers, newSegment,
     toggleAutoAnalyze, autoAnalyzeDone, attachActiveTasks,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,
