@@ -5,7 +5,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
 import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN,
          SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
-import { state, toast, layout, applyLayout, saveLayout, resetLayout,
+import { state, toast, toastBusy, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
 import { createTraining } from "/static/js/modules/training.js";
 import { createSubtitles } from "/static/js/modules/subtitles.js";
@@ -13,6 +13,7 @@ import { createIo } from "/static/js/modules/io.js";
 import { createWaveform } from "/static/js/modules/waveform.js";
 import { createSegments } from "/static/js/modules/segments.js";
 import { createPool } from "/static/js/modules/pool.js";
+import { createTasks } from "/static/js/modules/tasks.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -149,7 +150,7 @@ import { createPool } from "/static/js/modules/pool.js";
     await loadAllItemData();
     if (state.items.length) await waveform.selectItem(state.items[0]);
     else clearWorkbench();
-    attachActiveTasks();
+    tasks.attachActiveTasks();
   }
 
   async function loadAllItemData() {
@@ -493,115 +494,6 @@ import { createPool } from "/static/js/modules/pool.js";
     showRedirectMenu(e.clientX, e.clientY, ids);
   });
 
-  // ── 任务跟踪 ───────────────────────────────────────────
-  function trackTask(taskId, doneCb) {
-    const existing = state.activeTasks.get(taskId);
-    if (existing) { existing.doneCb = doneCb; return; }  // 同一后台任务去重
-    state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb });
-    ensurePolling();
-    updateStatusbar();
-  }
-
-  // 后台自动分析完成：刷新角色池 / 素材 / 片段 / 字幕
-  async function autoAnalyzeDone(result) {
-    if (!result) return;
-    if (Array.isArray(result.characters)) state.characters = result.characters;
-    try {
-      if (state.currentProject) {
-        const j = await api(`/api/projects/${state.currentProject.id}`);
-        if (Array.isArray(j.characters)) state.characters = j.characters;
-        state.items = j.items || [];
-        renderMediaList();
-      }
-    } catch (e) { /* 网络抖动忽略，用任务结果兜底 */ }
-    await loadAllItemData();
-    pool.renderPool(); segments.renderSegments(); subtitles.renderSubs();
-    const created = (result.created || []).length, merged = (result.merged || 0);
-    const mixed = result.mixed || 0, cleaned = result.cleaned || 0;
-    const itemN = (result.items || []).length;
-    let msg = `后台分析完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
-    if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
-    toast(msg, 6000);
-    return true;  // 已显示专属完成提示，抑制通用“任务完成”
-  }
-
-  // 刷新页面后重新挂接仍在后台运行的任务（含导入后自动分析）
-  async function attachActiveTasks() {
-    try {
-      const tasks = await api("/api/tasks/active");
-      tasks.forEach((t) => {
-        if (state.activeTasks.has(t.id)) return;
-        let cb = null;
-        if (t.kind === "speakers") cb = autoAnalyzeDone;
-        else if (t.kind === "import") cb = (r) => { if (r) refreshItems(); };
-        if (cb) trackTask(t.id, cb);
-      });
-    } catch (e) { /* 忽略 */ }
-  }
-  function ensurePolling() {
-    if (state.pollTimer) return;
-    state.pollTimer = setInterval(pollTasks, 800);
-  }
-  async function pollTasks() {
-    if (!state.activeTasks.size) {
-      clearInterval(state.pollTimer); state.pollTimer = null; updateStatusbar(); return;
-    }
-    for (const [tid, info] of state.activeTasks) {
-      try {
-        const t = await api(`/api/tasks/${tid}`);
-        info.msg = t.message || info.msg;
-        info.progress = t.progress || 0;
-        if (t.status === "done") {
-          state.activeTasks.delete(tid);
-          await refreshItems();
-          let customToast = false;
-          if (info.doneCb) customToast = !!(await info.doneCb(t.result));
-          if (!customToast) toast("任务完成");
-        } else if (t.status === "error") {
-          state.activeTasks.delete(tid);
-          toast("任务失败: " + (t.message || "未知错误"), 6000);
-        } else if (t.status === "cancelled") {
-          state.activeTasks.delete(tid);
-          toast("任务已取消");
-        }
-      } catch (e) { /* 网络抖动忽略 */ }
-    }
-    updateStatusbar();
-  }
-  function updateStatusbar() {
-    const wrap = $("#task-bar-wrap"), bar = $("#task-bar"), info = $("#task-info");
-    const cancelBtn = $("#btn-cancel-task");
-    if (!state.activeTasks.size) {
-      wrap.classList.add("hidden");
-      if (cancelBtn) cancelBtn.classList.add("hidden");
-      if (!toastTimer) info.textContent = "就绪";
-      return;
-    }
-    wrap.classList.remove("hidden");
-    if (cancelBtn) cancelBtn.classList.remove("hidden");
-    const arr = Array.from(state.activeTasks.values());
-    const avg = arr.reduce((a, b) => a + b.progress, 0) / arr.length;
-    bar.style.width = (avg * 100).toFixed(0) + "%";
-    info.textContent = arr.map(a => a.msg).join(" · ");
-  }
-  function cancelAllTasks() {
-    Array.from(state.activeTasks.keys()).forEach((tid) => {
-      api(`/api/tasks/${tid}/cancel`, { method: "POST" }).catch(() => {});
-    });
-  }
-  function selectResultItem(result) {
-    if (!result) return;
-    const id = result.item ? result.item.id : (result.item_ids && result.item_ids[0]);
-    if (!id) return;
-    let item = state.items.find(x => x.id === id);
-    if (!item && result.item) {
-      item = result.item;
-      state.items.push(item);
-      renderMediaList();
-    }
-    if (item) waveform.selectItem(item);
-  }
-
   // ── 通用守卫 ───────────────────────────────────────────
   function needItem() { if (!state.currentItem) { toast("请先选择素材"); return false; } return true; }
 
@@ -758,7 +650,7 @@ import { createPool } from "/static/js/modules/pool.js";
         if (proj && state.currentProject && proj.id !== state.currentProject.id) selectProject(proj);
       });
     });
-    $("#btn-cancel-task").addEventListener("click", cancelAllTasks);
+    $("#btn-cancel-task").addEventListener("click", () => tasks.cancelAllTasks());
     $("#btn-import").addEventListener("click", () => io.importDialog());
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
     $("#btn-export-dataset").addEventListener("click", () => io.openDatasetModal());
@@ -832,6 +724,7 @@ import { createPool } from "/static/js/modules/pool.js";
   let io = null;         // 输入/输出模块实例（启动区由 createIo 创建）
   let waveform = null;   // 波形/播放模块实例（启动区由 createWaveform 创建）
   let segments = null;   // 片段列表模块实例（启动区由 createSegments 创建）
+  let tasks = null;      // 任务跟踪模块实例（启动区由 createTasks 创建，最先）
   let pool = null;       // 角色池模块实例（启动区由 createPool 创建）
   const PAGE_KEY = "vc.page.v1";
   let currentPage = "edit";
@@ -857,18 +750,24 @@ import { createPool } from "/static/js/modules/pool.js";
   }
 
   // ── 启动 ───────────────────────────────────────────────
+  tasks = createTasks({ $, api, toast, toastBusy, state,
+    renderMediaList, refreshItems, loadAllItemData,
+    renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
+    renderSubs: () => subtitles.renderSubs(),
+    selectItem: (item) => waveform.selectItem(item) });
   segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
     state, toast, charById, newSegment, pushUndo, scheduleSaveProject, setPage,
     closePool: () => pool.closePool(),
     selectItem: (item) => waveform.selectItem(item) });
-  pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask,
+  pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
     needItem, charById, uid, paletteNext, pushUndo,
     scheduleSaveProject, scheduleSavePool, loadAllItemData, segments, subtitles });
-  subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask,
+  subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
     speakerLabelAt, segsFor: segments.segsFor, newSegment, pushUndo, scheduleSaveProject,
     renderSegments: segments.renderSegments });
-  training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask });
-  io = createIo({ $, api, state, toast, trackTask, needItem, selectResultItem, autoAnalyzeDone,
+  training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask: tasks.trackTask });
+  io = createIo({ $, api, state, toast, trackTask: tasks.trackTask, needItem,
+    selectResultItem: tasks.selectResultItem, autoAnalyzeDone: tasks.autoAnalyzeDone,
     showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
     renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById, scheduleSaveProject,
     fmtSel, fmtT });
@@ -917,7 +816,8 @@ import { createPool } from "/static/js/modules/pool.js";
     undo, redo, pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject, renameProject, deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment,
-    toggleAutoAnalyze: pool.toggleAutoAnalyze, autoAnalyzeDone, attachActiveTasks,
+    toggleAutoAnalyze: pool.toggleAutoAnalyze,
+    autoAnalyzeDone: tasks.autoAnalyzeDone, attachActiveTasks: tasks.attachActiveTasks,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,
     doInfer: training.doInfer, train: training.train,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };

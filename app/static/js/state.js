@@ -42,6 +42,8 @@ export function toast(msg, ms = 4000) {
   if (toastTimer) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { if (!state.activeTasks.size) el.textContent = "就绪"; }, ms);
 }
+// 是否有 toast 正在显示（供状态栏决定是否回写「就绪」）
+export function toastBusy() { return !!toastTimer; }
 
 // ── 工作区布局 ─────────────────────────────────────────────
 export const LS_KEY = "vc.workspace.v1";
