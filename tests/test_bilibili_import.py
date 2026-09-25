@@ -261,7 +261,6 @@ def test_url_import_survives_video_failure(tmp_path: Path, monkeypatch) -> None:
     r = client.post("/api/url/open", json={"urls": ["https://b23.tv/y"], "project_id": pid})
     body = r.get_json()["results"][0]
     tid = body["task_id"]
-    job_id = body["job_id"]
     t = None
     for _ in range(600):
         t = client.get(f"/api/tasks/{tid}").get_json()
@@ -270,9 +269,10 @@ def test_url_import_survives_video_failure(tmp_path: Path, monkeypatch) -> None:
         time.sleep(0.05)
     assert t is not None and t["status"] == "done", t
     item = t["result"]["item"]
-    # 视频下载失败：没有本地预览文件，退回代理流兜底（而非整体失败）
+    # 视频下载失败且无单文件流（DASH）：无本地预览也无 proxy 兜底
+    # （proxy 对分离流必然 404，宁缺毋滥）→ video_url 为 None，前端显示占位
     assert client.get(f"/api/video/{item['id']}").status_code == 404
-    assert item["video_url"] == f"/api/bilibili/proxy/{job_id}"
+    assert item["video_url"] is None
     assert client.get(f"/api/audio/{item['id']}").status_code == 200
 
 

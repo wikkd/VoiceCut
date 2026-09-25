@@ -99,10 +99,14 @@ def _bilibili_worker(c, job: dict, project_id: str = "") -> dict:
     item_id = c.store.new_id()
     wav = items_dir / f"{item_id}.wav"
     extract_audio(src_file, wav, sample_rate=48000, channels=1)
+    # proxy 直链仅当解析出单文件视频流时才有意义；DASH 分离流（番剧等）
+    # 无单文件流，proxy 必然 404，宁可先不给，等本地预览补全
+    extra = {"bilibili_job": job["id"]}
+    if job.get("video_url"):
+        extra["proxy_url"] = f"/api/bilibili/proxy/{job['id']}"
     item = c.register_item(item_id=item_id, wav=wav, name=job["title"], kind="url",
                            source=job["url"], project_id=project_id or None,
-                           extra={"proxy_url": f"/api/bilibili/proxy/{job['id']}",
-                                  "bilibili_job": job["id"]})
+                           extra=extra)
     c.log.info("url import audio ok: %s -> %s", job.get("title"), item.id)
 
     # ── 2) 完整视频 → 本地预览（失败不影响已可用的音频素材）──
@@ -136,6 +140,35 @@ def _attach_local_video(c, job: dict, item, audio_src, cache, items_dir) -> None
         c.log.info("url import video ok: %s -> %s", job.get("title"), preview.name)
     except Exception as exc:  # noqa: BLE001
         c.log.warning("视频下载/预览失败（音频素材仍可用）: %s", exc)
+
+
+@bp.post("/api/bilibili/attach_video/<item_id>")
+def api_attach_video(item_id: str) -> object:
+    """补全/重试本地视频预览（导入时视频下载失败后的修复入口）。"""
+    c = ctx()
+    item = c.store.require(item_id)
+    if not item.source or "bilibili.com" not in item.source:
+        return jsonify({"error": "该素材没有 B 站来源链接，无法补全视频"}), 400
+    if item.preview_mp4 and item.preview_mp4.exists():
+        return jsonify({"ok": True, "task_id": None,
+                        "video_url": f"/api/video/{item_id}", "note": "已有本地预览"})
+    tid = c.tasks.submit(_attach_video_worker, c, item, kind="import")
+    return jsonify({"ok": True, "task_id": tid})
+
+
+def _attach_video_worker(c, item) -> dict:
+    """重新解析来源 URL → 下载完整视频 → 转封装挂为本地预览。"""
+    tid = c.tasks.current_task_id()
+    c.tasks.update(tid, progress=0.0, message="重新解析链接…")
+    job = bilibili_mod.resolve_job(bilibili_mod.register_job(item.source))
+    cache = c.cfg.workdir / "bilibili"
+    cache.mkdir(parents=True, exist_ok=True)
+    items_dir = c.cfg.workdir / "items"
+    # 音频是 wav，不在 VIDEO_EXTS → _attach_local_video 会走完整视频下载
+    _attach_local_video(c, job, item, item.wav_path, cache, items_dir)
+    if not item.preview_mp4 or not item.preview_mp4.exists():
+        raise RuntimeError("视频补全失败（下载或转封装错误），可稍后重试")
+    return {"item_id": item.id, "video_url": f"/api/video/{item.id}"}
 
 
 @bp.get("/api/bilibili/proxy/<job_id>")
