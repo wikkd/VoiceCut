@@ -41,16 +41,17 @@ export function createSegments(ctx) {
     if (seg.q < 80 && tagCls === "ok") return "warn";
     return tagCls;
   }
-  function updateSegBadge(itemId, i) {
+  function updateSegBadge(itemId, i, draftText) {   // draftText：文本框草稿预览（未回车确认前的实时校验）
     const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
     if (!tr) return;
     const segs = segsFor(itemId);
     const seg = segs[i];
     if (!seg) return;
-    const issues = segIssues(seg);
-    const tagCls = _qCls(seg, issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok");
+    const eff = draftText === undefined ? seg : { ...seg, text: draftText };
+    const issues = segIssues(eff);
+    const tagCls = _qCls(eff, issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok");
     const cell = tr.querySelector(".tag");
-    if (cell) { cell.className = "tag " + tagCls; cell.textContent = _tagText(seg, issues); }
+    if (cell) { cell.className = "tag " + tagCls; cell.textContent = _tagText(eff, issues); }
     tr.classList.toggle("bad", issues.length > 0);
     const ch = charById(seg.characterId);
     tr.style.borderLeft = ch ? "4px solid " + ch.color : "";
@@ -171,7 +172,7 @@ export function createSegments(ctx) {
       <td>${fmtDur(seg.end - seg.start)}</td>
       <td><span class="tag ${tagCls}">${tagTxt}</span></td>
       <td><button class="chip seg-aud" data-i="${i}">试听</button></td>
-      <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…"></td>
+      <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
       <td><select class="seg-lang" data-i="${i}">
         ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
       </select></td>

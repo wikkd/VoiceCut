@@ -212,19 +212,33 @@ const makeWav = (seconds, sr = 16000) => {
       const projectName = vc.state.currentProject ? vc.state.currentProject.name : null;
       const srcCells = document.querySelectorAll('#seg-tbody .seg-src').length;
       const poolTitle = document.querySelector('#pool-item-name').textContent;
-      // A1: text input does NOT rebuild the table (focus preserved + row badge updates locally)
+      // A1: 草稿式文本编辑——input 只预览不落数据；未回车失焦=放弃；回车=确认写回+锁定
       let a1 = null;
       const segInput = document.querySelector('#seg-tbody .seg-text');
       if (segInput) {
+        const origText = segInput.value;
+        const a1ItemId = vc.state.currentItem.id;   // 注意：itId 在后面才定义，这里不能引用
         segInput.focus();
         segInput.value = "";
         segInput.dispatchEvent(new Event('input', { bubbles: true }));
         const focusKept = document.activeElement === segInput;
-        const tagEmpty = segInput.closest('tr').querySelector('.tag').textContent;
-        segInput.value = "test";
+        const tagDraft = segInput.closest('tr').querySelector('.tag').textContent;   // 草稿实时校验预览
+        const segMid = (vc.state.segmentsByItem.get(a1ItemId) || [])[0];
+        const draftNotSaved = segMid.text === origText;                             // 草稿未落数据
+        segInput.value = "draft-no-commit";
         segInput.dispatchEvent(new Event('input', { bubbles: true }));
-        const tagOk = segInput.closest('tr').querySelector('.tag').textContent;
-        a1 = { focusKept, tagEmpty, tagOk };
+        segInput.blur();                                                             // 未回车 → 放弃，恢复原文本
+        await new Promise(r => setTimeout(r, 150));
+        const segAfterDiscard = (vc.state.segmentsByItem.get(a1ItemId) || [])[0];
+        const discarded = segAfterDiscard.text === origText && segInput.value === origText;
+        segInput.focus();
+        segInput.value = "confirmed-by-enter";
+        segInput.dispatchEvent(new Event('input', { bubbles: true }));
+        segInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));   // 回车确认
+        await new Promise(r => setTimeout(r, 200));
+        const segCommitted = (vc.state.segmentsByItem.get(a1ItemId) || [])[0];
+        const committed = segCommitted.text === "confirmed-by-enter" && segCommitted.locked === true;
+        a1 = { focusKept, tagDraft, draftNotSaved, discarded, committed };
       }
       // D1: per-speaker / val-ratio export fields
       const hasPerSpeaker = !!document.querySelector('#ds-per-speaker');
@@ -282,7 +296,8 @@ const makeWav = (seconds, sr = 16000) => {
       const _ai = _audList.findIndex(s => s.id === audSeg.id);
       if (_ai >= 0) _audList.splice(_ai, 1);
       // 把关键可见性并入 ok：此前只打印不判定，曾漏掉右键重定向菜单打不开的回归
-      return { ok: poolVisible && redirVisible && mediaMenuVisible && bbIsTextarea && cancelBtn && hasAutosplitMenu,
+      return { ok: poolVisible && redirVisible && mediaMenuVisible && bbIsTextarea && cancelBtn && hasAutosplitMenu
+               && !!a1 && a1.focusKept && a1.draftNotSaved && a1.discarded && a1.committed,
                poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
                mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: (vc.state.segmentsByItem.get(itId) || []).length,
                hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle,

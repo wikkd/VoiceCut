@@ -136,27 +136,46 @@ import { createProjects } from "/static/js/modules/projects.js";
     setSegFocus(tr);
     segments.renderSegments();
   });
+  // 片段文本框：草稿式编辑——自动识别内容防误改，输入仅草稿，必须回车确认才落数据；
+  // 未回车就失焦（点别处 / Esc）= 放弃修改，恢复原文本
   $("#seg-tbody").addEventListener("input", (e) => {
     const el = evtEl(e);
     const tr = closestEl(el, "tr.seg-row");
     if (!tr) return;
-    const itemId = tr.dataset.item;
-    const i = Number(el.dataset.i);
-    const segs = segments.segsFor(itemId);
-    if (!segs[i]) return;
-    if (el.classList.contains("seg-text")) {
-      if (!el.dataset.undoed) { el.dataset.undoed = "1"; store.pushUndo("编辑文本"); }
-      segs[i].text = el.value; segs[i].locked = true;   // 人工编辑 → 锁定，自动识别不再覆盖
-      store.scheduleSaveProject(itemId);
-    }
-    segments.updateSegBadge(itemId, i);
+    if (!el.classList.contains("seg-text")) return;
+    el.dataset.dirty = "1";
+    segments.updateSegBadge(tr.dataset.item, Number(el.dataset.i), el.value);   // 草稿实时校验预览
   });
-  // 片段文本框内 Enter = 确认并退出编辑（焦点交还页面，快捷键恢复）
+  // 片段文本框内 Enter = 确认草稿并退出编辑（焦点交还页面，快捷键恢复）
   $("#seg-tbody").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && e.target.classList && e.target.classList.contains("seg-text")) {
       e.preventDefault();
+      e.target.dataset.commit = "1";
       e.target.blur();
     }
+  });
+  // focusout（blur 不冒泡）：有 commit 标记 = 回车确认 → 写入片段；否则放弃草稿恢复原文本
+  $("#seg-tbody").addEventListener("focusout", (e) => {
+    const el = evtEl(e);
+    if (!el.classList || !el.classList.contains("seg-text") || !el.dataset.dirty) return;
+    const tr = closestEl(el, "tr.seg-row");
+    if (!tr) return;
+    const itemId = tr.dataset.item, i = Number(el.dataset.i);
+    const segs = segments.segsFor(itemId);
+    if (!segs[i]) return;
+    const commit = el.dataset.commit === "1";
+    delete el.dataset.commit; delete el.dataset.dirty;
+    if (commit) {
+      const nv = el.value;
+      if (nv !== segs[i].text) {
+        store.pushUndo("编辑文本");
+        segs[i].text = nv; segs[i].locked = true;   // 人工确认 → 锁定，自动识别不再覆盖
+        store.scheduleSaveProject(itemId);
+      }
+    } else {
+      el.value = segs[i].text;                       // 未回车 → 丢弃草稿
+    }
+    segments.updateSegBadge(itemId, i);
   });
   $("#seg-tbody").addEventListener("change", (e) => {
     const el = evtEl(e);
