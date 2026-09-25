@@ -245,7 +245,17 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
   display: flex; align-items: center; gap: 10px; padding: 5px 12px;
   background: var(--panel-2); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
 }
-#boot-state { margin-left: auto; color: var(--warn); }
+#boot-state {
+  margin-left: auto; display: flex; align-items: center; gap: 6px;
+  color: var(--muted); max-width: 320px; white-space: nowrap;
+}
+#boot-state .lamp-msg { overflow: hidden; text-overflow: ellipsis; }
+#boot-state .lamp {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+  background: var(--warn); box-shadow: 0 0 6px var(--warn);   /* 连接中=黄 */
+}
+#boot-state.lamp-green .lamp { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+#boot-state.lamp-red .lamp { background: var(--danger); box-shadow: 0 0 6px var(--danger); }
 
 /* ── 消息/任务气泡堆叠层（左下角，向上堆叠） ── */
 #toast-stack {

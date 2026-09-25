@@ -24,10 +24,17 @@ import { createProjects } from "/static/js/modules/projects.js";
 
 
   // ── 引导 ───────────────────────────────────────────────
+  function setBoot(color, msg) {
+    const el = $("#boot-state");
+    el.classList.remove("lamp-green", "lamp-red");
+    if (color) el.classList.add("lamp-" + color);
+    el.title = msg;
+    el.querySelector(".lamp-msg").textContent = msg;
+  }
   function fail(msg) {
     state.bootErr = msg;
     document.body.dataset.vc = "error";
-    $("#boot-state").textContent = "❌ " + msg;
+    setBoot("red", msg);
   }
   async function boot() {
     if (typeof WaveSurfer === "undefined") return fail("wavesurfer 未加载");
@@ -40,7 +47,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       try { pid = localStorage.getItem(LS_PROJECT); } catch (e) {}
       const proj = projList.find(p => p.id === pid) || projList[0] || null;
       if (proj) await projects.selectProject(proj);
-      $("#boot-state").textContent = "后端 OK · ffmpeg: " + cfg.ffmpeg.split(/[\\/]/).pop();
+      setBoot("green", "后端 OK · ffmpeg: " + cfg.ffmpeg.split(/[\\/]/).pop());
       document.body.dataset.vc = "ok";
     } catch (e) { return fail("后端连接失败: " + e.message); }
   }
