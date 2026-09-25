@@ -389,6 +389,7 @@ import { createProjects } from "/static/js/modules/projects.js";
 
   function setPage(name) {
     currentPage = name;
+    document.body.dataset.page = name;   // 供 CSS 做页面上下文显隐（工具栏/菜单项）
     try { localStorage.setItem(PAGE_KEY, name); } catch (e) {}
     $$("#page-edit, #page-media, #page-train").forEach(pp => pp.classList.add("hidden"));
     const el = document.getElementById("page-" + name);

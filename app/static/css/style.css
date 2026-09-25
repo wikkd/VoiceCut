@@ -95,6 +95,10 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 #perf-chip b.lv-bad { color: var(--danger); }
 #perf-chip b.off { color: var(--muted); }
 
+/* ── 页面上下文显隐：工具栏与菜单项仅剪辑页需要（避免与素材库/训练页页头重复） ── */
+body:not([data-page="edit"]) #toolbar { display: none; }
+body:not([data-page="edit"]) #menubar .menu { display: none; }
+
 /* ── ② 工具栏 ─────────────────────────────── */
 #toolbar {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
