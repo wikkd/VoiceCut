@@ -1,16 +1,22 @@
 """Speaker labeling: ECAPA-TDNN embeddings (speechbrain) + hierarchical clustering.
 
-Pipeline (robust against BGM-laden anime audio):
-  1. Sliding windows inside each whisper subtitle -> ECAPA embeddings.
+Pipeline (robust against BGM-laden anime audio), subtitle-anchored joint model:
+  1. Sliding windows INSIDE each whisper subtitle -> ECAPA embeddings. The
+     subtitle line is the unit of decision; windows never cross line
+     boundaries (字幕锚定).
   2. AVERAGE the windows per subtitle into one stable subtitle embedding
-     (short-window embeddings alone are too noisy: clustering them directly
-     used to produce one "speaker" per window, e.g. 999 roles for one video).
-  3. Cluster the subtitle embeddings with an adaptive cosine cutoff -> a sane
-     number of speakers (~3-15 by default).
-  4. Vote each subtitle's windows against the speaker centroids: clean
-     subtitles yield one speaker segment; subtitles that really mix two
-     speakers are split at window level and flagged ``mixed`` (kept unassigned
-     for manual correction via the character pool).
+     (trimmed mean, keep 75%) and cluster ALL subtitles of the project
+     together into one shared speaker set.
+  3. VOTING + VITERBI SMOOTHING over the subtitle sequence (对话连续性先验):
+     each line's windows vote for the nearest speaker centroid, then a Viterbi
+     pass with a small label-switch cost absorbs single-line noise flips that
+     used to split one voice across several "speakers".
+  4. MIXED detection by contiguous window runs (not raw vote counts): a line
+     really containing two speakers has a CONTIGUOUS run of second-speaker
+     windows >= share/duration thresholds; scattered flips (BGM noise) no
+     longer trigger false splits. Mixed lines are split at label-change
+     boundaries and the TEXT is apportioned at the nearest sentence
+     punctuation (字幕推理: never cut mid-word).
 
 If ECAPA cannot be loaded/downloaded we fall back to MFCC-based clustering so
 the feature still works offline (marked quality="mfcc").  Accuracy is
@@ -365,12 +371,15 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
                 total = sum(p[1] - p[0] for p in parts)
                 pos = 0
                 for j, (ps, pe, plb) in enumerate(parts):
+                    remain = text[pos:]
                     if j == len(parts) - 1:
-                        take = n - pos
-                    elif n > pos:
-                        take = min(n - pos, max(1, round(n * (pe - ps) / total)))
-                    else:
+                        take = len(remain)
+                    elif not remain:
                         take = 0
+                    else:
+                        # 字幕推理：切点吸附到最近句读，避免从词中间硬切
+                        take = min(len(remain),
+                                   _apportion_text(remain, (pe - ps) / total))
                     child = {**seg, "id": new_id("s"),
                              "start": round(ps, 3), "end": round(pe, 3),
                              "speakerLabel": plb, "mixed": False,
@@ -659,6 +668,99 @@ def _collect_source(emb_fn, mono, sr, subs, base, total, progress_cb=None):
     return acc, sub_embs
 
 
+# ── 字幕推理 + 音色识别联合判定 ──────────────────────────────
+_SWITCH_COST = 0.05   # Viterbi 标签切换代价：对话连续性先验强度（吸掉单行噪声翻转）
+_MIXED_SHARE = 0.18   # 第二人连续发言占行时长的最小占比（连续段判定，抗散落噪声票）
+_MIXED_MIN_SEC = 0.4  # 第二人连续发言的最短绝对时长
+
+
+def _nearest_label(e, label_embeddings):
+    best, best_sim = None, -1.0
+    for lb, cemb in label_embeddings.items():
+        sim = _cos(e, cemb)
+        if sim > best_sim:
+            best, best_sim = lb, sim
+    return best
+
+
+def _window_runs(vecs, label_embeddings):
+    """Merge per-window nearest labels into contiguous runs (mixed evidence)."""
+    runs: list = []
+    for ws, we, e in vecs:
+        lb = _nearest_label(e, label_embeddings)
+        if runs and runs[-1]["label"] == lb and (ws - runs[-1]["end"]) <= _HOP * 0.75:
+            runs[-1]["end"] = max(runs[-1]["end"], we)
+        else:
+            runs.append({"start": round(float(ws), 3), "end": round(float(we), 3),
+                         "label": lb})
+    return runs
+
+
+def _viterbi_labels(line_embs, init_labels, label_embeddings, switch_cost=0.05):
+    """Dialogue-continuity smoothing (Viterbi over the subtitle sequence).
+
+    Emission: cosine similarity between the subtitle's stable embedding and
+    each shared speaker centroid.  Transition: a small cost when consecutive
+    subtitles get different labels — enough to absorb single-line window-noise
+    flips (one voice splitting across several "speakers"), while a line with a
+    STRONG own voice still switches (its emission gain dwarfs the switch cost).
+    Subtitles without an embedding keep their vote label; sequence adjacency
+    follows list order (i.e. timeline order within an item).
+    Returns labels aligned with the input lists.
+    """
+    labels = list(label_embeddings.keys())
+    out = list(init_labels)
+    idxs = [i for i, e in enumerate(line_embs) if e is not None]
+    if not labels or len(idxs) < 3:
+        return out
+    cents = [label_embeddings[lb] for lb in labels]
+    k = len(labels)
+    m = len(idxs)
+    V = [[_cos(line_embs[i], cents[j]) for j in range(k)] for i in idxs]
+    back = [[0] * k for _ in range(m)]
+    for a in range(1, m):
+        for j in range(k):
+            best, bj = -1e18, 0
+            for pj in range(k):
+                sc = V[a - 1][pj] - (switch_cost if pj != j else 0.0)
+                if sc > best:
+                    best, bj = sc, pj
+            V[a][j] += best
+            back[a][j] = bj
+    j = max(range(k), key=lambda x: V[-1][x])
+    path = [j]
+    for a in range(m - 1, 0, -1):
+        j = back[a][j]
+        path.append(j)
+    path.reverse()
+    for a, i in enumerate(idxs):
+        out[i] = labels[path[a]]
+    return out
+
+
+# mixed 拆分时的文本切点：句读标点（字幕推理——绝不在词中间硬切）
+_PUNCT_CUT = "。！？…、，,.!?;；:：—～~"
+
+
+def _apportion_text(text, ratio):
+    """Chars to take from ``text`` for a time-ratio ``ratio`` split.
+
+    Prefers cutting right AFTER a sentence punctuation nearest to the raw
+    ratio position (within ±25% of the text length); falls back to the raw
+    position when no punctuation is near.  Never returns 0 for non-empty text.
+    """
+    n = len(text)
+    if n <= 1:
+        return n
+    pos = max(1, min(n - 1, int(round(n * ratio))))
+    limit = max(2, n // 4)
+    for d in range(limit):
+        for p in (pos - d, pos + d):
+            if 1 <= p <= n - 1 and text[p - 1] in _PUNCT_CUT:
+                return p
+    return pos
+
+
 def generate_speakers_project(sources, *, progress_cb=None):
     """Joint speaker analysis across ALL items of a project.
 
@@ -729,14 +831,14 @@ def generate_speakers_project(sources, *, progress_cb=None):
     # per-source subtitle assignment + mixed detection
     items = []
     for si in range(len(sources)):
-        acc, _sub_embs = collected[si]
+        acc, sub_embs = collected[si]
         subs = sources[si]["subs"]
         label_of_sub: dict[int, str] = {}
         for k, (s2, i) in enumerate(meta):
             if s2 == si:
                 label_of_sub[i] = label_of_global[k]
         speaker_segments, sub_labels, mixed_count = _assign_source(
-            subs, acc, label_of_sub, label_embeddings)
+            subs, acc, label_of_sub, label_embeddings, sub_embs)
         labeled = sum(1 for x in sub_labels if x["label"])
         items.append({
             "speaker_segments": speaker_segments,
@@ -754,57 +856,68 @@ def generate_speakers_project(sources, *, progress_cb=None):
     }
 
 
-def _assign_source(subs, acc, label_of_sub, label_embeddings):
-    """Vote each subtitle's windows against the shared speaker centroids -> the
-    item's speaker_segments + per-subtitle labels (mixed subtitles are split at
-    window level and flagged for manual correction)."""
-    def _nearest_lb(e: np.ndarray):
-        best, best_sim = None, -1.0
-        for cid, cemb in label_embeddings.items():
-            sim = _cos(e, cemb)
-            if sim > best_sim:
-                best, best_sim = cid, sim
-        return best
+def _assign_source(subs, acc, label_of_sub, label_embeddings, sub_embs=None):
+    """Joint per-item assignment: window votes -> Viterbi smoothing -> runs.
+
+    Three stages per subtitle line (the unit of decision):
+      1. Each window votes for its nearest shared-speaker centroid; contiguous
+         same-label windows are merged into runs (evidence for mixed lines).
+      2. A Viterbi pass over the line sequence with a small label-switch cost
+         (对话连续性先验) re-assigns labels globally — a single line whose
+         windows barely flipped to another voice snaps back to its neighbours,
+         while a line with a STRONG second voice keeps its own label.
+      3. Mixed detection uses run durations (contiguous second-speaker speech
+         >= share of the line and >= absolute seconds), not raw vote counts,
+         so scattered single-window flips no longer cause false splits.
+    """
+    n = len(subs)
+    line_info = []
+    for i in range(n):
+        s = subs[i]
+        vecs = acc.get(i, [])
+        if label_of_sub.get(i) is None or not vecs:
+            line_info.append(None)
+            continue
+        counts: dict[str, int] = {}
+        for _ws, _we, e in vecs:
+            lb = _nearest_label(e, label_embeddings)
+            counts[lb] = counts.get(lb, 0) + 1
+        dom = max(counts.items(), key=lambda kv: kv[1])[0]
+        line_info.append({"s": s, "vecs": vecs, "dom": dom,
+                          "runs": _window_runs(vecs, label_embeddings)})
+
+    # Viterbi smoothing across the line sequence (skips lines w/o embedding)
+    embs = [(sub_embs[i] if sub_embs else None) if line_info[i] else None
+            for i in range(n)]
+    init = [li["dom"] if li else None for li in line_info]
+    smoothed = _viterbi_labels(embs, init, label_embeddings, _SWITCH_COST)
 
     speaker_segments: list = []
     sub_labels: list = []
     mixed_count = 0
-    for i in range(len(subs)):
-        s = subs[i]
-        cid = label_of_sub.get(i)
-        vecs = acc.get(i, [])
-        if cid is None or not vecs:
-            sub_labels.append({"label": cid, "mixed": False})
+    for i, li in enumerate(line_info):
+        if li is None:
+            sub_labels.append({"label": label_of_sub.get(i), "mixed": False})
             continue
-        votes: dict[str, int] = {}
-        for _ws, _we, e in vecs:
-            nlb = _nearest_lb(e)
-            votes[nlb] = votes.get(nlb, 0) + 1
-        top = sorted(votes.items(), key=lambda kv: -kv[1])
-        dom = top[0][0]
-        second = top[1][0] if len(top) > 1 else None
-        second_share = (top[1][1] / len(vecs)) if (len(top) > 1 and vecs) else 0.0
-        # 0.22：对话抢话常是"一人长一句+一人短插话"，0.30 会漏掉大量
-        # 真实的第二人发言（实测 199 行只标出 16 mixed）。
-        mixed = bool(second is not None and second != dom and len(vecs) >= 2
-                     and second_share >= 0.22)
+        s = li["s"]
+        fin = smoothed[i]
+        dur = max(1e-6, float(s["end"]) - float(s["start"]))
+        second = max((r for r in li["runs"] if r["label"] != fin),
+                     key=lambda r: r["end"] - r["start"], default=None)
+        sec_dur = (second["end"] - second["start"]) if second else 0.0
+        mixed = bool(second and sec_dur >= _MIXED_MIN_SEC
+                     and sec_dur / dur >= _MIXED_SHARE)
         if mixed:
             # emit window-level runs so downstream dominant_label() sees the
             # real second speaker (kept unassigned for manual correction)
             mixed_count += 1
-            runs: list = []
-            for ws, we, e in vecs:
-                nlb = _nearest_lb(e)
-                if runs and runs[-1]["label"] == nlb and (ws - runs[-1]["end"]) <= _HOP * 0.75:
-                    runs[-1]["end"] = max(runs[-1]["end"], we)
-                else:
-                    runs.append({"start": round(float(ws), 3), "end": round(float(we), 3),
-                                 "label": nlb})
-            speaker_segments.extend(runs)
+            speaker_segments.extend(li["runs"])
+            sub_labels.append({"label": fin, "mixed": True})
         else:
             speaker_segments.append({"start": round(float(s["start"]), 3),
-                                     "end": round(float(s["end"]), 3), "label": dom})
-        sub_labels.append({"label": dom, "mixed": bool(mixed)})
+                                     "end": round(float(s["end"]), 3),
+                                     "label": fin})
+            sub_labels.append({"label": fin, "mixed": False})
     speaker_segments.sort(key=lambda x: (x["start"], x["end"]))
     return speaker_segments, sub_labels, mixed_count
 
