@@ -7,6 +7,18 @@ export function createWaveform(ctx) {
           renderMediaList, loadProject, saveProjectNow, savePoolNow,
           renderSegments, subtitles, auditionFocus } = ctx;
 
+  // ── Region 创建守卫 ──────────────────────────────────
+  // 程序创建的 region（时间轴拖选 / Ctrl 多选 / 键盘快记 / 字幕高亮）统一走 progAddRegion，
+  // 创建期间置 state._vcProgRegion=true；"波形拖拽选区"的 region-created 分支据此跳过程序创建。
+  function progAddRegion(opts) {
+    state._vcProgRegion = true;
+    try { return state.regions.addRegion(opts); } finally { state._vcProgRegion = false; }
+  }
+  // 记录波形拖选按下瞬间的修饰键：波形 Ctrl+拖选 = 追加多选标记（与时间轴 Ctrl+拖选一致）
+  let lastDragCtrl = false;
+  window.addEventListener("pointerdown", (e) => { lastDragCtrl = !!(e.ctrlKey || e.metaKey); }, true);
+  let dragSelUnbind = null;   // enableDragSelection 的解绑函数（换素材时清理）
+
   // ── 素材选择 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
     if ((state.dirtyItems.size || state.poolDirty) && state.currentItem && state.currentItem.id !== item.id) {
@@ -93,11 +105,33 @@ export function createWaveform(ctx) {
     ws.on("scroll", syncTimeline);
 
     // 选区显示：regions 插件仅用于"渲染"选区/多选标记（全部程序创建，
-    // drag/resize 关闭）；创建选区的唯一交互入口是时间轴拖拽（bindTimelineSelection）
+    // drag/resize 关闭）；创建选区的交互入口：波形拖拽 + 时间轴拖拽（bindTimelineSelection）
     state.regions.on("region-removed", (region) => {
       const i = state.multiRegions.findIndex((m) => m.region === region);
       if (i >= 0) { state.multiRegions.splice(i, 1); updateSelUI(); }
     });
+
+    // 恢复"在波形上直接拖拽选区"的交互（此前 042f674 移除，现应需求回归）：
+    // enableDragSelection 的参数原样传给 region 构造器，drag/resize 全关 ——
+    // 拖出选区后即固定，不能再拖动/缩放。松开鼠标时插件 saveRegion → region-created。
+    state.regions.on("region-created", (region) => {
+      if (state._vcProgRegion) return;   // 程序创建的时间轴选区/多选标记/字幕高亮不走此分支
+      if (lastDragCtrl) {
+        // 波形 Ctrl+拖选：追加橙色多选标记（与时间轴 Ctrl+拖选一致）
+        state.multiRegions.push({ start: region.start, end: region.end, region });
+      } else {
+        // 普通波形拖选：替换为单一蓝色选区
+        clearMultiRegions();
+        if (state.selectionRegion && state.selectionRegion !== region) {
+          try { state.selectionRegion.remove(); } catch (e) {}
+        }
+      }
+      state.selectionRegion = region;
+      state.selection = { start: region.start, end: region.end };
+      updateSelUI();
+    });
+    if (dragSelUnbind) { try { dragSelUnbind(); } catch (e) {} }
+    dragSelUnbind = state.regions.enableDragSelection({ color: SEL_COLOR, drag: false, resize: false });
 
     ws.on("play", () => { state.playing = true; updatePlayUI(); videoPlay(); });
     ws.on("pause", () => { state.playing = false; updatePlayUI(); videoPause(); });
@@ -280,7 +314,7 @@ export function createWaveform(ctx) {
     const t = state.ws.getCurrentTime();
     const start = t, end = Math.min(dur, t + SEEK_STEP);
     if (end - start < 0.05) return toast("已到末尾");
-    const region = state.regions.addRegion({ start, end, color: MULTI_COLOR, drag: false, resize: false });
+    const region = progAddRegion({ start, end, color: MULTI_COLOR, drag: false, resize: false });
     state.multiRegions.push({ start, end, region });
     state.selectionRegion = region;
     state.selection = { start, end };
@@ -415,7 +449,7 @@ export function createWaveform(ctx) {
       state.selectionRegion.setOptions({ start, end, color, drag: false, resize: false });
       return state.selectionRegion;
     }
-    return state.regions.addRegion({ start, end, color, drag: false, resize: false });
+    return progAddRegion({ start, end, color, drag: false, resize: false });
   }
   function bindTimelineSelection() {
     const tl = $("#timeline");
@@ -435,7 +469,7 @@ export function createWaveform(ctx) {
       if (tlDrag.ctrl) {
         // Ctrl 拖选：追加一个橙色标记，保留已有标记
         if (!tlDrag.region) {
-          tlDrag.region = state.regions.addRegion({ start: a, end: b, color: MULTI_COLOR, drag: false, resize: false });
+          tlDrag.region = progAddRegion({ start: a, end: b, color: MULTI_COLOR, drag: false, resize: false });
         } else {
           tlDrag.region.setOptions({ start: a, end: b });
         }

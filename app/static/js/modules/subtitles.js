@@ -53,7 +53,11 @@ export function createSubtitles(ctx) {
     const s = state.subs[i];
     if (!state.ws || !s) return;
     if (subRegion) { try { subRegion.remove(); } catch (e) {} subRegion = null; }
-    subRegion = state.regions.addRegion({ start: s.start, end: s.end, color: "rgba(108,156,255,0.25)", drag: false, resize: false });
+    // 置守卫标记：程序创建的高亮块不能被波形拖选分支(region-created)当成新选区
+    state._vcProgRegion = true;
+    try {
+      subRegion = state.regions.addRegion({ start: s.start, end: s.end, color: "rgba(108,156,255,0.25)", drag: false, resize: false });
+    } finally { state._vcProgRegion = false; }
     state.ws.setTime(s.start);
   }
   function resetSubRegion() {   // 切换素材时由 waveform 调用：旧波形的 region 已随插件销毁

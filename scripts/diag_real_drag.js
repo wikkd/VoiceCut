@@ -80,9 +80,38 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const v = st.result.result.value;
     console.log("真实拖选结果:", JSON.stringify(v));
     const ok = v && v.sel && Math.abs(v.sel.start - v.expect.a) < 0.4 && Math.abs(v.sel.end - v.expect.b) < 0.4 && v.region;
+
+    // 波形拖选（恢复的旧交互）：在 #waveform 上真实拖拽 → 生成选区且 drag=false（不可再拖动）
+    const wr = await send("Runtime.evaluate", { expression: `(() => {
+      const r = window.__vc.state.ws.getWrapper().getBoundingClientRect();
+      return { x: r.left, y: r.top + r.height * 0.5, w: r.width };
+    })()`, returnByValue: true });
+    const W = wr.result.result.value;
+    const wx1 = W.x + W.w * 0.55, wx2 = W.x + W.w * 0.70;
+    const wbtn = (type, x, pressed) => send("Input.dispatchMouseEvent", {
+      type, x, y: W.y, button: "left", buttons: pressed ? 1 : 0, clickCount: (type === "mousePressed" || type === "mouseReleased") ? 1 : 0 });
+    await wbtn("mousePressed", wx1, true); await sleep(60);
+    for (let k = 1; k <= 5; k++) await wbtn("mouseMoved", wx1 + (wx2 - wx1) * k / 5, true);
+    await sleep(60);
+    await wbtn("mouseReleased", wx2, false);
+    await sleep(300);
+    const wv = (await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      const s = vc.state.selection, r = vc.state.selectionRegion;
+      const dur = vc.state.ws ? vc.state.ws.getDuration() : 0;
+      return { sel: s ? { start: Math.round(s.start*100)/100, end: Math.round(s.end*100)/100 } : null,
+               expect: { a: Math.round(dur*0.55*100)/100, b: Math.round(dur*0.70*100)/100 },
+               drag: r ? r.drag : null, resize: r ? r.resize : null };
+    })()`, returnByValue: true })).result.result.value;
+    console.log("波形拖选结果:", JSON.stringify(wv));
+    // 容差 1.0s：vendored enableDragSelection 预览 region 初始化固定 +5px（40s 素材≈0.72s），
+    // 属插件固有偏差；关键断言是选区落在拖拽区间附近且 drag/resize 全关（不可再拖动）
+    const okW = wv && wv.sel && Math.abs(wv.sel.start - wv.expect.a) < 1.0 && Math.abs(wv.sel.end - wv.expect.b) < 1.0
+      && wv.drag === false && wv.resize === false;
+
     console.log("页面错误:", errors.length ? errors.join(" | ") : "（无）");
-    console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL");
-    process.exitCode = ok ? 0 : 1;
+    console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL");
+    process.exitCode = (ok && okW) ? 0 : 1;
   } finally {
     try { child.kill(); } catch (e) {}
     try { fs.rmSync(PROF, { recursive: true, force: true }); } catch (e) {}
