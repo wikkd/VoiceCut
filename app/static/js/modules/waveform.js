@@ -299,7 +299,27 @@ export function createWaveform(ctx) {
   }
   function updateSelUI() {
     const n = state.multiRegions.length;
-    $("#sel-info").textContent = (n >= 2 ? `多选 ${n} 段 · ` : "") + fmtSel(state.selection);
+    const pend = selPending();
+    $("#sel-info").textContent = (n >= 2 ? `多选 ${n} 段 · ` : "") + fmtSel(state.selection)
+      + (pend ? " · 未确认（Ctrl+Enter 写回）" : "");
+    refreshSelColor();
+  }
+
+  // 选区是否被调整过：聚焦片段存在且当前选区 ≠ 该片段区间 → 待确认（显示黄色）
+  function selPending() {
+    const a = state.activeSeg;
+    if (!a || !state.selection) return false;
+    const seg = (state.segmentsByItem.get(a.itemId) || []).find(s => s.id === a.segId);
+    if (!seg) return false;
+    return Math.abs(state.selection.start - seg.start) > 0.005
+      || Math.abs(state.selection.end - seg.end) > 0.005;
+  }
+  // 选区颜色：一致 = 蓝色；已调整未回车写回 = 黄色（回车写回后自动回蓝）
+  function refreshSelColor() {
+    const r = state.selectionRegion;
+    if (!r) { state._selColor = null; return; }
+    const color = selPending() ? SEL_PENDING : SEL_COLOR;
+    if (state._selColor !== color) { state._selColor = color; r.setOptions({ color }); }
   }
 
   // 快退/快进：平移播放头（夹在 0 ~ 时长内），视频经 timeupdate 联动
@@ -465,6 +485,7 @@ export function createWaveform(ctx) {
   // 左键在 #timeline 上按下并拖动 → 创建/更新选区；Ctrl+拖动 → 追加橙色
   // 多选标记；原地点击（位移 < 0.05s）= 跳转播放头；拖选中右键 = 取消本次。
   const SEL_COLOR = "rgba(108,156,255,0.25)";
+  const SEL_PENDING = "rgba(255,193,7,0.32)";   // 已调整但未回车写回（与聚焦片段不一致）→ 黄色
   let tlDrag = null;   // {startT, moved, ctrl, region, cleared}
   function _tlTime(e) {
     const wr = state.ws.getWrapper().getBoundingClientRect();
@@ -538,7 +559,7 @@ export function createWaveform(ctx) {
   }
 
   return { selectItem, togglePlay, toggleLoop, playSelection, playSequence,
-           focusSegment, setSelection,
+           focusSegment, setSelection, refreshSelColor, selPending,
            updatePlayUI, updateTransport, updateSelUI,
            setupMMSeek, seekBy, adjVolume,
            markForward, unmarkLast, clearMultiRegions, clearSelection,

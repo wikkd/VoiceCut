@@ -4,7 +4,7 @@
 export function createSegments(ctx) {
   const { $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
           state, toast, charById, newSegment, pushUndo,
-          scheduleSaveProject, closePool, setPage, selectItem } = ctx;
+          scheduleSaveProject, closePool, setPage, selectItem, refreshSelColor } = ctx;
 
   function segsFor(itemId) {
     if (!state.segmentsByItem.has(itemId)) state.segmentsByItem.set(itemId, []);
@@ -273,6 +273,7 @@ export function createSegments(ctx) {
     seg.end = +end.toFixed(3);
     scheduleSaveProject(a.itemId);
     renderSegments();
+    if (refreshSelColor) refreshSelColor();   // 写回后选区与片段一致 → 黄色回蓝
     toast(`已更新片段区间 ${fmtT(seg.start)} ~ ${fmtT(seg.end)}`);
   }
 

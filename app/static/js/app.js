@@ -570,6 +570,8 @@ import { createProjects } from "/static/js/modules/projects.js";
   segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
     state, toast, charById: store.charById, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject, setPage,
     closePool: () => pool.closePool(),
+    // waveform 晚于 segments 创建：用闭包注入，写回片段后把选区从黄色刷回蓝色
+    refreshSelColor: () => waveform.refreshSelColor(),
     selectItem: (item) => waveform.selectItem(item) });
   pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
     attachActiveTasks: tasks.attachActiveTasks,

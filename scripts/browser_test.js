@@ -339,21 +339,41 @@ const makeWav = (seconds, sr = 16000) => {
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
       await new Promise(r => setTimeout(r, 200));
       const sameOk = seg.start === before.start && seg.end === before.end;   // 选区一致 → 不修改
-      vc.state.selection = { start: before.start, end: before.end + 1 };     // 模拟手柄拉伸 +1s
+      const cBlue = vc.state._selColor;                                      // 一致态：蓝色
+      return { focused, sameOk, cBlue, segId: seg.id, before };
+    })()`, awaitPromise: true, returnByValue: true });
+    const av0 = rA.result && rA.result.result && rA.result.result.value;
+    // 真实按键 Shift+→ 微调终点 +0.5s（press 是 Node 侧 CDP 工具，不能在页面表达式里用）
+    await press("ArrowRight", "ArrowRight", 39, 8);
+    await sleep(250);
+    const rA2 = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const before = ${JSON.stringify(av0 && av0.before)};
+      const segId = ${JSON.stringify(av0 && av0.segId)};
+      const cAmber = vc.state._selColor;
+      const nudged = Math.abs(vc.state.selection.end - (before.end + 0.5)) < 0.02;
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
       await new Promise(r => setTimeout(r, 300));
-      const segNow = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === seg.id);   // restoreSnapshot 会整体替换数组，undo 后必须重新取引用
-      const applied = segNow && Math.abs(segNow.end - (before.end + 1)) < 0.01 && Math.abs(segNow.start - before.start) < 0.001;
+      const cBack = vc.state._selColor;                                      // 写回后恢复蓝色
+      const segNow = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === segId);   // restoreSnapshot 会整体替换数组，undo 后必须重新取引用
+      const applied = segNow && Math.abs(segNow.end - (before.end + 0.5)) < 0.02 && Math.abs(segNow.start - before.start) < 0.001;
       vc.undo();
       await new Promise(r => setTimeout(r, 300));
-      const segUndo = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === seg.id);
+      const segUndo = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === segId);
       const undone = segUndo && Math.abs(segUndo.end - before.end) < 0.01;   // undo 恢复原区间
-      return { focused, sameOk, applied, undone, segEnd: segNow ? segNow.end : null, before };
+      const amber = !!cAmber && cAmber.indexOf("255,193,7") >= 0;
+      const blueBack = !!cBack && cBack.indexOf("108,156,255") >= 0;
+      return { applied, undone, nudged, amber, blueBack, cAmber, cBack,
+        segEnd: segNow ? segNow.end : null, before };
     })()`, awaitPromise: true, returnByValue: true });
-    const av = rA.result && rA.result.result && rA.result.result.value;
+    const av2 = rA2.result && rA2.result.result && rA2.result.result.value;
+    const av = Object.assign({}, av0, av2);
     console.log("APPLY:", JSON.stringify(av));
     if (rA.result && rA.result.exceptionDetails) console.log("APPLY-EXC:", JSON.stringify(rA.result.exceptionDetails));
-    console.log("APPLY:", JSON.stringify({ ok: !!(av && !av.skip && av.focused && av.sameOk && av.applied && av.undone) }));
+    if (rA2.result && rA2.result.exceptionDetails) console.log("APPLY2-EXC:", JSON.stringify(rA2.result.exceptionDetails));
+    console.log("APPLY:", JSON.stringify({ ok: !!(av && !av.skip && av.focused && av.sameOk && av.nudged
+      && av.amber && av.applied && av.blueBack && av.undone) }));
 
     // SPEAKER：说话人下拉可更改——change 写回 characterId；点击下拉不再触发行重建（回归：行重建曾吞掉下拉交互）
     const rS = await send("Runtime.evaluate", { expression: `(async () => {
