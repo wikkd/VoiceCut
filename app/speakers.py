@@ -432,6 +432,35 @@ def _silhouette_score(X: np.ndarray, labels) -> float:
     return float(np.mean(scores)) if scores else -1.0
 
 
+def _enforce_max_k(X: np.ndarray, labels, max_k: int) -> list:
+    """Hard cap on cluster count: merge the most similar centroid pair until k <= max_k.
+
+    The silhouette scan and the fallback can both miss the band when CMS residuals
+    (scene-specific BGM after mean removal) scatter far-away singleton directions;
+    without this cap a 16-item project once produced 57 "speakers".
+    """
+    labels = [int(x) for x in labels]
+    while len(set(labels)) > max_k:
+        uniq = sorted(set(labels))
+        cents: dict[int, np.ndarray] = {}
+        for c in uniq:
+            m = X[np.array(labels) == c].mean(axis=0)
+            cn = float(np.linalg.norm(m)) + 1e-9
+            cents[c] = m / cn
+        best_pair, best_sim = None, -2.0
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                a, b = uniq[i], uniq[j]
+                sim = float(cents[a] @ cents[b])
+                if sim > best_sim:
+                    best_sim, best_pair = sim, (a, b)
+        if best_pair is None:
+            break
+        a, b = best_pair
+        labels = [a if x == b else x for x in labels]
+    return _renumber_by_appearance(labels)
+
+
 def _renumber_by_appearance(labels) -> list:
     """Renumber cluster ids so id 0 is the first cluster to appear."""
     order: dict[int, int] = {}
@@ -520,7 +549,7 @@ def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
         if score > best_score:
             best_score, best = score, lab
     if best is not None:
-        return _merge_similar_clusters(X, best)
+        return _enforce_max_k(X, _merge_similar_clusters(X, best), max_k)
 
     # 2) fallback: original adaptive tightening / loosening
     lab = _cut(thr)
@@ -529,15 +558,15 @@ def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
         for t in (0.50, 0.45, 0.40, 0.35, 0.30, 0.25, 0.20, 0.15, 0.10, 0.05):
             lab = _cut(t)
             if len(set(lab)) >= min_k:
-                return _merge_similar_clusters(X, lab)
+                return _enforce_max_k(X, _merge_similar_clusters(X, lab), max_k)
     elif k > max_k:
         for t in (0.65, 0.70, 0.75, 0.80, 0.85, 0.90):
             lab = _cut(t)
             if len(set(lab)) == 1:
                 break
             if 2 <= len(set(lab)) <= max_k:
-                return _merge_similar_clusters(X, lab)
-    return _merge_similar_clusters(X, lab)
+                return _enforce_max_k(X, _merge_similar_clusters(X, lab), max_k)
+    return _enforce_max_k(X, _merge_similar_clusters(X, lab), max_k)
 
 
 def orphan_characters(characters: list, existing_item_ids: set,
@@ -670,8 +699,8 @@ def _collect_source(emb_fn, mono, sr, subs, base, total, progress_cb=None):
 
 # ── 字幕推理 + 音色识别联合判定 ──────────────────────────────
 _SWITCH_COST = 0.05   # Viterbi 标签切换代价：对话连续性先验强度（吸掉单行噪声翻转）
-_MIXED_SHARE = 0.18   # 第二人连续发言占行时长的最小占比（连续段判定，抗散落噪声票）
-_MIXED_MIN_SEC = 0.4  # 第二人连续发言的最短绝对时长
+_MIXED_SHARE = 0.30   # 第二人连续发言占行时长的最小占比（CMS 空间连续段判定）
+_MIXED_MIN_SEC = 1.0  # 第二人连续发言的最短绝对时长（≈2 个 1.4s 窗一致，抗散落噪声）
 
 
 def _nearest_label(e, label_embeddings):
@@ -798,10 +827,33 @@ def generate_speakers_project(sources, *, progress_cb=None):
         quality = "mfcc"
         collected = _collect_all(_mfcc_embedding)
 
-    # gather every subtitle-level embedding in the project (with its source)
+    # ── CMS（素材内均值消减）── 番剧的恒定 BGM 床把所有字幕的嵌入同向抬高，
+    # 聚类塌缩成"一个说话人吃掉 70-98%"（实测 raw 空间最大簇 72%，CMS 后 31%）。
+    # 减去每素材的均值向量消掉常量分量（BGM/声道染色），聚类与窗口投票都在
+    # CMS 空间做；角色池匹配用的质心仍回 raw 空间（与存量 embedding b64 兼容）。
+    cms_collected = []
+    for acc, sub_embs in collected:
+        valid = [e for e in sub_embs if e is not None]
+        mu = np.mean(np.stack(valid), axis=0) if len(valid) >= 3 else None
+        acc_cms = {}
+        for i, vecs in acc.items():
+            acc_cms[i] = ([(ws_, we_, e_ - mu) for ws_, we_, e_ in vecs]
+                          if mu is not None else vecs)
+        embs_cms = [None] * len(sub_embs)
+        for i, e in enumerate(sub_embs):
+            if e is None:
+                continue
+            if mu is None:
+                embs_cms[i] = e
+            else:
+                v = e - mu
+                embs_cms[i] = v / (float(np.linalg.norm(v)) + 1e-9)
+        cms_collected.append((acc_cms, embs_cms, mu))
+
+    # gather every subtitle-level embedding in the project (CMS space, with source)
     all_embeds = []
     meta = []  # parallel: (src_idx, sub_idx)
-    for si, (_acc, sub_embs) in enumerate(collected):
+    for si, (_acc, sub_embs, _mu) in enumerate(cms_collected):
         for i, e in enumerate(sub_embs):
             if e is not None:
                 all_embeds.append(e)
@@ -819,26 +871,37 @@ def generate_speakers_project(sources, *, progress_cb=None):
     n_speakers = len(order)
     label_of_global = ["\u8bf4\u8bdd\u4eba%d" % (order[c] + 1) for c in clusters]
 
-    # unified speaker centroids (normalized) for cross-project matching
-    label_embeddings: dict[str, np.ndarray] = {}
-    sums: dict[str, list] = {}
-    for k, _ in enumerate(meta):
-        sums.setdefault(label_of_global[k], []).append(all_embeds[k])
-    for lb, vecs in sums.items():
-        m = np.mean(np.stack(vecs), axis=0)
-        label_embeddings[lb] = m / (float(np.linalg.norm(m)) + 1e-9)
+    # centroids in BOTH spaces: CMS for window voting / Viterbi emissions;
+    # raw for cross-project character-pool matching (stored embeddings are raw)
+    sums_cms: dict[str, list] = {}
+    sums_raw: dict[str, list] = {}
+    for k, (si, i) in enumerate(meta):
+        lb = label_of_global[k]
+        sums_cms.setdefault(lb, []).append(all_embeds[k])
+        raw_e = collected[si][1][i]
+        if raw_e is not None:
+            sums_raw.setdefault(lb, []).append(raw_e)
 
-    # per-source subtitle assignment + mixed detection
+    def _centroid(vecs):
+        m = np.mean(np.stack(vecs), axis=0)
+        return m / (float(np.linalg.norm(m)) + 1e-9)
+
+    label_embeddings_cms = {lb: _centroid(v) for lb, v in sums_cms.items()}
+    label_embeddings = {lb: _centroid(v) for lb, v in sums_raw.items()}
+
+    # per-source subtitle assignment + mixed detection.
+    # 行级标签：Viterbi（字幕级稳定嵌入）；行内 mixed：CMS 空间连续段
+    # （raw 空间窗口 argmax 被 BGM 场景起伏扰动，实测 77% 行误判 mixed）。
     items = []
     for si in range(len(sources)):
-        acc, sub_embs = collected[si]
+        acc_cms, sub_embs_cms, _mu = cms_collected[si]
         subs = sources[si]["subs"]
         label_of_sub: dict[int, str] = {}
         for k, (s2, i) in enumerate(meta):
             if s2 == si:
                 label_of_sub[i] = label_of_global[k]
         speaker_segments, sub_labels, mixed_count = _assign_source(
-            subs, acc, label_of_sub, label_embeddings, sub_embs)
+            subs, acc_cms, label_of_sub, label_embeddings_cms, sub_embs_cms)
         labeled = sum(1 for x in sub_labels if x["label"])
         items.append({
             "speaker_segments": speaker_segments,
@@ -901,17 +964,52 @@ def _assign_source(subs, acc, label_of_sub, label_embeddings, sub_embs=None):
             continue
         s = li["s"]
         fin = smoothed[i]
+        if fin is None:
+            sub_labels.append({"label": None, "mixed": False})
+            continue
         dur = max(1e-6, float(s["end"]) - float(s["start"]))
-        second = max((r for r in li["runs"] if r["label"] != fin),
-                     key=lambda r: r["end"] - r["start"], default=None)
-        sec_dur = (second["end"] - second["start"]) if second else 0.0
-        mixed = bool(second and sec_dur >= _MIXED_MIN_SEC
-                     and sec_dur / dur >= _MIXED_SHARE)
-        if mixed:
-            # emit window-level runs so downstream dominant_label() sees the
-            # real second speaker (kept unassigned for manual correction)
+        runs = li["runs"]
+        # ── 对话结构门控的 mixed 判定（字幕推理）──
+        # 真正的"半句换人"几乎只发生在轮替边界：本行标签 A、相邻行标签 B，
+        # 且本行贴着 B 的那一侧连续 ≥1.0s / ≥30% 是 B 的声音。
+        # 窗口 argmax 本身噪声大（BGM 场景起伏），中间的散落段不再作为证据。
+        sides = []
+        if i > 0 and smoothed[i - 1] and smoothed[i - 1] != fin:
+            d = 0.0
+            for r in runs:
+                if r["label"] == smoothed[i - 1]:
+                    d += r["end"] - r["start"]
+                else:
+                    break
+            sides.append(("pre", smoothed[i - 1], d))
+        if i + 1 < n and smoothed[i + 1] and smoothed[i + 1] != fin:
+            d = 0.0
+            for r in reversed(runs):
+                if r["label"] == smoothed[i + 1]:
+                    d += r["end"] - r["start"]
+                else:
+                    break
+            sides.append(("post", smoothed[i + 1], d))
+        cand = max((x for x in sides
+                    if x[2] >= _MIXED_MIN_SEC and x[2] / dur >= _MIXED_SHARE),
+                   key=lambda x: x[2], default=None)
+        if cand:
             mixed_count += 1
-            speaker_segments.extend(li["runs"])
+            side, olb, d = cand
+            if side == "pre":
+                b0 = float(s["start"]) + d
+                speaker_segments.append({"start": round(float(s["start"]), 3),
+                                         "end": round(b0, 3), "label": olb})
+                speaker_segments.append({"start": round(b0, 3),
+                                         "end": round(float(s["end"]), 3),
+                                         "label": fin})
+            else:
+                b0 = float(s["end"]) - d
+                speaker_segments.append({"start": round(float(s["start"]), 3),
+                                         "end": round(b0, 3), "label": fin})
+                speaker_segments.append({"start": round(b0, 3),
+                                         "end": round(float(s["end"]), 3),
+                                         "label": olb})
             sub_labels.append({"label": fin, "mixed": True})
         else:
             speaker_segments.append({"start": round(float(s["start"]), 3),
