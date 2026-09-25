@@ -295,8 +295,8 @@ import { createProjects } from "/static/js/modules/projects.js";
       "quality-scan": () => io.doQualityScan(),
       "align-speech": () => io.doAlignSpeech(),
       "autosplit": () => showModal("#modal-autosplit"),
-      "undo": store.undo,
-      "redo": store.redo,
+      "undo": doUndo,
+      "redo": doRedo,
       "validate": segments.renderSegments,
       "zoom-in": () => waveform.zoomIn(),
       "zoom-out": () => waveform.zoomOut(),
@@ -311,6 +311,12 @@ import { createProjects } from "/static/js/modules/projects.js";
       b.addEventListener("click", () => { const f = actions[b.dataset.act]; if (f) f(b); });
     });
   }
+
+  // ── 撤销/重做包装 ───────────────────────────────────────
+  // 撤销/重做会改变片段区间（如"修改片段选区"），选区与片段可能重新变得不一致
+  // → 必须刷新选区颜色，否则仍显示蓝色但实际已偏离（黄/蓝与实际状态脱节）
+  function doUndo() { store.undo(); if (waveform && waveform.refreshSelColor) waveform.refreshSelColor(); }
+  function doRedo() { store.redo(); if (waveform && waveform.refreshSelColor) waveform.refreshSelColor(); }
 
   // ── 快捷键 ─────────────────────────────────────────────
   function setupShortcuts() {
@@ -355,10 +361,10 @@ import { createProjects } from "/static/js/modules/projects.js";
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
-        if (e.shiftKey) store.redo(); else store.undo();
+        if (e.shiftKey) doRedo(); else doUndo();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); store.redo(); return; }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) { e.preventDefault(); doRedo(); return; }
 
       // 小键盘快进：−/+快退/快进 15 秒；数字区方向键(2/4/6/8)等效主方向键（兼容 NumLock 开关）
       const code = e.code || "";
@@ -369,6 +375,14 @@ import { createProjects } from "/static/js/modules/projects.js";
 
       switch (e.key) {
         case " ": e.preventDefault(); waveform.togglePlay(); break;
+        // Enter：有"未确认"的黄色选区时直接确认写回（等价 Ctrl+Enter 与「应用选区」按钮）；
+        // 焦点在文本框内时走上面的早退守卫，仍是"提交文本"语义，不冲突。
+        case "Enter":
+          if (waveform.selPending && waveform.selPending()) {
+            e.preventDefault();
+            segments.applySelectionToActive();
+          }
+          break;
         case "l": case "L": waveform.toggleLoop(); break;
         case "e": case "E": io.openExportModal(); break;
         case "n": case "N": io.doDenoise(); break;
@@ -689,7 +703,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     clearMultiRegions: waveform.clearMultiRegions,
     loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     openPool: pool.openPool, closePool: pool.closePool, renderPool: pool.renderPool,
-    undo: store.undo, redo: store.redo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
+    undo: doUndo, redo: doRedo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject: projects.createProject, renameProject: projects.renameProject,
     deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,

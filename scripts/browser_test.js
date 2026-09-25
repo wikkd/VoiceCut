@@ -375,6 +375,25 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("APPLY:", JSON.stringify({ ok: !!(av && !av.skip && av.focused && av.sameOk && av.nudged
       && av.amber && av.applied && av.blueBack && av.undone) }));
 
+    // 普通 Enter（无 Ctrl）：待确认黄色选区 → 确认写回 → 恢复蓝色
+    const rA3 = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const segId = ${JSON.stringify(av0 && av0.segId)};
+      const before = ${JSON.stringify(av0 && av0.before)};
+      const cAmber2 = vc.state._selColor;              // undo 后：选区 5.5 vs 片段 5.0 → 应为黄
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+      const seg2 = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === segId);
+      const cBlue2 = vc.state._selColor;
+      return { amberBefore: !!cAmber2 && cAmber2.indexOf('255,193,7') >= 0,
+        plainApplied: !!seg2 && Math.abs(seg2.end - (before.end + 0.5)) < 0.05,
+        blueAfter: !!cBlue2 && cBlue2.indexOf('108,156,255') >= 0,
+        segEnd: seg2 ? seg2.end : null };
+    })()`, awaitPromise: true, returnByValue: true });
+    const av3 = rA3.result && rA3.result.result && rA3.result.result.value;
+    console.log("ENTER:", JSON.stringify({ ...av3, ok: !!(av3 && av3.amberBefore && av3.plainApplied && av3.blueAfter) }));
+
     // SPEAKER：说话人下拉可更改——change 写回 characterId；点击下拉不再触发行重建（回归：行重建曾吞掉下拉交互）
     const rS = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
@@ -469,7 +488,7 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("RESET:", JSON.stringify(rSpk.result && rSpk.result.result && rSpk.result.result.value));
 
     // A3: import through the UI auto-selects the new item (pollTasks refresh-then-doneCb)
-    const rA3 = await send("Runtime.evaluate", { expression: `(async () => {
+    const rEnter = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
       const secs = 2, sr = 16000, dataLen = secs * sr * 2;
       const buf = new ArrayBuffer(44 + dataLen);
@@ -488,7 +507,7 @@ const makeWav = (seconds, sr = 16000) => {
       const ok = !!(vc.state.currentItem && vc.state.currentItem.name === 'ui_import');
       return { ok, name: vc.state.currentItem ? vc.state.currentItem.name : null };
     })()`, awaitPromise: true, returnByValue: true });
-    console.log("A3:", JSON.stringify(v(rA3)));
+    console.log("A3:", JSON.stringify(v(rEnter)));
     const _itemsList = await (await fetch(`${BASE}/api/items`)).json();
     const _uiItem = _itemsList.find(x => x.name === 'ui_import');
     if (_uiItem) await fetch(`${BASE}/api/items/${_uiItem.id}`, { method: "DELETE" });
