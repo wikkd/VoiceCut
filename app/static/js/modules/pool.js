@@ -248,6 +248,7 @@ export function createPool(ctx) {
         await loadAllItemData();
         renderPool(); segments.renderSegments(); renderSubs();
         attachActiveTasks();   // 识别收尾可能已提交自动训练任务，重新挂接跟踪
+        scanGaps({ auto: true });   // 自动补扫空白区（受项目 auto_gapscan 开关控制）
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
         const mixed = result.mixed || 0;
@@ -289,6 +290,42 @@ export function createPool(ctx) {
     } catch (e) { toast("设置保存失败: " + e.message, 6000); }
   }
 
+  // ── 空白区补扫（自动 + 手动）：扫描无任何片段覆盖的区间，VAD 找人声 →
+  //    建片段 → 与角色质心比对，高置信直接绑定并把样本吸收进质心（模型自我进化）
+  async function scanGaps(opts) {
+    const auto = !!(opts && opts.auto);
+    if (!state.currentProject) return auto ? null : toast("请先选择项目");
+    if (auto && state.autoGapScan === false) return null;   // 开关关闭 → 不自动补扫
+    if (state.gapScanning) return auto ? null : toast("补扫进行中…");
+    state.gapScanning = true;
+    if (!auto) toast("正在扫描空白区（VAD 找人声 + 声纹比对）…");
+    try {
+      const j = await api("/api/speakers/scan-gaps", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: state.currentProject.id }) });
+      trackTask(j.task_id, async (result) => {
+        state.gapScanning = false;
+        if (!result || !result.added) {   // 无新增：静默结束（自动模式完全无声）
+          if (!auto) toast("空白区未发现新的说话片段");
+          return true;
+        }
+        pushUndo("补扫空白区");   // 新片段写回前快照，可撤销
+        if (Array.isArray(result.characters)) state.characters = result.characters;
+        await loadAllItemData();
+        renderPool(); segments.renderSegments();
+        const msg = `空白区补扫：新增 ${result.added} 段（自动归入角色 ${result.bound} 段，待定 ${result.pending} 段）`;
+        toast(msg + (result.bound ? "；已并入角色的片段会强化对应声纹质心" : ""), 5000);
+        // 新片段文本为空 → 复用自动重识别补字幕（受转写开关控制）
+        const news = (result.new_segments || []).map(s => ({ itemId: s.item_id, segId: s.id }));
+        if (news.length && segments.queueRetranscribe) segments.queueRetranscribe(news);
+        return true;
+      }, { quiet: true });   // 静默任务：不锁界面
+    } catch (e) {
+      state.gapScanning = false;
+      toast("空白区补扫启动失败: " + e.message, 6000);
+    }
+  }
+
   function renderAutoTrainingBtn() {
     const on = state.autoTraining !== false;   // 默认开
     ["#btn-auto-train", "#btn-auto-train2"].forEach((sel) => {
@@ -310,6 +347,30 @@ export function createPool(ctx) {
       renderAutoTrainingBtn();
       toast(on ? "已开启：说话人识别完成后自动启动 GPT-SoVITS 训练并生成每角色试听音频"
                : "已关闭：识别完成后不再自动训练", 5000);
+    } catch (e) { toast("设置保存失败: " + e.message, 6000); }
+  }
+
+  function renderAutoGapScanBtn() {
+    const on = state.autoGapScan !== false;   // 默认开
+    ["#btn-auto-gapscan", "#btn-auto-gapscan2"].forEach((sel) => {
+      const b = $(sel);
+      if (b) {
+        b.classList.toggle("btn-auto-on", on);
+        b.textContent = on ? "自动补扫·开" : "自动补扫·关";
+      }
+    });
+  }
+  async function toggleAutoGapScan() {
+    if (!state.currentProject) return toast("请先选择项目");
+    const on = !(state.autoGapScan !== false);
+    try {
+      await api(`/api/projects/${state.currentProject.id}/settings`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_gapscan: on }) });
+      state.autoGapScan = on;
+      renderAutoGapScanBtn();
+      toast(on ? "已开启：说话人识别完成后自动补扫空白区（新片段并入角色会强化声纹质心）"
+               : "已关闭：识别完成后不再自动补扫空白区", 5000);
     } catch (e) { toast("设置保存失败: " + e.message, 6000); }
   }
 
@@ -362,6 +423,7 @@ export function createPool(ctx) {
 
   return { openPool, closePool, renderPool, doIdentifySpeakers, toggleAutoAnalyze,
            renderAutoAnalyzeBtn, toggleAutoTraining, renderAutoTrainingBtn,
+           scanGaps, toggleAutoGapScan, renderAutoGapScanBtn,
            reassignSegments, createPoolCharacter,
            mergePoolSelected, sendCharacterFeedback };
 }

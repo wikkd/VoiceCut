@@ -5,7 +5,7 @@ export function createProjects(ctx) {
   const { $, esc, fmtDur, toast, api, state, LS_PROJECT,
           loadProject, fillItemStates, saveProjectNow, savePoolNow,
           selectItem, resetWaveUI, renderPool, renderAutoAnalyzeBtn,
-          renderAutoTrainingBtn,
+          renderAutoTrainingBtn, renderAutoGapScanBtn,
           renderSegments, renderSubs, attachActiveTasks, setPage } = ctx;
 
   // ── 素材列表 ──
@@ -208,8 +208,10 @@ export function createProjects(ctx) {
     state.characters = j.characters || [];
     state.autoAnalyze = (j.auto_analyze !== false);
     state.autoTraining = (j.auto_training !== false);
+    state.autoGapScan = (j.auto_gapscan !== false);
     renderAutoAnalyzeBtn();
     renderAutoTrainingBtn();
+    renderAutoGapScanBtn();
     state.segmentsByItem = new Map();
     state.speakerSegsByItem = new Map();
     renderMediaList();

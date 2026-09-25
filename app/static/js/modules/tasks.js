@@ -5,7 +5,7 @@
 export function createTasks(ctx) {
   const { $, api, toast, state, pushUndo,
           renderMediaList, refreshItems, loadAllItemData,
-          renderPool, renderSegments, renderSubs, selectItem } = ctx;
+          renderPool, renderSegments, renderSubs, selectItem, afterAnalyze } = ctx;
 
   // opts.quiet：静默任务（如声纹重匹配）——仍走气泡进度与取消，但不锁界面
   function trackTask(taskId, doneCb, opts) {
@@ -40,6 +40,7 @@ export function createTasks(ctx) {
     toast(msg, 6000);
     // 识别任务收尾时会提交自动训练任务（auto_training 开启时），重新挂接跟踪
     attachActiveTasks();
+    if (afterAnalyze) setTimeout(afterAnalyze, 400);   // 自动补扫空白区（pool.scanGaps）
     return true;  // 已显示专属完成提示，抑制通用“任务完成”
   }
 

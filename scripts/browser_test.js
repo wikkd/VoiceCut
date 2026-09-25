@@ -793,6 +793,61 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("RETR:", JSON.stringify(rRetr.result && rRetr.result.result && rRetr.result.result.value));
     if (rRetr.result && rRetr.result.exceptionDetails) console.log("RETR-EXC:", JSON.stringify(rRetr.result.exceptionDetails));
 
+    // GAP：空白区补扫（打桩 fetch 拦截补扫接口 + 假任务结果，验证静默/写回/联动重识别）
+    const rGap = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const orig = window.fetch;
+      const calls = { scan: 0, transcribe: 0 };
+      const json = (o) => Promise.resolve(new Response(JSON.stringify(o),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      // 假结果里的 new_segments 用 state 中真实存在的片段 id：
+      // 否则重识别按 segId 定位不到（与后端未落盘的假数据一致）会被跳过
+      const realSegs = vc.state.segmentsByItem.get(((vc.state.items || [])[0] || {}).id) || [];
+      let fakeSegs = [{ item_id: ((vc.state.items || [])[0] || {}).id, id: (realSegs[0] || {}).id, start: 11, end: 13 }];
+      window.fetch = (u, o) => {
+        const url = String(typeof u === 'string' ? u : ((u && u.url) || ''));
+        if (url.indexOf('/api/speakers/scan-gaps') >= 0) { calls.scan++; return json({ task_id: 'fake-gap' }); }
+        if (url.indexOf('/api/tasks/fake-gap') >= 0) return json({ status: 'done', progress: 1,
+          result: { added: fakeSegs.length, bound: 1, pending: 0, items_scanned: 1,
+                    new_segments: fakeSegs,
+                    characters: [{ id: 'c-gap', name: '补扫角色', color: '#12ab34', emb_count: 3 }] } });
+        if (url.indexOf('/api/transcribe') >= 0) { calls.transcribe++; return json({ task_id: 'fake-tr' }); }
+        return orig(u, o);
+      };
+      const item = (vc.state.items || [])[0];
+      if (!item) return { err: 'no item' };
+      await vc.selectItem(item);
+      const before = (vc.state.segmentsByItem.get(item.id) || []).length;
+      // 手动补扫：立即发起一次请求
+      vc.scanGaps ? vc.scanGaps() : null;
+      await new Promise(r => setTimeout(r, 300));
+      const manualFired = calls.scan === 1;
+      // 静默任务：不得出现锁屏遮罩
+      const masked = !document.getElementById('busy-overlay').classList.contains('hidden');
+      const quietTask = [...vc.state.activeTasks.values()].some(t => t.quiet);
+      await new Promise(r => setTimeout(r, 2200));
+      // 结果写回：角色池更新 + 新片段落入 state
+      const chars = vc.state.characters || [];
+      const poolGot = chars.some(c => c.id === 'c-gap');
+      const after = (vc.state.segmentsByItem.get(item.id) || []).length;
+      const segsAdded = after > before;      // 假数据未真落盘，仅记录不参与判定
+      await new Promise(r => setTimeout(r, 1600));   // 等重识别防抖(1.2s)触发
+      // 新片段联动自动重识别字幕
+      const linked = calls.transcribe >= 1;
+      // 开关关闭 → 自动补扫不发起（auto 路径）
+      const scanBefore = calls.scan;
+      vc.state.autoGapScan = false;
+      await (vc.scanGaps ? vc.scanGaps({ auto: true }) : Promise.resolve());
+      await new Promise(r => setTimeout(r, 400));
+      const offOk = calls.scan === scanBefore;
+      vc.state.autoGapScan = true;
+      window.fetch = orig;
+      return { manualFired, masked, quietTask, poolGot, segsAdded, linked, offOk, calls,
+        ok: manualFired && !masked && quietTask && poolGot && linked && offOk };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("GAP:", JSON.stringify(rGap.result && rGap.result.result && rGap.result.result.value));
+    if (rGap.result && rGap.result.exceptionDetails) console.log("GAP-EXC:", JSON.stringify(rGap.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

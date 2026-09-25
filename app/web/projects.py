@@ -76,6 +76,8 @@ def api_project_record_get(project_id: str) -> object:
             c.cfg.workdir, project_id, "auto_analyze", True)),
         "auto_training": bool(project_mod.get_project_setting(
             c.cfg.workdir, project_id, "auto_training", True)),
+        "auto_gapscan": bool(project_mod.get_project_setting(
+            c.cfg.workdir, project_id, "auto_gapscan", True)),
         "characters": pool["characters"],
         "items": [c.item_json(i) for i in c.store.by_project(project_id)],
     })
@@ -129,7 +131,8 @@ def api_pool_save(project_id: str) -> object:
 
 @bp.post("/api/projects/<project_id>/settings")
 def api_project_settings(project_id: str) -> object:
-    """项目设置（auto_analyze：导入后自动识别；auto_training：识别后自动训练+试听）。"""
+    """项目设置（auto_analyze：导入后自动识别；auto_training：识别后自动训练+试听；
+    auto_gapscan：识别完成后自动补扫空白区并归入角色）。"""
     c = ctx()
     if db_mod.fetch_project_record(db_mod.get_conn(c.cfg.workdir), project_id) is None:
         return jsonify({"error": "project not found"}), 404
@@ -140,6 +143,9 @@ def api_project_settings(project_id: str) -> object:
     if "auto_training" in body:
         project_mod.set_project_setting(
             c.cfg.workdir, project_id, "auto_training", bool(body["auto_training"]))
+    if "auto_gapscan" in body:
+        project_mod.set_project_setting(
+            c.cfg.workdir, project_id, "auto_gapscan", bool(body["auto_gapscan"]))
     return jsonify({"ok": True})
 
 
@@ -522,6 +528,149 @@ def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
     return {"absorbed": n_absorbed, "bound": stats["bound"], "moved": stats["moved"],
             "scanned": stats["scanned"], "skipped": stats["skipped"],
             "items_touched": touched, "characters": chars}
+
+
+# ── 空白区补扫（模型自我进化） ──────────────────────────────
+
+@bp.post("/api/speakers/scan-gaps")
+def api_speakers_scan_gaps() -> object:
+    """扫描“没有任何片段覆盖”的时间区间，自动静默补出遗漏的说话片段。
+
+    流程：现有片段取覆盖补集 → 神经 VAD 求人声区间 → 与补集求交得到候选 →
+    逐段提声纹与角色质心比对：高置信（相似度 >= bind_thr 且领先第二名
+    >= bind_margin）直接绑定，并把该段吸收进角色质心（模型自我进化）；
+    低置信建为未分配片段，等待后续声纹重匹配。全程不改动已有片段。
+    """
+    c = ctx()
+    body = request.get_json(force=True, silent=True) or {}
+    project_id = body.get("project_id")
+    if not project_id or db_mod.fetch_project_record(
+            db_mod.get_conn(c.cfg.workdir), project_id) is None:
+        return jsonify({"error": "project not found"}), 404
+    tid = c.tasks.submit(
+        _speakers_gapscan_worker, c, project_id,
+        float(body.get("min_dur") or 0.6), float(body.get("max_dur") or 15.0),
+        float(body.get("bind_thr") or 0.80), float(body.get("bind_margin") or 0.05),
+        int(body.get("limit") or 40), gpu=True, kind="gapscan")
+    return jsonify({"task_id": tid})
+
+
+def _gap_ranges(segments: list, duration: float, min_gap: float = 0.25) -> list:
+    """片段未覆盖的时间区间（补集），忽略过短缝隙。"""
+    spans = sorted(
+        (float(s.get("start", 0) or 0), float(s.get("end", 0) or 0))
+        for s in (segments or [])
+        if float(s.get("end", 0) or 0) > float(s.get("start", 0) or 0))
+    gaps: list = []
+    cur = 0.0
+    for st, en in spans:
+        if st - cur >= min_gap:
+            gaps.append((cur, st))
+        cur = max(cur, en)
+    if duration - cur >= min_gap:
+        gaps.append((cur, duration))
+    return [(round(a, 3), round(b, 3)) for a, b in gaps if b > a]
+
+
+def _clip_ranges(ranges: list, spans: list, min_len: float = 0.05) -> list:
+    """两区间列表求交（覆盖补集 ∩ VAD 人声区间）。"""
+    out = []
+    for a, b in ranges:
+        for s, e in spans:
+            lo, hi = max(a, s), min(b, e)
+            if hi - lo >= min_len:
+                out.append((round(lo, 3), round(hi, 3)))
+    return out
+
+
+def _speakers_gapscan_worker(c, project_id: str, min_dur: float, max_dur: float,
+                             bind_thr: float, bind_margin: float, limit: int) -> dict:
+    import numpy as np
+
+    tid = c.tasks.current_task_id()
+    pool = project_mod.load_pool(c.cfg.workdir, project_id)
+    chars = pool["characters"]
+    emb_fn = speakers_mod._pick_embed_fn()
+
+    def _cents(characters: list) -> list:
+        out = []
+        for ch in characters:
+            e = speakers_mod.embedding_from_b64(ch.get("embedding"))
+            if e is not None:
+                out.append((ch["id"], np.asarray(e, dtype=np.float32)))
+        return out
+
+    cents = _cents(chars)
+    items = [it for it in c.store.by_project(project_id)
+             if it.wav_path and Path(it.wav_path).exists()]
+    added: list = []
+    bound = pending = 0
+    for idx, it in enumerate(items):
+        p_n = min(0.92, (idx + 1) / max(1, len(items)) * 0.9)
+        c.tasks.update(tid, progress=p_n, message=f"补扫空白区 {idx + 1}/{len(items)}")
+        pj = project_mod.load_project(c.cfg.workdir, it.id)
+        segs = list(pj.get("segments") or [])
+        dur = float(it.duration or audio_ops_mod.wav_duration(it.wav_path) or 0)
+        if dur <= 0:
+            continue
+        gaps = _gap_ranges(segs, dur)
+        if not gaps:
+            continue
+        try:
+            speech = audio_ops_mod.detect_speech_ranges(it.wav_path)
+        except Exception:
+            # Silero 不可用 → 能量自适应静音检测兜底（返回静音区间，取补集即人声）
+            speech = autosplit_mod.speech_ranges(
+                dur, audio_ops_mod.detect_silence_adaptive(it.wav_path))
+        cands = [(a, b) for a, b in _clip_ranges(gaps, speech)
+                 if min_dur <= (b - a) <= max_dur]
+        if not cands:
+            continue
+        mono, sr = speakers_mod.read_mono16k(it.wav_path)
+        news = []
+        for a, b in cands:
+            if len(added) + len(news) >= limit:
+                break
+            if c.tasks.cancelled(tid):
+                break
+            try:
+                emb = emb_fn(mono, sr, a, b)
+            except Exception:
+                emb = None
+            cid = None
+            if emb is not None and cents:
+                sims = sorted(((c_id, float(speakers_mod._cos(emb, cv)))
+                               for c_id, cv in cents), key=lambda x: -x[1])
+                best_cid, best_sim = sims[0]
+                second = sims[1][1] if len(sims) > 1 else -1.0
+                if best_sim >= bind_thr and (best_sim - second) >= bind_margin:
+                    cid = best_cid
+                    # 吸收样本 → 质心向该角色移动（自我进化），并刷新本地质心表
+                    chars = speakers_mod.absorb_character_sample(chars, cid, emb)
+                    e2 = next((speakers_mod.embedding_from_b64(x.get("embedding"))
+                               for x in chars if x["id"] == cid), None)
+                    if e2 is not None:
+                        cents = [t for t in cents if t[0] != cid] + \
+                                [(cid, np.asarray(e2, dtype=np.float32))]
+            news.append({"id": project_mod.new_uid("s"),
+                         "start": round(a, 3), "end": round(b, 3), "text": "",
+                         "language": "JP", "speakerLabel": None, "characterId": cid,
+                         "mixed": False, "origin": "gapscan"})
+            if cid:
+                bound += 1
+            else:
+                pending += 1
+        if news:
+            segs = segs + news
+            segs.sort(key=lambda s: float(s.get("start", 0) or 0))
+            pj["segments"] = segs
+            project_mod.save_project(c.cfg.workdir, it.id, pj)
+            added.extend({"item_id": it.id, "id": s["id"],
+                          "start": s["start"], "end": s["end"]} for s in news)
+    if bound:
+        project_mod.save_pool(c.cfg.workdir, project_id, chars)
+    return {"added": len(added), "bound": bound, "pending": pending,
+            "items_scanned": len(items), "new_segments": added, "characters": chars}
 
 
 def submit_project_analyze(c, project_id: str, *, force: bool = False,

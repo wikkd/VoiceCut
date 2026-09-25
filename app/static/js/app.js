@@ -490,6 +490,9 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#pool-merge").addEventListener("click", () => pool.mergePoolSelected());
     $("#pool-identify").addEventListener("click", () => pool.doIdentifySpeakers());
     $("#pool-reidentify").addEventListener("click", () => pool.doIdentifySpeakers(true));
+    $("#pool-gapscan").addEventListener("click", () => pool.scanGaps());
+    $("#btn-auto-gapscan").addEventListener("click", () => pool.toggleAutoGapScan());
+    $("#btn-auto-gapscan2").addEventListener("click", () => pool.toggleAutoGapScan());
 
     $("#bb-open").addEventListener("click", () => io.doUrlOpen());
     $("#tr-start").addEventListener("click", () => io.doTranscribe());
@@ -576,6 +579,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderPool: () => pool.renderPool(),
     renderAutoAnalyzeBtn: () => pool.renderAutoAnalyzeBtn(),
     renderAutoTrainingBtn: () => pool.renderAutoTrainingBtn(),
+    renderAutoGapScanBtn: () => pool.renderAutoGapScanBtn(),
     renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
     attachActiveTasks: () => tasks.attachActiveTasks() });
   tasks = createTasks({ $, api, toast, state, pushUndo: store.pushUndo,
@@ -583,6 +587,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     loadAllItemData: projects.loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
     renderSubs: () => subtitles.renderSubs(),
+    // 后台自动识别完成后自动补扫空白区（pool 晚于 tasks 创建 → 闭包注入）
+    afterAnalyze: () => pool.scanGaps({ auto: true }),
     selectItem: (item) => waveform.selectItem(item) });
   segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
     state, toast, api, trackTask: tasks.trackTask,
@@ -712,6 +718,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     createProject: projects.createProject, renameProject: projects.renameProject,
     deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
+    scanGaps: pool.scanGaps, toggleAutoGapScan: pool.toggleAutoGapScan,
     applySelectionToActive: segments.applySelectionToActive, mergeSegments: segments.mergeSegments,
     queueRetranscribe: segments.queueRetranscribe,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
