@@ -535,6 +535,38 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, returnByValue: true });
     console.log("BUSY:", JSON.stringify(rB.result && rB.result.result && rB.result.result.value));
 
+    // MERGE：多选片段 → 右键菜单「合并 N 段」→ 区间/文本合并、locked，undo 可还原
+    const rM = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const segs = vc.state.segmentsByItem.get(itId);
+      segs.length = 0;
+      const a = vc.newSegment(0, 2, "あ"), b = vc.newSegment(2, 4, "い"), c = vc.newSegment(4, 6, "う");
+      segs.push(a, b, c);
+      vc.renderSegments();
+      await new Promise(r => setTimeout(r, 150));
+      vc.state.selectedSegs = new Set([a.id, b.id, c.id]);
+      const row = document.querySelector('#seg-tbody tr.seg-row');
+      row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+      const menu = document.querySelector('#redirect-menu');
+      const menuOpen = !menu.classList.contains('hidden');
+      const btns = [...menu.querySelectorAll('button')];
+      const mergeBtn = btns.find(x => x.textContent.includes('合并'));
+      const hasMerge = !!mergeBtn && mergeBtn.textContent.includes('3');
+      mergeBtn.click();
+      await new Promise(r => setTimeout(r, 300));
+      const after = vc.state.segmentsByItem.get(itId);
+      const merged = after.length === 1 && Math.abs(after[0].start - 0) < 0.01 && Math.abs(after[0].end - 6) < 0.01
+        && after[0].text === 'あいう' && after[0].locked === true;
+      vc.undo();
+      await new Promise(r => setTimeout(r, 300));
+      const restored = (vc.state.segmentsByItem.get(itId) || []).length === 3;   // undo 还原 3 段
+      return { menuOpen, hasMerge, merged, restored, nAfter: after.length,
+        text: after.length ? after[0].text : null, ok: menuOpen && hasMerge && merged && restored };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("MERGE:", JSON.stringify(rM.result && rM.result.result && rM.result.result.value));
+    if (rM.result && rM.result.exceptionDetails) console.log("MERGE-EXC:", JSON.stringify(rM.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

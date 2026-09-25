@@ -211,6 +211,18 @@ import { createProjects } from "/static/js/modules/projects.js";
       b.addEventListener("click", () => { hideRedirectMenu(); pool.reassignSegments(segIds, val); });
       return b;
     };
+    if (segIds.length >= 2) {
+      // 多选合并：把被自动切分拆开的句子拼回一段（仅同素材内，按时间顺序拼接文本）
+      const mb = document.createElement("button");
+      mb.className = "menu-merge";
+      mb.textContent = `合并 ${segIds.length} 段`;
+      mb.title = "把选中的片段拼成一段（起点取最早、终点取最晚，文本按时间顺序拼接）";
+      mb.addEventListener("click", () => { hideRedirectMenu(); segments.mergeSegments(segIds); });
+      menu.appendChild(mb);
+      const sep = document.createElement("div");
+      sep.className = "menu-sep";
+      menu.appendChild(sep);
+    }
     menu.appendChild(mk("未分配", "", ""));
     state.characters.forEach(c => menu.appendChild(mk(c.name, c.id, c.color)));
     menu.classList.remove("hidden");

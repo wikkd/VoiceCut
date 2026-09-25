@@ -276,6 +276,43 @@ export function createSegments(ctx) {
     toast(`已更新片段区间 ${fmtT(seg.start)} ~ ${fmtT(seg.end)}`);
   }
 
+  // 合并选中的多个片段 → 一段（把被自动切分拆开的句子拼回完整句子）
+  // 规则：仅同素材内可合并；起点取最早、终点取最晚；文本按时间顺序拼接；人工合并 → 锁定
+  function mergeSegments(segIds) {
+    const ids = Array.from(segIds || []);
+    if (ids.length < 2) return toast("请先多选至少 2 个片段再右键合并（Ctrl/Shift 点选，或 Ctrl+A 全选）");
+    const idSet = new Set(ids);
+    let found = [];
+    (state.items || []).forEach(item => {
+      (segsFor(item.id) || []).forEach(seg => { if (idSet.has(seg.id)) found.push({ item, seg }); });
+    });
+    if (found.length < 2) return toast("选中的片段不足 2 段（可能已被删除）");
+    const items = new Set(found.map(f => f.item.id));
+    if (items.size > 1) return toast("只能合并同一素材内的片段（跨素材时间轴不同）");
+    const item = found[0].item;
+    const segs = segsFor(item.id);
+    found.sort((a, b) => a.seg.start - b.seg.start);
+    const start = Math.min(...found.map(f => f.seg.start));
+    const end = Math.max(...found.map(f => f.seg.end));
+    const first = found[0].seg;
+    const joiner = (first.language === "EN") ? " " : "";   // 英文加空格，中日文直接相连
+    const text = found.map(f => (f.seg.text || "")).filter(Boolean).join(joiner);
+    pushUndo("合并片段");
+    first.start = +start.toFixed(3);
+    first.end = +end.toFixed(3);
+    first.text = text;
+    first.q = null;          // 区间变了，旧清晰度分数失效
+    first.locked = true;     // 人工合并 → 锁定，自动切分/识别不再拆回
+    const delIds = new Set(found.slice(1).map(f => f.seg.id));
+    const kept = segs.filter(s => !delIds.has(s.id));
+    segs.splice(0, segs.length, ...kept);
+    delIds.forEach(id => state.selectedSegs.delete(id));
+    if (state.activeSeg && delIds.has(state.activeSeg.segId)) state.activeSeg = { itemId: item.id, segId: first.id };
+    scheduleSaveProject(item.id);
+    renderSegments();
+    toast(`已合并 ${found.length} 段 → ${fmtT(start)} ~ ${fmtT(end)}（${(end - start).toFixed(1)}s）`);
+  }
+
   function deleteSegment(itemId, i) {    const segs = segsFor(itemId);
     const s = segs[i];
     if (s) state.selectedSegs.delete(s.id);
@@ -332,6 +369,6 @@ export function createSegments(ctx) {
   }
 
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments, viewSegIds,
-           addSegmentFromSelection, applySelectionToActive, deleteSegment, jumpToSegment, auditionSegment,
+           addSegmentFromSelection, applySelectionToActive, mergeSegments, deleteSegment, jumpToSegment, auditionSegment,
            gotoEditAndPlay, scrollSegRow, auditionFocus };
 }
