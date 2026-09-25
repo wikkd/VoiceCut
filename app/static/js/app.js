@@ -209,6 +209,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       "transcribe": () => io.openTranscribeModal(),
       "dataset-export": () => io.openDatasetModal(),
       "quality-scan": () => io.doQualityScan(),
+      "align-speech": () => io.doAlignSpeech(),
       "autosplit": () => showModal("#modal-autosplit"),
       "undo": store.undo,
       "redo": store.redo,

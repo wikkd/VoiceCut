@@ -163,6 +163,26 @@ export function createIo(ctx) {
   }
 
   // ── 清晰度打分 ─────────────────────────────────────────
+  // 对齐发音：把当前素材的片段窗口收缩到实际发音区间（字幕链式时间修复）
+  async function doAlignSpeech() {
+    if (!needItem()) return;
+    const item = state.currentItem;
+    try {
+      const j = await api(`/api/items/${item.id}/align-speech`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: "{}" });
+      trackTask(j.task_id, async (result) => {
+        await loadAllItemData();
+        renderSegments();
+        const changed = (result && result.changed) || 0;
+        const total = (result && result.total) || 0;
+        toast(changed > 0
+          ? `对齐发音完成：${changed}/${total} 段窗口已收缩到语音区间（锁定片段未动）`
+          : `对齐发音完成：${total} 段均无需调整`);
+      });
+      toast("正在检测静音并对齐片段到发音区间…");
+    } catch (e) { toast("对齐发音启动失败: " + e.message, 6000); }
+  }
+
   async function doQualityScan() {
     if (!state.currentProject) return toast("请先选择项目");
     try {
@@ -231,6 +251,6 @@ export function createIo(ctx) {
 
   return { importDialog, uploadFile, doDenoise, doSeparate, doTrim, doAutosplit,
            openExportModal, doExportSelection, doUrlOpen,
-           openTranscribeModal, doTranscribe, doQualityScan,
+           openTranscribeModal, doTranscribe, doQualityScan, doAlignSpeech,
            openDatasetModal, doDatasetExport };
 }

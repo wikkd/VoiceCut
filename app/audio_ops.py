@@ -147,3 +147,86 @@ def validate_dataset_clip(path: str | Path, min_dur: float = 1.0, max_dur: float
         issues.append("存在削波")
     ok = not issues
     return {"ok": ok, "issues": issues, **m}
+
+
+def detect_speech_ranges(
+    wav_path: str | Path,
+    *,
+    min_gap: float = 0.30,
+    threshold: float = 0.5,
+) -> list[tuple[float, float]]:
+    """Silero VAD（faster-whisper 内置，模型随包分发）检测语音区间。
+
+    对 BGM/环境音鲁棒——固定电平与能量阈值在 Drama CD/番剧上找不到句间
+    空隙，神经 VAD 可以。返回合并后的语音区间 [(start, end), ...]（秒）。
+    音频经 ffmpeg 解码重采样到 16k 单声道，全程 O(音频时长) 内存。
+    """
+    from faster_whisper.vad import VadOptions, get_speech_timestamps
+    from app.speakers import read_mono16k
+
+    mono, sr = read_mono16k(wav_path)
+    opts = VadOptions(threshold=threshold,
+                      min_silence_duration_ms=int(min_gap * 1000),
+                      min_speech_duration_ms=250,
+                      speech_pad_ms=60)
+    ts = get_speech_timestamps(mono, opts, sampling_rate=sr)
+    return [(round(d["start"] / sr, 3), round(d["end"] / sr, 3)) for d in ts]
+
+
+def detect_silence_adaptive(
+    wav_path: str | Path,
+    *,
+    min_silence: float = 0.30,
+    merge_gap: float = 0.12,
+) -> list[tuple[float, float]]:
+    """能量自适应静音检测（Silero 不可用时的兜底）。
+
+    按整段音频的帧能量分布自动确定"静音"电平：最轻 10% 帧 ≈ 环境音电平
+    lo，最响 10% ≈ 语音峰 hi；动态范围 hi-lo < 8dB 时无可用对比度返回 []；
+    阈值 = lo + max(6, 0.20*(hi-lo)) dB。返回 [(start, end), ...] 静音区间。
+    """
+    mono, sr = read_wav(wav_path)
+    dec = max(1, sr // 16000)
+    if dec > 1:
+        mono = mono[::dec]
+        sr = sr // dec
+    n = mono.size
+    if n < int(0.5 * sr):
+        return []
+    fl = max(1, int(0.050 * sr))   # 帧长 50ms
+    hp = max(1, int(0.020 * sr))   # 帧移 20ms
+    sq = np.cumsum(mono.astype(np.float64) ** 2)
+    starts = np.arange(0, n - fl + 1, hp)
+    sums = sq[starts + fl] - sq[starts]
+    rms = np.sqrt(sums / fl + 1e-12)
+    db = 20.0 * np.log10(rms + 1e-12)
+    k = max(1, int(db.size * 0.10))
+    srt = np.sort(db)
+    lo = float(np.mean(srt[:k]))
+    hi = float(np.mean(srt[-k:]))
+    if hi - lo < 8.0:
+        return []
+    thr = lo + max(6.0, 0.20 * (hi - lo))
+    silent = db < thr
+    frame_sec = hp / sr
+    raw: list[tuple[float, float]] = []
+    m = silent.size
+    i = 0
+    while i < m:
+        if silent[i]:
+            j = i
+            while j + 1 < m and silent[j + 1]:
+                j += 1
+            raw.append((i * frame_sec, (j + 1) * frame_sec + fl / sr))
+            i = j + 1
+        else:
+            i += 1
+    merged: list[tuple[float, float]] = []
+    for s, e in raw:
+        if merged and s - merged[-1][1] < merge_gap:
+            merged[-1] = (merged[-1][0], e)
+        else:
+            merged.append((s, e))
+    dur = n / sr
+    return [(round(s, 3), round(min(e, dur), 3))
+            for s, e in merged if e - s >= min_silence]

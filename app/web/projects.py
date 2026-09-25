@@ -8,6 +8,7 @@ from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request
 
+from app import audio_ops as audio_ops_mod
 from app import autosplit as autosplit_mod
 from app import db as db_mod
 from app import project as project_mod
@@ -221,6 +222,62 @@ def _autosplit_worker(c, item_id: str, body: dict) -> dict:
     if tid:
         c.tasks.update(tid, progress=1.0, message="done")
     return {"count": len(segs), "clips": clips}
+
+
+@bp.post("/api/items/<item_id>/align-speech")
+def api_align_speech(item_id: str) -> object:
+    """把片段窗口收缩到实际发音区间。
+
+    字幕（内嵌/导入）时间轴是链式的——上句结束即下句开始，是给"阅读"的
+    而不是"语音"的边界；直接按字幕切片段会带大量静音。本端点用一次
+    silencedetect 检测全文件静音，把每个片段收缩到窗口内的语音区间。
+    """
+    c = ctx()
+    c.store.require(item_id)
+    body = request.get_json(force=True, silent=True) or {}
+    tid = c.tasks.submit(_align_speech_worker, c, item_id, body)
+    return jsonify({"task_id": tid})
+
+
+def _align_speech_worker(c, item_id: str, body: dict) -> dict:
+    tid = c.tasks.current_task_id()
+    item = c.store.require(item_id)
+    threshold_db = float(body.get("threshold_db") or -35.0)
+    min_silence = float(body.get("min_silence") or 0.35)
+    if tid and c.tasks.cancelled(tid):
+        raise TaskCancelled()
+    duration = item.duration or media_duration(item.wav_path)
+    if tid:
+        c.tasks.update(tid, progress=0.1, message="Silero VAD 检测语音区间 …")
+    # 三级检测：Silero 神经 VAD（对 BGM/环境音鲁棒）→ 能量自适应 →
+    # 固定电平 silencedetect。任一级得到语音区间即停。
+    mode = "silero"
+    speech: list[tuple[float, float]] = []
+    try:
+        speech = audio_ops_mod.detect_speech_ranges(item.wav_path, min_gap=0.30)
+    except Exception as exc:  # noqa: BLE001
+        if getattr(c, "log", None):
+            c.log.warning("silero vad failed: %s", exc)
+    if not speech:
+        mode = "energy"
+        sil = audio_ops_mod.detect_silence_adaptive(item.wav_path,
+                                                    min_silence=min(min_silence, 0.30))
+        speech = autosplit_mod.speech_ranges(duration, sil)
+    if not speech:
+        mode = "fixed"
+        sil = detect_silence(item.wav_path, threshold_db=threshold_db,
+                             min_silence=min_silence)
+        speech = autosplit_mod.speech_ranges(duration, sil)
+    if tid:
+        c.tasks.update(tid, progress=0.5, message=f"对齐片段到发音区间（{mode}）…")
+    proj = project_mod.load_project(c.cfg.workdir, item_id)
+    segs = proj["segments"]
+    changed = autosplit_mod.align_segments_to_speech(segs, duration, speech)
+    if changed:
+        project_mod.save_project(c.cfg.workdir, item_id, proj)
+    if tid:
+        c.tasks.update(tid, progress=1.0, message="done")
+    return {"ok": True, "changed": changed, "total": len(segs), "mode": mode}
 
 
 # ── 说话人识别 ────────────────────────────────────────────
@@ -798,6 +855,19 @@ def _project_speakers_run(c, project_id: str, reset: bool = False) -> dict:
             fresh = speakers_mod.segments_from_subs(s["subs"])
             for sg in fresh:
                 sg["id"] = project_mod.new_uid("s")
+            # 字幕时间轴是链式的（上句结束=下句开始），收缩到实际发音区间；
+            # 任一级检测失败不影响识别流程（保留字幕原始边界）
+            try:
+                _speech = audio_ops_mod.detect_speech_ranges(s["item"].wav_path)
+                if not _speech:
+                    _sil = detect_silence(s["item"].wav_path, threshold_db=-35.0,
+                                          min_silence=0.35)
+                    _speech = autosplit_mod.speech_ranges(
+                        s["item"].duration or media_duration(s["item"].wav_path), _sil)
+                autosplit_mod.align_segments_to_speech(fresh, s["item"].duration, _speech)
+            except Exception as exc:  # noqa: BLE001
+                if getattr(c, "log", None):
+                    c.log.warning("align fresh segments failed: %s", exc)
             proj["segments"] = fresh
         # 写回前先去重清理（历史棘轮碎片），重跑识别不再让片段数倍增
         proj["segments"], norm_removed = speakers_mod.normalize_segments(proj["segments"])
