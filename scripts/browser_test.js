@@ -482,6 +482,25 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, awaitPromise: true, returnByValue: true });
     console.log("TRAIN:", JSON.stringify(rT.result && rT.result.result && rT.result.result.value));
 
+    // BUSY：后台任务运行期全屏操作锁——挂任务显遮罩、清任务解锁
+    const rB = await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      const ov = document.querySelector('#busy-overlay');
+      if (!ov) return { skip: 'no overlay' };
+      const initHidden = ov.classList.contains('hidden');
+      vc.state.activeTasks.set('fake-busy-1', { msg: '测试任务', progress: 0.4, doneCb: null });
+      vc.updateStatusbar();
+      const locked = !ov.classList.contains('hidden');
+      const hasCancel = !!document.querySelector('#busy-cancel');
+      vc.state.activeTasks.delete('fake-busy-1');
+      vc.updateStatusbar();
+      const unlocked = ov.classList.contains('hidden');
+      const bubbleGone = !document.querySelector('.toast-bubble.task[data-task-id="fake-busy-1"]');
+      return { initHidden, locked, hasCancel, unlocked, bubbleGone,
+        ok: initHidden && locked && hasCancel && unlocked && bubbleGone };
+    })()`, returnByValue: true });
+    console.log("BUSY:", JSON.stringify(rB.result && rB.result.result && rB.result.result.value));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

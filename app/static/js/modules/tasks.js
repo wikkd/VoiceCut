@@ -112,6 +112,9 @@ export function createTasks(ctx) {
     renderTaskBubbles();
     info.textContent = state.activeTasks.size
       ? `后台任务 ${state.activeTasks.size} 个（左下气泡可单独取消）` : "就绪";
+    // 后台任务（识别/训练等）运行期锁定页面操作：有任务 → 全屏遮罩，全清 → 解锁
+    const ov = $("#busy-overlay");
+    if (ov) ov.classList.toggle("hidden", !state.activeTasks.size);
   }
   // 任务气泡：每个 activeTask 一个持久气泡，向上堆叠；终态时变色短暂停留
   function renderTaskBubbles() {
@@ -154,6 +157,9 @@ export function createTasks(ctx) {
       api(`/api/tasks/${tid}/cancel`, { method: "POST" }).catch(() => {});
     });
   }
+  // 遮罩上的「取消全部任务」按钮（遮罩拦截其余一切交互，仅留取消出口）
+  const _busyCancel = $("#busy-cancel");
+  if (_busyCancel) _busyCancel.addEventListener("click", cancelAllTasks);
   function selectResultItem(result) {
     if (!result) return;
     const id = result.item ? result.item.id : (result.item_ids && result.item_ids[0]);

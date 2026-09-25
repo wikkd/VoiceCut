@@ -623,3 +623,25 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 }
 #seg-table thead th input.th-filter { display: inline-block; width: 140px; margin-left: 8px; }
 #seg-table thead .th-filter:focus { outline: none; border-color: var(--accent); }
+
+/* ---- 后台任务运行期全屏操作锁 ---- */
+#busy-overlay {
+  position: fixed; inset: 0; z-index: 1100;   /* 低于 toast-stack(1200)：任务气泡浮在其上可单独取消 */
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(10, 12, 18, 0.55); backdrop-filter: blur(2px);
+}
+#busy-overlay.hidden { display: none; }
+#busy-overlay .busy-box {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 28px 40px; border-radius: 12px;
+  background: var(--panel, #1a1d26); border: 1px solid var(--border, #333);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.5); text-align: center;
+}
+#busy-overlay .busy-spinner {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid var(--border, #444); border-top-color: var(--accent, #6c9cff);
+  animation: busy-spin 0.9s linear infinite;
+}
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+#busy-overlay .busy-title { font-size: 15px; font-weight: 600; }
+#busy-overlay .busy-sub { font-size: 12px; color: var(--muted, #9aa); }
