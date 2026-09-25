@@ -73,6 +73,10 @@ import { createProjects } from "/static/js/modules/projects.js";
     state.segFilter.status = evtEl(e).value || "all";
     segments.renderSegments();
   });
+  $("#seg-filter-item").addEventListener("change", (e) => {
+    state.segFilter.item = evtEl(e).value || "all";
+    segments.renderSegments();
+  });
   // 表头排序箭头：点击列名循环 默认方向 → 升序 → 恢复时间序；箭头 ⇅/▼/▲ 指示当前状态
   function updateSortArrows() {
     const cur = state.segSort || "time";

@@ -56,12 +56,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       inp.value = ""; inp.dispatchEvent(new Event("input", { bubbles: true }));
       await new Promise(r2 => setTimeout(r2, 500));
       out.rowsRestored = document.querySelectorAll("#seg-tbody tr.seg-row").length;
+      // 来源素材筛选：选项随素材列表填充；选中某素材后行数 = 该素材片段数
+      const sel = document.querySelector("#seg-filter-item");
+      out.itemSelInThead = !!sel && !!sel.closest("thead");
+      const items = vc.state.items || [];
+      out.itemOptCount = sel.options.length;
+      const countSegsOf = (id) => (vc.state.segmentsByItem.get(id) || []).length;
+      if (items.length >= 1) {
+        sel.value = items[0].id; sel.dispatchEvent(new Event("change", { bubbles: true }));
+        await new Promise(r2 => setTimeout(r2, 300));
+        out.rowsFirstItem = document.querySelectorAll("#seg-tbody tr.seg-row").length;
+        out.expectFirstItem = countSegsOf(items[0].id);
+        out.counterText = document.querySelector("#seg-count").textContent;
+        sel.value = "all"; sel.dispatchEvent(new Event("change", { bubbles: true }));
+        await new Promise(r2 => setTimeout(r2, 300));
+        out.rowsAfterItemReset = document.querySelectorAll("#seg-tbody tr.seg-row").length;
+      }
+      out.ok = out.itemSelInThead && out.itemOptCount === items.length + 1
+        && (items.length < 1 || (out.rowsFirstItem === out.expectFirstItem && out.rowsAfterItemReset === out.rowsRestored));
       return out;
     })()`, returnByValue: true, awaitPromise: true });
     const v = r.result.result.value;
     console.log("结果:", JSON.stringify(v));
     const ok = v.hasArrow && v.afterClick1.ok && v.afterClick2.ok && v.afterReset.ok
-      && v.filterInThead && v.rowsAfterFilter >= 0 && v.rowsAfterFilter <= v.rowsRestored;
+      && v.filterInThead && v.rowsAfterFilter >= 0 && v.rowsAfterFilter <= v.rowsRestored
+      && v.ok;
     console.log(ok ? "SORT-HEADER PASS" : "SORT-HEADER FAIL");
     process.exitCode = ok ? 0 : 1;
   } finally {

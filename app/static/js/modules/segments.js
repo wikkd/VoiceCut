@@ -58,10 +58,11 @@ export function createSegments(ctx) {
 
   // ── 片段列表筛选/排序（只影响展示，data-i 始终是原始索引，编辑/删除不受影响） ──
   function _viewRows(rows) {
-    const f = state.segFilter || { text: "", status: "all" };
+    const f = state.segFilter || { text: "", status: "all", item: "all" };
     const kw = (f.text || "").trim().toLowerCase();
     let out = rows;
     if (kw) out = out.filter(r => (r.seg.text || "").toLowerCase().includes(kw));
+    if (f.item && f.item !== "all") out = out.filter(r => r.item.id === f.item);
     const st = f.status || "all";
     if (st === "ok") out = out.filter(r => segIssues(r.seg).length === 0);
     else if (st === "bad") out = out.filter(r => segIssues(r.seg).length > 0);
@@ -92,15 +93,33 @@ export function createSegments(ctx) {
     return out;
   }
 
+  // 来源筛选下拉：选项随素材列表同步（签名比对，避免交互中重建 select）；素材被删时重置为全部
+  let _itemFilterSig = "";
+  function _syncItemFilter() {
+    const sel = $("#seg-filter-item");
+    if (!sel) return;
+    const items = state.items || [];
+    if (state.segFilter.item && state.segFilter.item !== "all"
+      && !items.some(it => it.id === state.segFilter.item)) state.segFilter.item = "all";
+    const sig = items.map(it => it.id).join(",");
+    if (sig !== _itemFilterSig) {
+      _itemFilterSig = sig;
+      sel.innerHTML = '<option value="all">全部</option>'
+        + items.map(it => `<option value="${esc(it.id)}">${esc(shortName(it.name, 10))}</option>`).join("");
+    }
+    sel.value = state.segFilter.item || "all";
+  }
+
   function renderSegments() {
+    _syncItemFilter();
     const tb = $("#seg-tbody");
     const empty = $("#seg-empty");
     const all = allSegs();
     const rows = _viewRows(all);
     state._segRows = rows;                       // 虚拟渲染的数据源
     const cnt = $("#seg-count");
-    const filtered = (state.segFilter && (state.segFilter.text || "").trim())
-      || (state.segFilter && state.segFilter.status !== "all");
+    const f = state.segFilter || {};
+    const filtered = ((f.text || "").trim()) || (f.status && f.status !== "all") || (f.item && f.item !== "all");
     cnt.textContent = !all.length ? ""
       : filtered ? `(${rows.length}/${all.length})` : `(${all.length})`;
     empty.classList.toggle("hidden", rows.length > 0);

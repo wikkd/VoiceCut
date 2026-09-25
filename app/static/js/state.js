@@ -42,7 +42,7 @@ export const state = {
   poolMerge: new Set(),      // 角色池合并勾选集
   /** @type {{itemId: string, segId: string}|null} */
   activeSeg: null,           // 当前定位的片段（点击行/跳转：仅行高亮 + 播放头跳转）
-  segFilter: { text: "", status: "all" }, // 片段列表筛选（文本关键字 / 状态）
+  segFilter: { text: "", status: "all", item: "all" }, // 片段列表筛选（文本关键字 / 状态 / 来源素材）
   segSort: "time",           // 片段列表排序：time=时间序 dur=时长↓ score=清晰度↓ char=按角色
   /** @type {import("./util.js").SubLine[]} */
   subs: [],                 // 实时字幕 [{start,end,text}]
