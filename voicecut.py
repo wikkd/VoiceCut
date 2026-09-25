@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import threading
 import webbrowser
+from pathlib import Path
 
 from app.config import AppConfig
 from app.log import setup_logging
@@ -19,12 +20,15 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="VoiceCut — GPT-SoVITS 训练集制作工具")
     parser.add_argument("--port", type=int, default=8765, help="后端端口 (默认 8765)")
     parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    parser.add_argument(
+        "--workdir", type=str, default=None,
+        help="运行时工作目录 (默认 <项目根>/workdir；测试用临时目录传入此参数隔离)")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    cfg = AppConfig()
+    cfg = AppConfig(workdir=Path(args.workdir)) if args.workdir else AppConfig()
     setup_logging(cfg.workdir)
     print(f"[VoiceCut] 工作目录: {cfg.workdir}")
     print(f"[VoiceCut] ffmpeg   : {cfg.ffmpeg_path}")

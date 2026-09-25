@@ -1,14 +1,52 @@
 const { spawn } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 // VoiceCut 前端综合验证 (Chrome DevTools Protocol, headless)
-// 用法: node scripts/browser_test.js [port]
+// 用法: node scripts/browser_test.js [cdp端口]
+// 自带后端实例：以临时 workdir 启动 voicecut.py，测试数据与生产 workdir 完全隔离，用完即弃。
 const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
 const PORT = Number(process.argv[2] || 9347);
 const PROF = process.env.TEMP + "\\vc-cdp-" + Date.now();
+const ROOT = path.join(__dirname, "..");
+const PY = path.join(ROOT, ".venv", "Scripts", "python.exe");
+const SRV_PORT = Number(process.env.VC_PORT || 8899);
+const BASE = `http://127.0.0.1:${SRV_PORT}`;
+const WORKDIR = fs.mkdtempSync(path.join(os.tmpdir(), "vc-bt-"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const makeWav = (seconds, sr = 16000) => {
+  const n = seconds * sr, dataLen = n * 2;
+  const b = Buffer.alloc(44 + dataLen);
+  b.write("RIFF", 0); b.writeUInt32LE(36 + dataLen, 4); b.write("WAVE", 8);
+  b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
+  b.write("data", 36); b.writeUInt32LE(dataLen, 40);
+  return b;
+};
+
 (async () => {
+  // 1) 以临时 workdir 启动后端，等待就绪
+  const server = spawn(PY, ["voicecut.py", "--port", String(SRV_PORT), "--no-browser", "--workdir", WORKDIR],
+    { cwd: ROOT, stdio: "ignore" });
+  let ready = false;
+  for (let i = 0; i < 60 && !ready; i++) {
+    try { ready = (await fetch(`${BASE}/api/config`)).ok; } catch (e) {}
+    if (!ready) await sleep(500);
+  }
+  if (!ready) throw new Error(`server not ready on ${BASE}`);
+  // 2) 预置一个素材（否则 MAIN 段 noItems，后续段全部失真）
+  const seedFd = new FormData();
+  seedFd.append("file", new Blob([makeWav(20)], { type: "audio/wav" }), "seed.wav");
+  const seedImp = await (await fetch(`${BASE}/api/import`, { method: "POST", body: seedFd })).json();
+  for (let i = 0; i < 80; i++) {
+    await sleep(500);
+    const tsk = await (await fetch(`${BASE}/api/tasks/${seedImp.task_id}`)).json();
+    if (tsk && (tsk.status === "done" || tsk.status === "failed")) break;
+  }
+
   const child = spawn(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run",
-    "--remote-debugging-port=" + PORT, "--user-data-dir=" + PROF, "http://127.0.0.1:8765/"], { stdio: "ignore" });
+    "--remote-debugging-port=" + PORT, "--user-data-dir=" + PROF, `${BASE}/`], { stdio: "ignore" });
   try {
     let target = null;
     for (let i = 0; i < 30 && !target; i++) {
@@ -102,23 +140,14 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("KEYS:", JSON.stringify({ t1, t2, t3, volBefore, vol1, t4, t5, vol2, ok: keysOk }));
 
     // Ctrl+→ 多选快进：导入 40s 长素材 → 连续标记多段 → Ctrl+← 撤销
-    const makeWav = (seconds, sr = 16000) => {
-      const n = seconds * sr, dataLen = n * 2;
-      const b = Buffer.alloc(44 + dataLen);
-      b.write("RIFF", 0); b.writeUInt32LE(36 + dataLen, 4); b.write("WAVE", 8);
-      b.write("fmt ", 12); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
-      b.writeUInt32LE(sr, 24); b.writeUInt32LE(sr * 2, 28); b.writeUInt16LE(2, 32); b.writeUInt16LE(16, 34);
-      b.write("data", 36); b.writeUInt32LE(dataLen, 40);
-      return b;
-    };
     const fd = new FormData();
     fd.append("file", new Blob([makeWav(40)], { type: "audio/wav" }), "long_test.wav");
-    const impR = await fetch("http://127.0.0.1:8765/api/import", { method: "POST", body: fd });
+    const impR = await fetch(`${BASE}/api/import`, { method: "POST", body: fd });
     const imp = await impR.json();
     let tsk = null;
     for (let i = 0; i < 80; i++) {
       await sleep(500);
-      tsk = await (await fetch(`http://127.0.0.1:8765/api/tasks/${imp.task_id}`)).json();
+      tsk = await (await fetch(`${BASE}/api/tasks/${imp.task_id}`)).json();
       if (tsk && (tsk.status === "done" || tsk.status === "failed")) break;
     }
     console.log("IMPORT:", JSON.stringify({ task: tsk && tsk.status, item: tsk && tsk.result && tsk.result.item_id }));
@@ -256,7 +285,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
 
     // 项目式：新建空项目 → 切换 → 素材/角色池隔离 → 删除
-    const newProj = await (await fetch("http://127.0.0.1:8765/api/projects", { method: "POST",
+    const newProj = await (await fetch(`${BASE}/api/projects`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "test-proj" }) })).json();
     const rJ = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
@@ -268,7 +297,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return { ok: true, emptyItems, emptyChars, selValue };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("PROJ:", JSON.stringify(rJ.result && rJ.result.result && rJ.result.result.value));
-    await fetch(`http://127.0.0.1:8765/api/projects/${newProj.id}`, { method: "DELETE" });
+    await fetch(`${BASE}/api/projects/${newProj.id}`, { method: "DELETE" });
 
     // 项目持久化往返：刷新后片段从服务端恢复
     await send("Page.reload", { ignoreCache: true });
@@ -338,9 +367,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       return { ok, name: vc.state.currentItem ? vc.state.currentItem.name : null };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("A3:", JSON.stringify(v(rA3)));
-    const _itemsList = await (await fetch("http://127.0.0.1:8765/api/items")).json();
+    const _itemsList = await (await fetch(`${BASE}/api/items`)).json();
     const _uiItem = _itemsList.find(x => x.name === 'ui_import');
-    if (_uiItem) await fetch(`http://127.0.0.1:8765/api/items/${_uiItem.id}`, { method: "DELETE" });
+    if (_uiItem) await fetch(`${BASE}/api/items/${_uiItem.id}`, { method: "DELETE" });
 
 
     // DaVinci 式页面切换：素材库 / 剪辑 / 训练交付
@@ -372,5 +401,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();
-  } finally { child.kill(); }
+  } finally {
+    child.kill();
+    try { server.kill(); } catch (e) {}
+    try { fs.rmSync(WORKDIR, { recursive: true, force: true }); }
+    catch (e) { console.log("[bt] 临时 workdir 清理失败（保留供排查）:", WORKDIR); }
+  }
 })();

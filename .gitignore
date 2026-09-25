@@ -51,3 +51,9 @@ GPT-SoVITS/GPT_SoVITS/text/engdict*.rep
 GPT-SoVITS/GPT_SoVITS/text/engdict_cache.pickle
 GPT-SoVITS/GPT_SoVITS/text/g2pw/polyphonic*
 GPT-SoVITS/GPT_SoVITS/text/namedict_cache.pickle
+
+# ── 工作区数据（WorkBuddy 项目记忆，不进版本库）──────────
+.workbuddy/
+
+# ── 工作区数据（WorkBuddy 项目记忆，不进版本库）──────────
+.workbuddy/
