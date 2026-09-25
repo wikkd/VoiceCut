@@ -109,7 +109,10 @@ export function applyLayout() {
   ws.style.setProperty("--w-media", eff(layout.cols.media, layout.hidden.includes("media")) + "px");
   ws.style.setProperty("--w-sub", eff(layout.cols.sub, layout.hidden.includes("sub")) + "px");
   ws.style.setProperty("--h-video", eff(layout.rows.video, layout.hidden.includes("video")) + "px");
-  ws.style.setProperty("--h-wave", layout.hidden.includes("wave") ? "0px" : "1fr");
+  // wave 行必须保底 240px：时间轴 24 + 波形 min 120 + 总览条 46 + 内边距。
+  // 若用裸 1fr，视频/片段行过大或窗口过矮时 wave 行被压扁，时间轴被 overflow:hidden 裁掉——
+  // 真实鼠标拖选时间轴会彻底失效（点到的其实是片段面板），且合成事件测试测不出来。
+  ws.style.setProperty("--h-wave", layout.hidden.includes("wave") ? "0px" : "minmax(240px, 1fr)");
   ws.style.setProperty("--h-seg", eff(layout.rows.seg, layout.hidden.includes("seg")) + "px");
   PANELS.forEach((p) => {
     const el = $(PANEL_IDS[p]);

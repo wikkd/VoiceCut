@@ -112,7 +112,7 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
   flex: 1; min-height: 0; position: relative;
   display: grid;
   grid-template-columns: var(--w-media, 220px) 1fr var(--w-sub, 240px);
-  grid-template-rows: var(--h-video, 200px) var(--h-wave, 1fr) var(--h-seg, 220px);
+  grid-template-rows: var(--h-video, 200px) var(--h-wave, minmax(240px, 1fr)) var(--h-seg, 220px);
   grid-template-areas:
     "media video sub"
     "media wave  sub"
