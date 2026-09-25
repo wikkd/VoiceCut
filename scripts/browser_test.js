@@ -482,22 +482,29 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, awaitPromise: true, returnByValue: true });
     console.log("TRAIN:", JSON.stringify(rT.result && rT.result.result && rT.result.result.value));
 
-    // BUSY：后台任务运行期全屏操作锁——挂任务显遮罩、清任务解锁
+    // BUSY：后台任务运行期全屏操作锁——挂任务显遮罩、清任务解锁；遮罩含进度行与日志条
     const rB = await send("Runtime.evaluate", { expression: `(() => {
       const vc = window.__vc;
       const ov = document.querySelector('#busy-overlay');
       if (!ov) return { skip: 'no overlay' };
       const initHidden = ov.classList.contains('hidden');
-      vc.state.activeTasks.set('fake-busy-1', { msg: '测试任务', progress: 0.4, doneCb: null });
+      vc.state.activeTasks.set('fake-busy-1', { msg: '测试任务', progress: 0.4, doneCb: null,
+        logs: ['[00:00:01] 步骤一完成', '[00:00:02] 正在处理步骤二'] });
       vc.updateStatusbar();
       const locked = !ov.classList.contains('hidden');
       const hasCancel = !!document.querySelector('#busy-cancel');
+      const hasTaskRow = !!ov.querySelector('.busy-task');
+      const fillW = ov.querySelector('.bt-fill') ? ov.querySelector('.bt-fill').style.width : null;
+      const msgTxt = ov.querySelector('.bt-msg') ? ov.querySelector('.bt-msg').textContent : null;
+      const logLines = ov.querySelectorAll('.busy-log-line').length;
+      const logTxt = ov.querySelector('.busy-log-line') ? ov.querySelector('.busy-log-line').textContent : null;
       vc.state.activeTasks.delete('fake-busy-1');
       vc.updateStatusbar();
       const unlocked = ov.classList.contains('hidden');
       const bubbleGone = !document.querySelector('.toast-bubble.task[data-task-id="fake-busy-1"]');
-      return { initHidden, locked, hasCancel, unlocked, bubbleGone,
-        ok: initHidden && locked && hasCancel && unlocked && bubbleGone };
+      return { initHidden, locked, hasCancel, hasTaskRow, fillW, msgTxt, logLines, logTxt, unlocked, bubbleGone,
+        ok: initHidden && locked && hasCancel && hasTaskRow && fillW === '40%' && msgTxt === '测试任务'
+          && logLines === 2 && unlocked && bubbleGone };
     })()`, returnByValue: true });
     console.log("BUSY:", JSON.stringify(rB.result && rB.result.result && rB.result.result.value));
 

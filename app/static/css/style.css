@@ -645,3 +645,16 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 @keyframes busy-spin { to { transform: rotate(360deg); } }
 #busy-overlay .busy-title { font-size: 15px; font-weight: 600; }
 #busy-overlay .busy-sub { font-size: 12px; color: var(--muted, #9aa); }
+#busy-overlay .busy-tasks { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 8px; }
+#busy-overlay .busy-task .bt-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin-bottom: 3px; }
+#busy-overlay .busy-task .bt-msg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#busy-overlay .busy-task .bt-pct { color: var(--muted, #9aa); flex: none; }
+#busy-overlay .busy-task .bt-bar { height: 5px; border-radius: 3px; background: var(--border, #333); overflow: hidden; }
+#busy-overlay .busy-task .bt-fill { height: 100%; background: var(--accent, #6c9cff); transition: width .3s; }
+#busy-overlay .busy-logs {
+  width: 100%; max-width: 480px; height: 120px; overflow-y: auto;
+  font: 11px/1.7 Consolas, "Courier New", monospace; color: var(--muted, #9aa);
+  background: rgba(0,0,0,.28); border: 1px solid var(--border, #333);
+  border-radius: 6px; padding: 6px 10px; text-align: left;
+}
+#busy-overlay .busy-log-line { white-space: pre-wrap; word-break: break-all; }

@@ -10,7 +10,8 @@ export function createTasks(ctx) {
   function trackTask(taskId, doneCb) {
     const existing = state.activeTasks.get(taskId);
     if (existing) { existing.doneCb = doneCb; return; }  // 同一后台任务去重
-    state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb });
+    state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb,
+      logs: [`[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] 任务已提交`] });
     ensurePolling();
     updateStatusbar();
   }
@@ -84,6 +85,11 @@ export function createTasks(ctx) {
     for (const [tid, info] of state.activeTasks) {
       try {
         const t = await api(`/api/tasks/${tid}`);
+        // 消息变化 → 记入任务日志流（遮罩日志条展示，带时间戳，上限 60 条）
+        if (t.message && t.message !== info.msg) {
+          (info.logs = info.logs || []).push(`[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] ${t.message}`);
+          if (info.logs.length > 60) info.logs.splice(0, info.logs.length - 60);
+        }
         info.msg = t.message || info.msg;
         info.progress = t.progress || 0;
         if (t.status === "done") {
@@ -107,6 +113,37 @@ export function createTasks(ctx) {
     }
     updateStatusbar();
   }
+  // 遮罩中央：每任务一行（消息 + 进度条）+ 汇总日志条（各任务日志按任务顺序合并，显示最近 10 条，自动滚底）
+  function renderBusyOverlay() {
+    const box = $("#busy-overlay .busy-tasks");
+    const logsEl = $("#busy-overlay .busy-logs");
+    if (!box) return;
+    box.innerHTML = "";
+    const allLogs = [];
+    for (const [, t] of state.activeTasks) {
+      (t.logs || []).forEach(l => allLogs.push(l));
+      const row = document.createElement("div");
+      row.className = "busy-task";
+      const pct = ((t.progress || 0) * 100).toFixed(0) + "%";
+      row.innerHTML = `<div class="bt-row"><span class="bt-msg"></span><span class="bt-pct"></span></div>` +
+        `<div class="bt-bar"><div class="bt-fill"></div></div>`;
+      row.querySelector(".bt-msg").textContent = t.msg;
+      row.querySelector(".bt-pct").textContent = pct;
+      row.querySelector(".bt-fill").style.width = pct;
+      box.appendChild(row);
+    }
+    if (logsEl) {
+      logsEl.innerHTML = "";
+      allLogs.slice(-10).forEach(l => {
+        const d = document.createElement("div");
+        d.className = "busy-log-line";
+        d.textContent = l;
+        logsEl.appendChild(d);
+      });
+      logsEl.scrollTop = logsEl.scrollHeight;
+    }
+  }
+
   function updateStatusbar() {
     const info = $("#task-info");
     renderTaskBubbles();
@@ -114,7 +151,10 @@ export function createTasks(ctx) {
       ? `后台任务 ${state.activeTasks.size} 个（左下气泡可单独取消）` : "就绪";
     // 后台任务（识别/训练等）运行期锁定页面操作：有任务 → 全屏遮罩，全清 → 解锁
     const ov = $("#busy-overlay");
-    if (ov) ov.classList.toggle("hidden", !state.activeTasks.size);
+    if (ov) {
+      ov.classList.toggle("hidden", !state.activeTasks.size);
+      renderBusyOverlay();
+    }
   }
   // 任务气泡：每个 activeTask 一个持久气泡，向上堆叠；终态时变色短暂停留
   function renderTaskBubbles() {
