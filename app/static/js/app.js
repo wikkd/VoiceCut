@@ -73,10 +73,32 @@ import { createProjects } from "/static/js/modules/projects.js";
     state.segFilter.status = evtEl(e).value || "all";
     segments.renderSegments();
   });
-  $("#seg-sort").addEventListener("change", (e) => {
-    state.segSort = evtEl(e).value || "time";
+  // 表头排序箭头：点击列名循环 默认方向 → 升序 → 恢复时间序；箭头 ⇅/▼/▲ 指示当前状态
+  function updateSortArrows() {
+    const cur = state.segSort || "time";
+    const descDefault = { dur: 1, score: 1 };   // 时长/清晰度默认降序（最优在前），其余默认升序
+    $$("#seg-table thead [data-sort]").forEach((el) => {
+      const key = el.dataset.sort;
+      const arrow = el.querySelector(".sort-arrow");
+      const on = cur === key, asc = cur === key + "_asc";
+      if (arrow) arrow.textContent = on ? (descDefault[key] ? "▼" : "▲") : (asc ? "▲" : "⇅");
+      el.classList.toggle("sort-on", on || asc);
+    });
+  }
+  $("#seg-table thead").addEventListener("click", (e) => {
+    if (e.target.closest("input, select")) return;   // 表头内筛选控件点击不触发排序
+    const el = e.target.closest("[data-sort]");
+    if (!el) return;
+    const key = el.dataset.sort;
+    const cur = state.segSort || "time";
+    if (key === "time") state.segSort = "time";
+    else if (cur === key) state.segSort = key + "_asc";
+    else if (cur === key + "_asc") state.segSort = "time";
+    else state.segSort = key;
+    updateSortArrows();
     segments.renderSegments();
   });
+  updateSortArrows();
   $("#seg-tbody").addEventListener("click", (e) => {
     const btn = evtEl(e).closest("button");
     const tr = closestEl(evtEl(e), "tr.seg-row");

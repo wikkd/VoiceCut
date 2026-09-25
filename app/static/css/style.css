@@ -610,15 +610,16 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 .queue-chip .qc-dot { width: 8px; height: 8px; border-radius: 50%; }
 
 /* ── 片段列表筛选/排序栏 ── */
-/* 片段列表筛选控件（内嵌标题栏） */
-.grip-filter {
-  display: flex; gap: 4px; align-items: center;
-  margin-left: 10px; flex-shrink: 0;
+/* 片段列表表头：排序箭头 + 内嵌筛选控件 */
+#seg-table thead th[data-sort] { cursor: pointer; user-select: none; }
+#seg-table thead .th-sort { cursor: pointer; user-select: none; }
+#seg-table thead .sort-arrow { font-size: 10px; opacity: 0.45; margin-left: 2px; }
+#seg-table thead .sort-on .sort-arrow { opacity: 1; color: var(--accent); }
+#seg-table thead .th-filter {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 2px;
+  font-size: 11px; height: 20px; padding: 1px 4px; font-weight: normal;
+  color: var(--fg, #e6e6f0); background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 4px;
 }
-.grip-filter input, .grip-filter select {
-  font-size: 11px; color: var(--fg, #e6e6f0); background: var(--panel-2);
-  border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; height: 22px;
-}
-.grip-filter input { width: 110px; }
-.grip-filter input::placeholder { color: var(--muted); }
-.grip-filter input:focus, .grip-filter select:focus { outline: none; border-color: var(--accent); }
+#seg-table thead th input.th-filter { display: inline-block; width: 140px; margin-left: 8px; }
+#seg-table thead .th-filter:focus { outline: none; border-color: var(--accent); }

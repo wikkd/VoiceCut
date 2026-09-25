@@ -67,12 +67,18 @@ export function createSegments(ctx) {
     else if (st === "bad") out = out.filter(r => segIssues(r.seg).length > 0);
     else if (st === "locked") out = out.filter(r => r.seg.locked);
     else if (st === "unassigned") out = out.filter(r => !r.seg.characterId);
+    // 排序：支持方向后缀（"dur"=降序 / "dur_asc"=升序；char 无方向两态）
     const sort = state.segSort || "time";
-    if (sort === "dur") {
-      out = out.slice().sort((a, b) => (b.seg.end - b.seg.start) - (a.seg.end - a.seg.start));
-    } else if (sort === "score") {
-      out = out.slice().sort((a, b) => (b.seg.q ?? -1) - (a.seg.q ?? -1));   // 未打分排后
-    } else if (sort === "char") {
+    const us = sort.indexOf("_");
+    const skey = us < 0 ? sort : sort.slice(0, us);
+    const sdir = us < 0 ? "" : sort.slice(us + 1);
+    if (skey === "dur") {
+      const d = sdir === "asc" ? 1 : -1;
+      out = out.slice().sort((a, b) => d * ((b.seg.end - b.seg.start) - (a.seg.end - a.seg.start)));
+    } else if (skey === "score") {
+      const d = sdir === "asc" ? 1 : -1;
+      out = out.slice().sort((a, b) => d * ((b.seg.q ?? -1) - (a.seg.q ?? -1)));   // 未打分排后（降序时）
+    } else if (skey === "char") {
       const named = [], un = [];
       out.forEach(r => (r.seg.characterId ? named : un).push(r));
       named.sort((a, b) => {

@@ -170,22 +170,6 @@
     <section id="segments-panel" class="panel" data-panel="seg">
       <div class="panel-grip">
         <span class="grip-title">片段列表 <small id="seg-count"></small></span>
-        <span class="grip-filter" title="按当前筛选可见范围决定 Ctrl+A 全选与批量操作范围">
-          <input id="seg-filter-text" type="text" placeholder="筛选文本…" title="按片段文本关键字过滤">
-          <select id="seg-filter-status" title="按状态过滤">
-            <option value="all">全部状态</option>
-            <option value="ok">合规</option>
-            <option value="bad">不合规</option>
-            <option value="locked">已锁定</option>
-            <option value="unassigned">未指派角色</option>
-          </select>
-          <select id="seg-sort" title="排序方式">
-            <option value="time">时间序</option>
-            <option value="dur">时长 ↓</option>
-            <option value="score">清晰度 ↓</option>
-            <option value="char">按角色</option>
-          </select>
-        </span>
         <button id="btn-add-seg" class="chip">加片段</button>
         <button id="btn-transcribe" class="chip">批量转写</button>
         <button id="btn-quality-scan" class="chip" data-act="quality-scan" title="为全部片段做人声清晰度打分（0~100）">清晰度</button>
@@ -205,13 +189,22 @@
               <tr>
                 <th style="width:38px">#</th>
                 <th style="width:70px">来源</th>
-                <th style="width:130px">起止</th>
-                <th style="width:64px">时长</th>
-                <th style="width:70px">状态</th>
+                <th style="width:130px" data-sort="time" title="点击恢复时间顺序">起止 <span class="sort-arrow">⇅</span></th>
+                <th style="width:64px" data-sort="dur" title="点击按时长降序，再点升序，三点恢复时间序">时长 <span class="sort-arrow">⇅</span></th>
+                <th style="width:104px">
+                  <span data-sort="score" class="th-sort" title="点击按清晰度分数降序，再点升序">状态 <span class="sort-arrow">⇅</span></span>
+                  <select id="seg-filter-status" class="th-filter" title="按状态过滤">
+                    <option value="all">全部</option>
+                    <option value="ok">合规</option>
+                    <option value="bad">不合规</option>
+                    <option value="locked">已锁定</option>
+                    <option value="unassigned">未指派</option>
+                  </select>
+                </th>
                 <th style="width:72px">试听</th>
-                <th>文本（可编辑）</th>
+                <th>文本（可编辑） <input id="seg-filter-text" class="th-filter" type="text" placeholder="筛选文本…" title="按片段文本关键字过滤"></th>
                 <th style="width:84px">语言</th>
-                <th style="width:96px">说话人</th>
+                <th style="width:96px" data-sort="char" title="点击按角色分组排序，再点恢复时间序">说话人 <span class="sort-arrow">⇅</span></th>
                 <th style="width:90px">操作</th>
               </tr>
             </thead>
