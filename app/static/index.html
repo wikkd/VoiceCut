@@ -89,6 +89,7 @@
     <button id="btn-import" class="btn primary">导入文件</button>
     <button id="btn-bilibili" class="btn">从 URL 导入</button>
     <button id="btn-identify-speakers" class="btn">识别说话人</button>
+    <button id="btn-reidentify-speakers" class="btn" title="清空角色池与全部片段指派后从零重新聚类（文本修改与锁定保留）">重新识别</button>
     <button id="btn-auto-analyze" class="btn" title="导入后自动生成字幕并识别说话人">自动分析</button>
     <button id="btn-auto-train" class="btn" title="说话人识别完成后自动启动声音合成训练，并为每个角色生成一段试听音频">自动训练</button>
     <button id="btn-pool" class="btn">角色池</button>
@@ -327,6 +328,7 @@
       <span class="pool-title">角色池 · <b id="pool-item-name"></b></span>
       <span class="spacer"></span>
       <button id="pool-identify" class="btn">识别说话人</button>
+      <button id="pool-reidentify" class="btn" title="清空角色池与全部片段指派后从零重新聚类（文本修改与锁定保留）">重新识别</button>
       <button id="pool-new" class="btn">新建角色</button>
       <button id="pool-merge" class="btn">合并选中 <b id="pool-merge-count">0</b></button>
       <button id="pool-close" class="btn" title="关闭">×</button>

@@ -60,7 +60,7 @@ def test_submit_project_analyze_dedup_and_rerun(tmp_path: Path) -> None:
     release = threading.Event()
     calls: list[str] = []
 
-    def fake_run(ctx, project_id: str) -> dict:
+    def fake_run(ctx, project_id: str, reset: bool = False) -> dict:
         calls.append(project_id)
         release.wait(timeout=5)
         return {"ok": True, "characters": []}

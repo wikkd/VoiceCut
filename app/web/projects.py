@@ -362,11 +362,17 @@ def _speakers_worker(c, item_id: str) -> dict:
 @bp.post("/api/projects/<project_id>/speakers/generate")
 def api_project_speakers_generate(project_id: str) -> object:
     """项目级说话人识别：把项目内全部素材的字幕声纹放在一起联合聚类，
-    同一个人跨素材保持同一个角色，而不是每个视频各自聚类后再匹配。"""
+    同一个人跨素材保持同一个角色，而不是每个视频各自聚类后再匹配。
+
+    body 可选 ``{"reset": true}``：重新识别——先清空项目角色池与全部片段
+    指派（从零聚类，不与旧角色归并；片段文本与 locked 标记保留）。
+    """
     c = ctx()
     if db_mod.fetch_project_record(db_mod.get_conn(c.cfg.workdir), project_id) is None:
         return jsonify({"error": "project not found"}), 404
-    tid = submit_project_analyze(c, project_id, force=True)
+    body = request.get_json(force=True, silent=True) or {}
+    reset = bool(body.get("reset"))
+    tid = submit_project_analyze(c, project_id, force=True, reset=reset)
     return jsonify({"task_id": tid})
 
 
@@ -461,12 +467,14 @@ def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
             "items_touched": touched, "characters": chars}
 
 
-def submit_project_analyze(c, project_id: str, *, force: bool = False) -> str | None:
+def submit_project_analyze(c, project_id: str, *, force: bool = False,
+                           reset: bool = False) -> str | None:
     """提交项目级说话人识别（每项目去重排队）。
 
     - 非 force（导入链自动触发）受项目设置 ``auto_analyze`` 控制，关闭返回 None。
     - 若该项目已有分析在跑，仅打“需要重跑”标记；当前分析完成后自动再排一次，
-      保证批量导入时后完成的素材也被纳入本次分析。
+      保证批量导入时后完成的素材也被纳入本次分析（重跑轮按普通识别处理）。
+    - ``reset``：重新识别，先清空角色池与全部片段指派再聚类。
     """
     if not force and not project_mod.get_project_setting(
             c.cfg.workdir, project_id, "auto_analyze", True):
@@ -478,19 +486,19 @@ def submit_project_analyze(c, project_id: str, *, force: bool = False) -> str | 
             if t and t["status"] in ("pending", "running"):
                 c.auto_analyze_pending[project_id] = True
                 return existing
-        tid = c.tasks.submit(_project_speakers_worker, c, project_id,
+        tid = c.tasks.submit(_project_speakers_worker, c, project_id, reset,
                              gpu=True, kind="speakers")
         c.auto_analyze_tasks[project_id] = tid
         return tid
 
 
-def _project_speakers_worker(c, project_id: str) -> dict:
+def _project_speakers_worker(c, project_id: str, reset: bool = False) -> dict:
     """项目级说话人识别入口；结束后清理去重注册，必要时自动再排一轮。"""
     tid = c.tasks.current_task_id()
     ok = False
     result: dict = {}
     try:
-        result = _project_speakers_run(c, project_id)
+        result = _project_speakers_run(c, project_id, reset=reset)
         ok = True
         return result
     finally:
@@ -622,12 +630,47 @@ def _auto_infer_sample(c, project_id: str, role: dict, exp: str, lang: str) -> d
     return {"url": url, "text": text, "path": str(path), "ref": str(ref_wav)}
 
 
-def _project_speakers_run(c, project_id: str) -> dict:
+def _reset_project_pool(c, project_id: str, item_ids: list) -> int:
+    """重新识别前置清理：清空项目角色池与全部片段的说话人指派。
+
+    片段文本与 locked 标记保留（人工文本成果不受影响），仅解除
+    characterId / speakerLabel 绑定，使聚类从零开始、不与旧角色归并。
+    返回清掉的角色数。
+    """
+    pool = project_mod.load_pool(c.cfg.workdir, project_id)
+    n_chars = len(pool["characters"])
+    if n_chars:
+        project_mod.save_pool(c.cfg.workdir, project_id, [])
+    for iid in item_ids:
+        pj = project_mod.load_project(c.cfg.workdir, iid)
+        changed = False
+        for seg in pj["segments"]:
+            if seg.get("characterId"):
+                seg["characterId"] = None
+                changed = True
+            if seg.get("speakerLabel"):
+                seg["speakerLabel"] = None
+                changed = True
+        if changed:
+            project_mod.save_project(c.cfg.workdir, iid, pj)
+    if getattr(c, "log", None):
+        c.log.info("re-identify: cleared %d characters for project %s", n_chars, project_id)
+    return n_chars
+
+
+def _project_speakers_run(c, project_id: str, reset: bool = False) -> dict:
     tid = c.tasks.current_task_id()
     items = [it for it in c.store.by_project(project_id)
              if it.wav_path and Path(it.wav_path).exists()]
     if not items:
         raise RuntimeError("项目内没有可分析的素材")
+    reset_chars = 0
+    if reset:
+        # 重新识别：清空角色池与全部指派（从零聚类，不与旧角色归并）
+        c.tasks.update(tid, progress=0.02,
+                       message="重新识别：清空旧角色与片段指派 …")
+        reset_chars = _reset_project_pool(
+            c, project_id, [it.id for it in items])
     # 1) 每个素材准备字幕（缺字幕先 whisper 识别）
     sources: list = []
     for idx, item in enumerate(items):
@@ -775,4 +818,5 @@ def _project_speakers_run(c, project_id: str) -> dict:
             "normalized_removed": total_norm_removed,
             "n_speakers": res["n_speakers"], "quality": res["quality"],
             "characters": chars, "created": created, "merged": merged,
-            "cleaned": cleaned, "items": items_out}
+            "cleaned": cleaned, "items": items_out,
+            "reset": bool(reset), "reset_chars": reset_chars}

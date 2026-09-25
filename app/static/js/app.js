@@ -339,6 +339,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-transcribe").addEventListener("click", () => io.openTranscribeModal());
     $("#btn-pool").addEventListener("click", () => pool.openPool());
     $("#btn-identify-speakers").addEventListener("click", () => pool.doIdentifySpeakers());
+    $("#btn-reidentify-speakers").addEventListener("click", () => pool.doIdentifySpeakers(true));
     $("#btn-auto-analyze").addEventListener("click", () => pool.toggleAutoAnalyze());
     $("#btn-auto-analyze2").addEventListener("click", () => pool.toggleAutoAnalyze());
     $("#btn-auto-train").addEventListener("click", () => pool.toggleAutoTraining());
@@ -348,6 +349,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#pool-new").addEventListener("click", () => pool.createPoolCharacter());
     $("#pool-merge").addEventListener("click", () => pool.mergePoolSelected());
     $("#pool-identify").addEventListener("click", () => pool.doIdentifySpeakers());
+    $("#pool-reidentify").addEventListener("click", () => pool.doIdentifySpeakers(true));
 
     $("#bb-open").addEventListener("click", () => io.doUrlOpen());
     $("#tr-start").addEventListener("click", () => io.doTranscribe());

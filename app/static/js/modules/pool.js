@@ -219,12 +219,20 @@ export function createPool(ctx) {
     scheduleSavePool(); renderPool(); segments.renderSegments();
   }
 
-  async function doIdentifySpeakers() {
+  async function doIdentifySpeakers(reset = false) {
     if (!state.currentProject) return toast("请先选择项目");
+    if (reset) {
+      const n = state.characters.length;
+      const okGo = confirm(`重新识别将清空现有角色池（${n} 个角色）与全部片段的说话人指派（人工重定向也会重置；文本修改与锁定标记保留），然后从零重新聚类。继续？`);
+      if (!okGo) return;
+    }
     state.identifying = true;  // 识别期间冻结角色池落盘，防止旧快照覆盖结果
-    toast("开始项目级说话人识别（ECAPA 声纹，将把项目内全部素材联合聚类，首次含模型加载）…");
+    toast(reset ? "重新识别中：旧角色与指派已清空，正在项目级联合聚类…" :
+      "开始项目级说话人识别（ECAPA 声纹，将把项目内全部素材联合聚类，首次含模型加载）…");
     try {
-      const j = await api(`/api/projects/${state.currentProject.id}/speakers/generate`, { method: "POST" });
+      const j = await api(`/api/projects/${state.currentProject.id}/speakers/generate`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reset: !!reset }) });
       trackTask(j.task_id, async (result) => {
         state.identifying = false;
         if (Array.isArray(result.characters)) state.characters = result.characters;
@@ -236,8 +244,9 @@ export function createPool(ctx) {
         const mixed = result.mixed || 0;
         const cleaned = result.cleaned || 0;
         const itemN = (result.items || []).length;
-        let msg = `项目说话人识别完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
+        let msg = `${reset ? "重新识别" : "项目说话人识别"}完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
         if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
+        if (result.reset_chars > 0) msg += `；重置前已清空 ${result.reset_chars} 个旧角色`;
         toast(msg);
       });
     } catch (e) { state.identifying = false; toast("项目说话人识别启动失败: " + e.message, 6000); }
