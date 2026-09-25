@@ -71,7 +71,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     if (!seg) return;
     if (btn) {
       if (btn.classList.contains("seg-aud")) { segments.auditionSegment(state.items.find(x => x.id === itemId), seg); return; }
-      else if (btn.classList.contains("seg-jump")) { segments.jumpToSegment(state.items.find(x => x.id === itemId), seg); return; }
+      else if (btn.classList.contains("seg-jump")) { waveform.focusSegment(state.items.find(x => x.id === itemId), seg); return; }
       else if (btn.classList.contains("seg-del")) { segments.deleteSegment(itemId, i); return; }
     }
     e.preventDefault();
@@ -88,6 +88,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       else state.selectedSegs.add(seg.id);
     } else {
       state.selectedSegs = new Set([seg.id]);
+      waveform.focusSegment(state.items.find(x => x.id === itemId), seg); // 点击行定位：跳转波形 + 生成可拖拽边界选区
     }
     setSegFocus(tr);
     segments.renderSegments();
@@ -456,6 +457,9 @@ import { createProjects } from "/static/js/modules/projects.js";
     saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     renderSegments: segments.renderSegments,
     auditionFocus: segments.auditionFocus,
+    trackTask: tasks.trackTask,
+    syncSegBounds: (itemId, segId, s, e) => segments.syncSegBounds(itemId, segId, s, e),
+    applySegText: (itemId, segId, t) => segments.applySegText(itemId, segId, t),
     subtitles });
   setupMenus();
   setupShortcuts();

@@ -43,6 +43,9 @@ export const state = {
   poolDirty: false,          // 角色池有改动待保存
   selectedSegs: new Set(),   // 片段列表多选行索引
   poolMerge: new Set(),      // 角色池合并勾选集
+  /** @type {{itemId: string, segId: string}|null} */
+  activeSeg: null,           // 当前绑定编辑的片段（点击行定位；拖动其选区即优化边界）
+  activeSegRegion: null,     // 活动片段绑定的波形选区 region
   /** @type {import("./util.js").SubLine[]} */
   subs: [],                 // 实时字幕 [{start,end,text}]
   currentSubIdx: -1,        // 当前播放头命中的字幕行索引

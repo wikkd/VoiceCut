@@ -388,6 +388,10 @@ tr.seg-row.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 tr.seg-row.playing td { background: var(--accent-dim); }
 tr.seg-row.playing td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* ── 片段定位：当前绑定编辑的片段行（琥珀色，对应波形上的可拖拽边界选区） ── */
+tr.seg-row.active td { background: rgba(255, 209, 102, 0.10); }
+tr.seg-row.active td:first-child { box-shadow: inset 3px 0 0 #ffd166; }
+
 /* ── M2 角色池子页面 ── */
 #pool-view {
   position: fixed; inset: 0; z-index: 200; background: var(--bg);

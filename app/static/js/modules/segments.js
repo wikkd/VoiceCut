@@ -87,7 +87,8 @@ export function createSegments(ctx) {
     const tagTxt = issues.length ? issues.join("，") : "合规";
     const ch = charById(seg.characterId);
     const tr = document.createElement("tr");
-    tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "");
+    tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "")
+      + (state.activeSeg && state.activeSeg.segId === seg.id ? " active" : "");
     tr.dataset.item = item.id;
     tr.dataset.i = i;
     if (ch) tr.style.borderLeft = "4px solid " + ch.color;
@@ -216,6 +217,37 @@ export function createSegments(ctx) {
     if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
+  // 活动片段边界同步：波形上拖动绑定选区结束后回写起止（只更新行内单元格，不整表重渲染）
+  function syncSegBounds(itemId, segId, start, end) {
+    const segs = segsFor(itemId);
+    const seg = segs.find(s => s.id === segId);
+    if (!seg) return;
+    seg.start = start; seg.end = end;
+    scheduleSaveProject(itemId);
+    const i = segs.indexOf(seg);
+    const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    if (tr) {
+      tr.children[2].textContent = fmtT(seg.start) + " ~ " + fmtT(seg.end);
+      tr.children[3].textContent = fmtDur(seg.end - seg.start);
+    }
+    updateSegBadge(itemId, i);
+  }
+  // 自动转写回填：识别完成后写入片段文本并刷新行内输入框（用户正在输入则不打扰）
+  function applySegText(itemId, segId, text) {
+    const segs = segsFor(itemId);
+    const seg = segs.find(s => s.id === segId);
+    if (!seg || !text || !text.trim()) return;
+    seg.text = text.trim();
+    scheduleSaveProject(itemId);
+    const i = segs.indexOf(seg);
+    const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    if (tr) {
+      const inp = tr.querySelector(".seg-text");
+      if (inp && document.activeElement !== inp) inp.value = seg.text;
+    }
+    updateSegBadge(itemId, i);
+  }
+
   // 试听跳转高亮：给当前正在试听的片段行加 .playing（角色池连续试听时逐段跟随）
   function auditionFocus(itemId, segId, scroll = true) {
     state.auditionFocus = { itemId, segId };
@@ -232,5 +264,5 @@ export function createSegments(ctx) {
 
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments,
            addSegmentFromSelection, deleteSegment, jumpToSegment, auditionSegment,
-           gotoEditAndPlay, scrollSegRow, auditionFocus };
+           gotoEditAndPlay, scrollSegRow, auditionFocus, syncSegBounds, applySegText };
 }
