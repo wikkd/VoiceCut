@@ -118,7 +118,7 @@ export function createTasks(ctx) {
   }
   // 任务终态：气泡转终态样式短暂停留后淡出
   function finalizeTaskBubble(tid, cls, msg, ms = 1800) {
-    const b = document.querySelector(`#toast-stack .toast-bubble.task[data-task-id="${tid}"]`);
+    const b = $(`#toast-stack .toast-bubble.task[data-task-id="${tid}"]`);
     if (!b) { if (cls === "err") toast(msg, 5000); return; }
     b.dataset.taskId = "";   // 脱离 activeTasks 追踪，避免被 renderTaskBubbles 清除
     b.classList.add(cls);

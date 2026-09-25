@@ -1,0 +1,11 @@
+{
+  "name": "voicecut-frontend",
+  "private": true,
+  "description": "VoiceCut 前端工具链（仅开发期使用，运行时零构建零依赖：原生 ES Module 直出）。无 type 字段：scripts/ 下工具是 CommonJS。",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

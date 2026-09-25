@@ -83,7 +83,7 @@ export function createWaveform(ctx) {
 
     // 时间轴与波形同步：放大后刻度按绝对坐标定位，需要让容器宽度跟随波形总宽度并随滚动偏移
     const syncTimeline = () => {
-      const tl = document.querySelector("#timeline [part='timeline']");
+      const tl = $("#timeline [part='timeline']");
       if (!tl || !ws.getWrapper()) return;
       tl.style.width = ws.getWrapper().scrollWidth + "px";
       tl.style.transform = "translateX(" + (-ws.getScroll()) + "px)";
@@ -211,7 +211,7 @@ export function createWaveform(ctx) {
   // ── 总览条播放头（M6） ──
   function updateMMCursor(t) {
     const w = document.querySelector("#minimap-wrap");
-    const c = document.querySelector("#mm-cursor");
+    const c = $("#mm-cursor");
     if (!w || !c) return;
     if (!state.ws || !state.currentItem) { c.classList.add("hidden"); return; }
     const cur = (t == null ? state.ws.getCurrentTime() : t);
@@ -236,7 +236,7 @@ export function createWaveform(ctx) {
   function mmSeekMove(e) { if (mmDragging) mmSeekFromEvent(e); }
   function mmSeekUp(e) { mmDragging = false; try { document.querySelector("#minimap-wrap").releasePointerCapture(e.pointerId); } catch (err) {} }
   function setupMMSeek() {
-    const w = document.querySelector("#minimap-wrap");
+    const w = $("#minimap-wrap");
     if (!w || w.dataset.mm) return;
     w.dataset.mm = "1";
     w.addEventListener("pointerdown", mmSeekDown);

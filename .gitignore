@@ -59,3 +59,9 @@ GPT-SoVITS/GPT_SoVITS/text/namedict_cache.pickle
 .workbuddy/
 rust/vc-audio/target/
 rust/vc-audio/dist/
+
+# TS 工具链（仅开发期）
+node_modules/
+
+# TS 工具链（仅开发期）
+node_modules/

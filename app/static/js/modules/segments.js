@@ -30,7 +30,7 @@ export function createSegments(ctx) {
     return allSegs().filter(r => (cid ? r.seg.characterId === cid : !r.seg.characterId));
   }
   function updateSegBadge(itemId, i) {
-    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
     if (!tr) return;
     const segs = segsFor(itemId);
     const seg = segs[i];
@@ -212,7 +212,7 @@ export function createSegments(ctx) {
     const segs = segsFor(itemId);
     const i = segs.findIndex(s => s.id === segId);
     if (i < 0) return;
-    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
     if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
@@ -224,7 +224,7 @@ export function createSegments(ctx) {
     if (scroll) _ensureRowVisible(itemId, segId);
     const segs = segsFor(itemId);
     const i = segs.findIndex(s => s.id === segId);
-    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
     if (!tr) return;
     tr.classList.add("playing");
     if (scroll && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });

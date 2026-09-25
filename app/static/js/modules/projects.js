@@ -305,7 +305,7 @@ export function createProjects(ctx) {
 
   // ── 素材右键菜单的全局关闭 ──
   document.addEventListener("click", hideMediaMenu);
-  document.addEventListener("contextmenu", (e) => { if (!e.target.closest("#media-list li")) hideMediaMenu(); });
+  document.addEventListener("contextmenu", (e) => { if (!(/** @type {HTMLElement} */ (e.target).closest("#media-list li"))) hideMediaMenu(); });
 
   return { renderMediaList, refreshItems, renderProjectSelect, selectProject,
            loadAllItemData, clearWorkbench, createProject, renameProject,

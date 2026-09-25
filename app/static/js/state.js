@@ -2,33 +2,48 @@
 import { $, $$, clampN } from "./util.js";
 
 export const state = {
+  /** @type {import("./util.js").Item[]} */
   items: [],
+  /** @type {{id: string, name: string}[]} */
   projects: [],
+  /** @type {{id: string, name: string}|null} */
   currentProject: null,
+  /** @type {import("./util.js").Item|null} */
   currentItem: null,
+  /** @type {any} wavesurfer 实例（vendored 无类型） */
   ws: null,
+  /** @type {any} regions 插件实例 */
   regions: null,
-  selection: null,          // {start, end}
+  /** @type {{start: number, end: number}|null} */
+  selection: null,
   selectionRegion: null,
   loop: false,
   playing: false,
+  /** @type {Map<string, import("./util.js").Segment[]>} */
   segmentsByItem: new Map(), // itemId -> [{start,end,text,language,speaker}]
+  /** @type {Map<string, {msg: string, progress: number}>} */
   activeTasks: new Map(),    // taskId -> {msg, progress}
   pollTimer: null,
+  /** @type {{start: number, end: number, itemId: string}|null} */
   auditioning: null,         // {start, end, itemId}
   zoomLevel: 0,              // 0=fit, >=1 缩放级别
   dragRegion: null,          // 正在拖拽（未松手）的选区
+  /** @type {{start: number, end: number, region: any}[]} */
   multiRegions: [],          // Ctrl+→ 累积的多选区 [{start,end,region}]
   ctrlMarking: false,        // 正在通过 Ctrl+→ 添加标记（不替换旧选区）
   auditionSeq: null,         // 多选顺序试听队列
   auditionIdx: 0,
+  /** @type {import("./util.js").Character[]} */
   characters: [],            // 当前项目共享角色池 [{id,name,color,speakerLabels,created,embedding?}]
+  /** @type {import("./util.js").SpeakerSeg[]} */
   speakerSegs: [],           // 当前素材说话人分段 [{start,end,label}]
+  /** @type {Map<string, import("./util.js").SpeakerSeg[]>} */
   speakerSegsByItem: new Map(), // itemId -> 说话人分段 [{start,end,label}]
   dirtyItems: new Set(),     // 片段有改动待保存的素材 id
   poolDirty: false,          // 角色池有改动待保存
   selectedSegs: new Set(),   // 片段列表多选行索引
   poolMerge: new Set(),      // 角色池合并勾选集
+  /** @type {import("./util.js").SubLine[]} */
   subs: [],                 // 实时字幕 [{start,end,text}]
   currentSubIdx: -1,        // 当前播放头命中的字幕行索引
   bootErr: null,

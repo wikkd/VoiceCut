@@ -1,0 +1,25 @@
+{
+  "//": "VoiceCut 前端类型检查（零构建：noEmit，运行时仍是原生 ES Module）。渐进策略：当前 strict 关闭，只抓『未定义/拼错属性/坏 import』类错误；后续逐文件加 JSDoc 类型，条件成熟再开 strictNullChecks。",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "/static/js/*": ["app/static/js/*"],
+      "/static/vendor/wavesurfer.esm.js": ["app/static/vendor/shims/wavesurfer.d.ts"],
+      "/static/vendor/plugins/timeline.esm.js": ["app/static/vendor/shims/timeline.d.ts"],
+      "/static/vendor/plugins/regions.esm.js": ["app/static/vendor/shims/regions.d.ts"],
+      "/static/vendor/plugins/minimap.esm.js": ["app/static/vendor/shims/minimap.d.ts"]
+    }
+  },
+  "include": ["app/static/js/**/*.js", "app/static/js/**/*.d.ts"]
+}

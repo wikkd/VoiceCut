@@ -3,7 +3,7 @@ import Timeline from "/static/vendor/plugins/timeline.esm.js";
 import Regions from "/static/vendor/plugins/regions.esm.js";
 import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
-import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, LS_PROJECT,
+import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, evtEl, closestEl, LS_PROJECT,
          SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
 import { state, toast, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
@@ -61,8 +61,8 @@ import { createProjects } from "/static/js/modules/projects.js";
 
   // 片段列表：点击/多选（Shift 区间、Ctrl 追加），右键重定向角色
   $("#seg-tbody").addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    const tr = e.target.closest("tr.seg-row");
+    const btn = evtEl(e).closest("button");
+    const tr = closestEl(evtEl(e), "tr.seg-row");
     if (!tr) return;
     const itemId = tr.dataset.item;
     const i = Number(tr.dataset.i);
@@ -93,30 +93,32 @@ import { createProjects } from "/static/js/modules/projects.js";
     segments.renderSegments();
   });
   $("#seg-tbody").addEventListener("input", (e) => {
-    const tr = e.target.closest("tr.seg-row");
+    const el = evtEl(e);
+    const tr = closestEl(el, "tr.seg-row");
     if (!tr) return;
     const itemId = tr.dataset.item;
-    const i = Number(e.target.dataset.i);
+    const i = Number(el.dataset.i);
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
-    if (e.target.classList.contains("seg-text")) {
-      if (!e.target.dataset.undoed) { e.target.dataset.undoed = "1"; store.pushUndo(); }
-      segs[i].text = e.target.value; store.scheduleSaveProject(itemId);
+    if (el.classList.contains("seg-text")) {
+      if (!el.dataset.undoed) { el.dataset.undoed = "1"; store.pushUndo(); }
+      segs[i].text = el.value; store.scheduleSaveProject(itemId);
     }
     segments.updateSegBadge(itemId, i);
   });
   $("#seg-tbody").addEventListener("change", (e) => {
-    const tr = e.target.closest("tr.seg-row");
+    const el = evtEl(e);
+    const tr = closestEl(el, "tr.seg-row");
     if (!tr) return;
     const itemId = tr.dataset.item;
-    const i = Number(e.target.dataset.i);
+    const i = Number(el.dataset.i);
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
-    delete e.target.dataset.undoed;
-    if (!e.target.classList.contains("seg-text")) store.pushUndo();
-    if (e.target.classList.contains("seg-lang")) { segs[i].language = e.target.value; store.scheduleSaveProject(itemId); }
-    if (e.target.classList.contains("seg-speaker")) {
-      segs[i].characterId = e.target.value || null;
+    delete el.dataset.undoed;
+    if (!el.classList.contains("seg-text")) store.pushUndo();
+    if (el.classList.contains("seg-lang")) { segs[i].language = el.value; store.scheduleSaveProject(itemId); }
+    if (el.classList.contains("seg-speaker")) {
+      segs[i].characterId = el.value || null;
       store.scheduleSaveProject(itemId); segments.renderSegments();
     }
   });
@@ -139,7 +141,7 @@ import { createProjects } from "/static/js/modules/projects.js";
   document.addEventListener("click", hideRedirectMenu);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideRedirectMenu(); });
   $("#segments-panel").addEventListener("contextmenu", (e) => {
-    const tr = e.target.closest("tr.seg-row");
+    const tr = closestEl(evtEl(e), "tr.seg-row");
     if (!tr) return;
     e.preventDefault();
     const itemId = tr.dataset.item;
@@ -213,7 +215,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       "layout-reset": resetLayout,
       "help": () => showModal("#modal-help"),
     };
-    document.querySelectorAll("[data-act]").forEach((b) => {
+    /** @type {NodeListOf<HTMLElement>} */ (document.querySelectorAll("[data-act]")).forEach((b) => {
       b.addEventListener("click", () => { const f = actions[b.dataset.act]; if (f) f(b); });
     });
   }
@@ -228,7 +230,7 @@ import { createProjects } from "/static/js/modules/projects.js";
         if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); waveform.zoomOut(); return; }
         if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
       }
-      const tag = (e.target.tagName || "").toLowerCase();
+      const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
@@ -292,15 +294,16 @@ import { createProjects } from "/static/js/modules/projects.js";
       files.forEach((f) => io.uploadFile(f));
     });
     $("#file-input").addEventListener("change", () => {
-      Array.from($("#file-input").files).forEach((f) => io.uploadFile(f));
-      $("#file-input").value = "";
+      const fi = /** @type {HTMLInputElement} */ ($("#file-input"));
+      Array.from(fi.files || []).forEach((f) => io.uploadFile(f));
+      fi.value = "";
     });
   }
 
   // ── 事件绑定 ───────────────────────────────────────────
   function bindUI() {
     ["#project-select", "#project-select2"].forEach((psSel) => {
-      const ps = $(psSel);
+      const ps = /** @type {HTMLSelectElement|null} */ ($(psSel));
       if (ps) ps.addEventListener("change", () => {
         const proj = state.projects.find(pp => pp.id === ps.value);
         if (proj && state.currentProject && proj.id !== state.currentProject.id) projects.selectProject(proj);
@@ -315,7 +318,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-loop").addEventListener("click", () => waveform.toggleLoop());
     $("#btn-play-selection").addEventListener("click", () => waveform.playSelection());
     $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
-    $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !e.target.checked));
+    $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !evtEl(e).checked));
     $("#btn-add-seg").addEventListener("click", segments.addSegmentFromSelection);
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
@@ -355,13 +358,14 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-sub-generate").addEventListener("click", subtitles.generateSubs);
     $("#btn-sub-add").addEventListener("click", subtitles.addCurrentSubToSegments);
     $("#sub-file").addEventListener("change", () => {
-      const f = $("#sub-file").files[0];
+      const fi = /** @type {HTMLInputElement} */ ($("#sub-file"));
+      const f = fi.files && fi.files[0];
       if (f) subtitles.uploadSubFile(f);
-      $("#sub-file").value = "";
+      fi.value = "";
     });
     $("#sub-tbody").addEventListener("click", (e) => {
-      const btn = e.target.closest("button");
-      const tr = e.target.closest("tr.sub-row");
+      const btn = evtEl(e).closest("button");
+      const tr = closestEl(evtEl(e), "tr.sub-row");
       if (!tr) return;
       const i = Number(tr.dataset.i);
       if (btn && btn.classList.contains("sub-sel")) subtitles.selectSubRange(i);
@@ -526,7 +530,6 @@ import { createProjects } from "/static/js/modules/projects.js";
     deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
-    autoAnalyzeDone: tasks.autoAnalyzeDone, attachActiveTasks: tasks.attachActiveTasks,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,
     doInfer: training.doInfer, train: training.train,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };
