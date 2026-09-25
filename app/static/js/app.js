@@ -469,6 +469,28 @@ import { createProjects } from "/static/js/modules/projects.js";
       if (training) training.loadTraining(false);
     }
   }, 8000);
+  // ── 窗口聚焦静默刷新：后台任务可能在别处（其他页面/命令行）完成，
+  //    防止本页面滞留旧的角色池/片段数据。10s 节流，识别运行中跳过。 ──
+  let lastFocusRefresh = 0;
+  window.addEventListener("focus", async () => {
+    if (document.body.dataset.vc !== "ok" || state.identifying) return;
+    const now = Date.now();
+    if (now - lastFocusRefresh < 10000) return;
+    lastFocusRefresh = now;
+    try {
+      if (!state.currentProject) return;
+      const j = await api(`/api/projects/${state.currentProject.id}`);
+      if (Array.isArray(j.characters)) state.characters = j.characters;
+      state.items = j.items || [];
+      projects.renderMediaList();
+      await projects.loadAllItemData();
+      renderPoolSafe();
+    } catch (e) { /* 网络抖动忽略 */ }
+  });
+  function renderPoolSafe() {
+    try { pool.renderPool(); segments.renderSegments(); subtitles.renderSubs(); }
+    catch (e) { /* 模块未就绪时跳过 */ }
+  }
   // ── 顶栏性能显示（CPU / 内存 / GPU，3s 轮询，后台标签页暂停） ──
   function perfLevel(v) { return v >= 85 ? "lv-bad" : v >= 60 ? "lv-warn" : ""; }
   function startPerfMonitor() {
