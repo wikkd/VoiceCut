@@ -341,6 +341,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-identify-speakers").addEventListener("click", () => pool.doIdentifySpeakers());
     $("#btn-auto-analyze").addEventListener("click", () => pool.toggleAutoAnalyze());
     $("#btn-auto-analyze2").addEventListener("click", () => pool.toggleAutoAnalyze());
+    $("#btn-auto-train").addEventListener("click", () => pool.toggleAutoTraining());
+    $("#btn-auto-train2").addEventListener("click", () => pool.toggleAutoTraining());
     $("#pool-back").addEventListener("click", () => pool.closePool());
     $("#pool-close").addEventListener("click", () => pool.closePool());
     $("#pool-new").addEventListener("click", () => pool.createPoolCharacter());
@@ -430,6 +432,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     resetWaveUI: () => { waveform.updatePlayUI(); waveform.updateSelUI(); waveform.updateTransport(); },
     renderPool: () => pool.renderPool(),
     renderAutoAnalyzeBtn: () => pool.renderAutoAnalyzeBtn(),
+    renderAutoTrainingBtn: () => pool.renderAutoTrainingBtn(),
     renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
     attachActiveTasks: () => tasks.attachActiveTasks() });
   tasks = createTasks({ $, api, toast, state,
@@ -443,6 +446,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     closePool: () => pool.closePool(),
     selectItem: (item) => waveform.selectItem(item) });
   pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
+    attachActiveTasks: tasks.attachActiveTasks,
     needItem, charById: store.charById, uid: store.uid, paletteNext: store.paletteNext, pushUndo: store.pushUndo,
     scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool,
     loadAllItemData: projects.loadAllItemData, segments, setPage,
@@ -546,6 +550,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     if (state.dirtyItems.size || state.poolDirty) beaconSave();
   });
   pool.renderAutoAnalyzeBtn();
+  pool.renderAutoTrainingBtn();
   boot();
 
   // 调试/自动化钩子
@@ -563,6 +568,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
+    toggleAutoTraining: pool.toggleAutoTraining,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,
     doInfer: training.doInfer, train: training.train,
     workspace: { layout, applyLayout, saveLayout, resetLayout, togglePanel, swapPanels, PANELS } };

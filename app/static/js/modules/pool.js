@@ -2,7 +2,7 @@
 // 由 createPool(ctx) 创建；ctx 注入 util + state + 主流程依赖（片段/字幕/保存/撤销），
 // 避免与主流程模块形成循环 import。角色池自身的 DOM 事件在工厂内一次性绑定。
 export function createPool(ctx) {
-  const { $, $$, esc, shortName, fmtT, toast, state, api, trackTask,
+  const { $, $$, esc, shortName, fmtT, toast, state, api, trackTask, attachActiveTasks,
           needItem, charById, uid, paletteNext, pushUndo,
           scheduleSaveProject, scheduleSavePool, loadAllItemData,
           segments, renderSubs, setPage, playSequence } = ctx;
@@ -90,6 +90,10 @@ export function createPool(ctx) {
         <span class="pool-count">${mine.length} 段</span>
       </div>
       ${ch && (ch.speakerLabels || []).length ? `<div class="pool-labels">自动标签: ${ch.speakerLabels.map(esc).join("、")}</div>` : ""}
+      ${ch && ch.sample_url ? `<div class="pool-sample">
+          <button class="chip pool-sample-play" data-char="${ch.id}" title="播放自动训练后合成的测试音频，帮助辨认该角色声线">🔊 听声辨认</button>
+          ${ch.sample_text ? `<span class="pool-sample-text" title="${esc(ch.sample_text)}">「${esc(ch.sample_text.slice(0, 24))}${ch.sample_text.length > 24 ? "…" : ""}」</span>` : ""}
+        </div>` : ""}
       <div class="pool-actions">
         ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">试听</button>
           <button class="chip pool-rename" data-char="${ch.id}">重命名</button>
@@ -120,6 +124,16 @@ export function createPool(ctx) {
     grid.appendChild(poolCard(null));
     state.characters.forEach(ch => grid.appendChild(poolCard(ch)));
     $("#pool-merge-count").textContent = (state.poolMerge || new Set()).size;
+  }
+
+  // 播放自动训练生成的角色试听音频（帮助辨认"这个角色可能是谁"）
+  function playCharacterSample(cid) {
+    const ch = charById(cid);
+    if (!ch || !ch.sample_url) return toast("该角色暂无试听音频（需自动训练完成后生成）");
+    const url = ch.sample_url.startsWith("/") ? ch.sample_url : "/" + ch.sample_url;
+    const a = new Audio(url);
+    a.play().catch(err => toast("试听播放失败: " + err.message, 6000));
+    if (ch.sample_text) toast(`合成文本：${ch.sample_text}`, 5000);
   }
 
   function poolAudition(cid) {
@@ -216,6 +230,7 @@ export function createPool(ctx) {
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
         renderPool(); segments.renderSegments(); renderSubs();
+        attachActiveTasks();   // 识别收尾可能已提交自动训练任务，重新挂接跟踪
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
         const mixed = result.mixed || 0;
@@ -256,6 +271,30 @@ export function createPool(ctx) {
     } catch (e) { toast("设置保存失败: " + e.message, 6000); }
   }
 
+  function renderAutoTrainingBtn() {
+    const on = state.autoTraining !== false;   // 默认开
+    ["#btn-auto-train", "#btn-auto-train2"].forEach((sel) => {
+      const b = $(sel);
+      if (b) {
+        b.classList.toggle("btn-auto-on", on);
+        b.textContent = on ? "自动训练·开" : "自动训练·关";
+      }
+    });
+  }
+  async function toggleAutoTraining() {
+    if (!state.currentProject) return toast("请先选择项目");
+    const on = !(state.autoTraining !== false);
+    try {
+      await api(`/api/projects/${state.currentProject.id}/settings`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_training: on }) });
+      state.autoTraining = on;
+      renderAutoTrainingBtn();
+      toast(on ? "已开启：说话人识别完成后自动启动 GPT-SoVITS 训练并生成每角色试听音频"
+               : "已关闭：识别完成后不再自动训练", 5000);
+    } catch (e) { toast("设置保存失败: " + e.message, 6000); }
+  }
+
   // ── 角色池页面事件 ──
   function bindPoolUI() {
     $("#pool-grid").addEventListener("click", (e) => {
@@ -263,6 +302,7 @@ export function createPool(ctx) {
       if (!btn) return;
       const cid = btn.dataset.char, segId = btn.dataset.seg, itemId = btn.dataset.item;
       if (btn.classList.contains("pool-aud")) poolAudition(cid);
+      else if (btn.classList.contains("pool-sample-play")) playCharacterSample(cid);
       else if (btn.classList.contains("pool-rename")) poolRename(cid);
       else if (btn.classList.contains("pool-del")) poolDelete(cid);
       else if (btn.classList.contains("ps-play")) poolPlaySeg(segId, itemId);
@@ -298,6 +338,7 @@ export function createPool(ctx) {
   bindPoolUI();
 
   return { openPool, closePool, renderPool, doIdentifySpeakers, toggleAutoAnalyze,
-           renderAutoAnalyzeBtn, reassignSegments, createPoolCharacter,
+           renderAutoAnalyzeBtn, toggleAutoTraining, renderAutoTrainingBtn,
+           reassignSegments, createPoolCharacter,
            mergePoolSelected, sendCharacterFeedback };
 }

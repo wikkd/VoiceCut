@@ -73,6 +73,8 @@ def api_project_record_get(project_id: str) -> object:
         "updated": rec["updated"],
         "auto_analyze": bool(project_mod.get_project_setting(
             c.cfg.workdir, project_id, "auto_analyze", True)),
+        "auto_training": bool(project_mod.get_project_setting(
+            c.cfg.workdir, project_id, "auto_training", True)),
         "characters": pool["characters"],
         "items": [c.item_json(i) for i in c.store.by_project(project_id)],
     })
@@ -126,7 +128,7 @@ def api_pool_save(project_id: str) -> object:
 
 @bp.post("/api/projects/<project_id>/settings")
 def api_project_settings(project_id: str) -> object:
-    """项目设置（当前仅 auto_analyze：导入后后台自动生成字幕 + 识别说话人）。"""
+    """项目设置（auto_analyze：导入后自动识别；auto_training：识别后自动训练+试听）。"""
     c = ctx()
     if db_mod.fetch_project_record(db_mod.get_conn(c.cfg.workdir), project_id) is None:
         return jsonify({"error": "project not found"}), 404
@@ -134,6 +136,9 @@ def api_project_settings(project_id: str) -> object:
     if "auto_analyze" in body:
         project_mod.set_project_setting(
             c.cfg.workdir, project_id, "auto_analyze", bool(body["auto_analyze"]))
+    if "auto_training" in body:
+        project_mod.set_project_setting(
+            c.cfg.workdir, project_id, "auto_training", bool(body["auto_training"]))
     return jsonify({"ok": True})
 
 
@@ -483,6 +488,7 @@ def _project_speakers_worker(c, project_id: str) -> dict:
     """项目级说话人识别入口；结束后清理去重注册，必要时自动再排一轮。"""
     tid = c.tasks.current_task_id()
     ok = False
+    result: dict = {}
     try:
         result = _project_speakers_run(c, project_id)
         ok = True
@@ -496,6 +502,124 @@ def _project_speakers_worker(c, project_id: str) -> dict:
         # 仅当本轮分析成功完成且期间又有新导入需要纳入时才再排一轮
         if rerun and ok:
             submit_project_analyze(c, project_id, force=True)
+        # 识别成功收尾：自动启动「训练 + 角色试听」管线（项目设置可关）
+        if ok:
+            try:
+                _maybe_auto_pipeline(c, project_id, result)
+            except Exception as exc:  # noqa: BLE001
+                c.log.warning("auto pipeline submit failed: %s", exc)
+
+
+def _maybe_auto_pipeline(c, project_id: str, result: dict) -> dict:
+    """识别完成后自动为池内每个角色提交「训练 → 生成试听音频」任务。
+
+    - 受项目设置 ``auto_training``（默认开）控制；
+    - GPT-SoVITS 未配置时静默跳过；
+    - GPU 任务池单 worker，多角色任务天然串行排队，无显存冲突；
+    - 已在训练中的角色自动去重。
+    返回提交的角色数。
+    """
+    if not project_mod.get_project_setting(c.cfg.workdir, project_id,
+                                           "auto_training", True):
+        return 0
+    if not (result.get("labeled") or 0) and not result.get("characters"):
+        return 0
+    settings = gptsovits_mod.load_settings(c.cfg.workdir)
+    try:
+        gptsovits_mod.require_root(settings)
+    except Exception:
+        c.log.info("auto training skipped: GPT-SoVITS root not configured")
+        return 0
+    chars = [ch for ch in (result.get("characters")
+                           or c.project_pool(project_id))]
+    if not chars:
+        return 0
+    submitted = 0
+    for role in chars:
+        role_id = role["id"]
+        with c.training_lock:
+            if role_id in c.training_tasks:
+                continue   # 已有训练/试听任务在排队
+        try:
+            c.tasks.submit(_auto_role_worker, c, project_id, dict(role),
+                           gpu=True, kind="train")
+            submitted += 1
+        except Exception as exc:  # noqa: BLE001
+            c.log.warning("auto pipeline role %s submit failed: %s", role_id, exc)
+    return submitted
+
+
+def _auto_role_worker(c, project_id: str, role: dict) -> dict:
+    """单角色自动管线：数据量足够则全阶段训练，随后（或跳过训练直接）
+    用该角色参考音频合成一段试听，写入角色池供用户听声辨认。"""
+    tid = c.tasks.current_task_id()
+    role_id = role["id"]
+    settings = gptsovits_mod.load_settings(c.cfg.workdir)
+    exp = c.role_exp(settings, role)
+    trained = False
+    try:
+        with c.training_lock:
+            c.training_tasks[role_id] = tid
+        segs, sources, majority_lang = c.role_clips(project_id, role_id)
+        lang = gptsovits_mod.lang_map(majority_lang or settings.get("language") or "ja")
+        if tid:
+            c.tasks.update(tid, message=f"自动管线：{role.get('name')} "
+                                        f"({len(segs)} 片段)")
+        if len(segs) >= 3:
+            stages = {"export": True, "preprocess": True,
+                      "train_s2": True, "train_s1": True}
+            _training_worker(c, project_id, role, stages,
+                             {"exp_name": exp, "language": majority_lang})
+            trained = True
+        else:
+            # 片段太少不足以微调：用底模 zero-shot 合成试听（不训练）
+            with c.training_lock:
+                c.training_tasks.pop(role_id, None)
+        # 生成角色试听音频
+        sample = _auto_infer_sample(c, project_id, role, exp, lang)
+        return {"ok": True, "role_id": role_id, "role": role.get("name"),
+                "exp": exp, "trained": trained, "sample": sample}
+    except TaskCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "role_id": role_id, "role": role.get("name"),
+                "exp": exp, "trained": trained, "error": str(exc)[:300]}
+    finally:
+        with c.training_lock:
+            if c.training_tasks.get(role_id) == tid:
+                c.training_tasks.pop(role_id, None)
+
+
+def _auto_infer_sample(c, project_id: str, role: dict, exp: str, lang: str) -> dict:
+    """为角色合成一段试听音频并把地址写进角色池。"""
+    tid = c.tasks.current_task_id()
+    settings = gptsovits_mod.load_settings(c.cfg.workdir)
+    segs, sources, _mj = c.role_clips(project_id, role["id"])
+    ref_wav, prompt_text = _pick_ref_clip(segs, sources)
+    # 合成文本：优先用该角色最长的台词（最能帮助辨认声线），过长截断
+    cand = sorted((s.text.strip() for s in segs if s.text.strip()), key=len,
+                  reverse=True)
+    text = (cand[0][:48] if cand else "こんにちは。よろしくお願いします。")
+    if tid:
+        c.tasks.update(tid, message=f"生成试听音频：{role.get('name')}")
+    wav = gptsovits_mod.infer(
+        settings, exp, text=text, ref_wav=str(ref_wav),
+        prompt_text=prompt_text, text_lang=lang, prompt_lang=lang,
+        log_cb=lambda s: c.tasks.update(tid, message=(s or "")[:200]) if tid else None)
+    out_dir = c.cfg.workdir / "training"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"infer_{gptsovits_mod.sanitize(exp)}.wav"
+    path.write_bytes(wav)
+    url = f"/api/training/infer-audio/{gptsovits_mod.sanitize(exp)}"
+    # 写入角色池（角色任务串行执行，无并发写池冲突）
+    pool = project_mod.load_pool(c.cfg.workdir, project_id)
+    for ch in pool["characters"]:
+        if ch["id"] == role["id"]:
+            ch["sample_url"] = url
+            ch["sample_text"] = text
+            ch["sample_at"] = time.time()
+    project_mod.save_pool(c.cfg.workdir, project_id, pool["characters"])
+    return {"url": url, "text": text, "path": str(path), "ref": str(ref_wav)}
 
 
 def _project_speakers_run(c, project_id: str) -> dict:

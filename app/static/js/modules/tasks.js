@@ -35,7 +35,27 @@ export function createTasks(ctx) {
     let msg = `后台分析完成：${result.n_speakers} 人（${result.quality === "ecapa" ? "ECAPA" : "MFCC 降级"}），跨 ${itemN} 个素材 ${result.labeled}/${result.total} 段已标记，其中 ${mixed} 段为多人混合(未绑定)；新增 ${created} 角色，跨素材归并 ${merged} 段`;
     if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
     toast(msg, 6000);
+    // 识别任务收尾时会提交自动训练任务（auto_training 开启时），重新挂接跟踪
+    attachActiveTasks();
     return true;  // 已显示专属完成提示，抑制通用“任务完成”
+  }
+
+  // 自动训练管线（单角色）完成：刷新角色池展示试听音频入口
+  async function autoTrainDone(result) {
+    try {
+      if (state.currentProject) {
+        const j = await api(`/api/projects/${state.currentProject.id}`);
+        if (Array.isArray(j.characters)) state.characters = j.characters;
+      }
+    } catch (e) { /* 网络抖动忽略，渲染旧池 */ }
+    renderPool();
+    const name = (result && (result.role || result.role_id)) || "角色";
+    if (result && result.ok) {
+      toast(`「${name}」自动管线完成（${result.trained ? "全阶段训练" : "zero-shot 试听"}），角色池可点「🔊 听声辨认」`, 6000);
+    } else if (result && result.error) {
+      toast(`「${name}」自动管线失败: ${result.error}`, 8000);
+    }
+    return true;
   }
 
   // 刷新页面后重新挂接仍在后台运行的任务（含导入后自动分析）
@@ -46,6 +66,7 @@ export function createTasks(ctx) {
         if (state.activeTasks.has(t.id)) return;
         let cb = null;
         if (t.kind === "speakers") cb = autoAnalyzeDone;
+        else if (t.kind === "train") cb = autoTrainDone;
         else if (t.kind === "import") cb = (r) => { if (r) refreshItems(); };
         if (cb) trackTask(t.id, cb);
       });

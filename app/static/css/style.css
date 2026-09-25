@@ -425,6 +425,9 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 .pool-name { font-weight: 600; font-size: 14px; flex: 1; cursor: text; word-break: break-all; }
 .pool-count { color: var(--muted); font-size: 12px; }
 .pool-labels { font-size: 11px; color: var(--muted); word-break: break-all; }
+.pool-sample { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pool-sample .pool-sample-play { color: var(--accent); }
+.pool-sample-text { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px; }
 .pool-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pool-segs summary { cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
 .pool-seg-list { max-height: 200px; overflow: auto; margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
