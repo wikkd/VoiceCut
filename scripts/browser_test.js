@@ -611,6 +611,53 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, awaitPromise: true, returnByValue: true });
     console.log("SCROLL:", JSON.stringify(rSc.result && rSc.result.result && rSc.result.result.value));
 
+    // AUD：片段行「试听」= 循环播放该片段；seek 未生效连发不反复停/播；空格可停止
+    const rAud = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const seg = (vc.state.segmentsByItem.get(itId) || [])[0];
+      if (!seg) return { skip: 'no seg' };
+      // 取中间某段（起止非 0，便于区分是否真的回卷）
+      const rows = document.querySelectorAll('#seg-tbody tr.seg-row');
+      const idx = Math.min(10, rows.length - 1);
+      const target = rows[idx];
+      const btn = target.querySelector('.seg-aud');
+      if (!btn) return { skip: 'no audition btn' };
+      let pauseCount = 0;
+      vc.state.ws.on('pause', () => { pauseCount++; });
+      // headless 下 isPlaying/getCurrentTime 不可靠：改为拦截 setTime 调用序列验证回卷
+      const origSet = vc.state.ws.setTime.bind(vc.state.ws);
+      const setCalls = [];
+      vc.state.ws.setTime = (t) => { setCalls.push(+Number(t).toFixed(3)); return origSet(t); };
+      btn.click();
+      await new Promise(r => setTimeout(r, 500));
+      const looping = !!(vc.state.auditioning && vc.state.auditioning.loop);
+      const s0 = vc.state.auditioning.start, e0 = vc.state.auditioning.end;
+      const wrapN = (arr) => arr.filter(t => Math.abs(t - s0) < 0.02).length;   // 只统计"回卷到起点"
+      const n0 = setCalls.length;                       // 初始定位 setTime(s0)
+      // 到达终点：应回卷到起点一次（且不暂停）
+      vc.state.ws.emit('timeupdate', e0);
+      await new Promise(r => setTimeout(r, 200));
+      const round1 = setCalls.slice(n0);
+      // 连发同一位置（seek 未生效场景）→ 不得再回卷、不得暂停（防抖核心）
+      vc.state.ws.emit('timeupdate', e0);
+      vc.state.ws.emit('timeupdate', e0);
+      await new Promise(r => setTimeout(r, 150));
+      const spamArr = setCalls.slice(n0 + round1.length);
+      // 播放头回到起点带后重新武装 → 第二轮循环仍生效
+      vc.state.ws.emit('timeupdate', s0 + 0.01);
+      vc.state.ws.emit('timeupdate', e0);
+      await new Promise(r => setTimeout(r, 200));
+      const round2 = setCalls.slice(n0 + round1.length + spamArr.length);
+      vc.state.ws.setTime = origSet;
+      return { looping, round1, spamArr, round2, pauseCount, s0, e0,
+        w1: wrapN(round1), ws: wrapN(spamArr), w2: wrapN(round2),
+        ok: looping && wrapN(round1) === 1 && wrapN(spamArr) === 0
+          && wrapN(round2) === 1 && pauseCount === 0 };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("AUD:", JSON.stringify(rAud.result && rAud.result.result && rAud.result.result.value));
+    if (rAud.result && rAud.result.exceptionDetails) console.log("AUD-EXC:", JSON.stringify(rAud.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

@@ -230,6 +230,9 @@ export function createWaveform(ctx) {
   // 不设防会反复 setTime/pause，听感即"一帧一暂停一开始"的抖动。
   let lastWrap = null;   // 上次已回卷的选区对象（引用比较，重选/nudge 换新对象即重新武装）
   function loopCheck(t) {
+    // 试听期间由 auditionCheck 独占回卷：否则两者同时驱动播放头（一个 seek 回起点、
+    // 一个 pause），表现为"反复自动暂停/播放"的抖动。
+    if (state.auditioning) return;
     const sel = state.selection;
     if (!(state.loop && sel && sel.end - sel.start > 0.02)) return;
     if (t >= sel.end - 0.03) {
@@ -243,17 +246,30 @@ export function createWaveform(ctx) {
   }
   function auditionCheck(t) {
     const a = state.auditioning;
-    if (!a || a._handled) return;
-    if (t < a.end - 0.02) return;
-    a._handled = true;   // 本段只处理一次，防 seek 未生效期间连跳/反复停
-    if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
-      state.auditionIdx++;
-      playSeqItem();
-    } else {
-      state.ws.pause();
-      state.auditioning = null;
-      state.auditionSeq = null;
+    if (!a) return;
+    // 重新武装要求播放头真正离开终点带（t < end-0.3）：回卷后若立即解除武装，
+    // seek 未生效期间连发的旧位置会再次触发回卷（听感=反复跳回起点）。
+    if (a._handled) {
+      // 双重条件才重新武装：① 距上次回卷 >250ms（覆盖 seek 生效前旧位置连发）
+      //                  ② 播放头确实已离开终点带（t < end-0.3）
+      if (t < a.end - 0.3 && performance.now() - (a._at || 0) > 250) a._handled = false;
+      return;
     }
+    if (t < a.end - 0.02) return;
+    a._handled = true;   // 本次到达终点只处理一次
+    a._at = performance.now();
+    if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
+      state.auditionIdx++;            // 序列试听：继续下一段（playSeqItem 会换新的 auditioning）
+      playSeqItem();
+      return;
+    }
+    if (a.loop) {                     // 单段试听：循环播放该片段（手动停止前一直循环）
+      state.ws.setTime(a.start);
+      return;
+    }
+    state.ws.pause();
+    state.auditioning = null;
+    state.auditionSeq = null;
   }
   function updateTransport() {
     if (!state.currentItem) { $("#dur-info").textContent = "—"; return; }

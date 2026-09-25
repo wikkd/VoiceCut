@@ -338,8 +338,9 @@ export function createSegments(ctx) {
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.ws.play();
-    state.auditioning = { start: seg.start, end: seg.end };
+    state.auditioning = { start: seg.start, end: seg.end, loop: true };   // 循环试听：到终点自动回卷重播
     scrollSegRow(item.id, seg.id);
+    toast("循环试听该片段（空格 / 暂停键停止）", 2500);
   }
   // 从角色池/素材库等位置试听时：先回到剪辑页并选中对应素材再播放
   async function gotoEditAndPlay(item, seg) {
