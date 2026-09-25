@@ -157,3 +157,95 @@ def test_chain_cancelled_downstream_never_runs(conn) -> None:
     t = tm.get(down)
     assert t["status"] == "cancelled"
     assert started == []
+
+
+# ── 多上游依赖（depends_on 列表）────────────────────────────
+
+def test_multi_upstream_results_in_order(conn) -> None:
+    tm = TaskManager(conn=conn, cpu_workers=2)
+    a = tm.submit(lambda: "A")
+    b = tm.submit(lambda: "B")
+    down = tm.submit(lambda rs, suf: "-".join(rs) + suf, "!", depends_on=[a, b])
+    _wait(tm, a, "done"); _wait(tm, b, "done")
+    t = _wait(tm, down, "done")
+    assert t["result"] == "A-B!"
+
+
+def test_multi_upstream_one_fails_downstream_errors(conn) -> None:
+    tm = TaskManager(conn=conn)
+
+    def boom():
+        raise RuntimeError("第二个上游炸了")
+
+    a = tm.submit(lambda: 1)
+    b = tm.submit(boom)
+    down = tm.submit(lambda rs: rs, depends_on=[a, b])
+    _wait(tm, b, "error")
+    t = _wait(tm, down, "error")
+    assert tm.get(b)["id"] in t["message"]
+
+
+def test_multi_upstream_partial_done_then_launch(conn) -> None:
+    """a 先完成、b 后完成：a 的结果应被缓存，b 完成后按序注入。"""
+    import threading as _th
+    tm = TaskManager(conn=conn, cpu_workers=2)
+    gate = _th.Event()
+
+    def wait_b():
+        gate.wait(3.0)
+        return "B"
+
+    a = tm.submit(lambda: "A")
+    b = tm.submit(wait_b)
+    _wait(tm, a, "done")
+    down = tm.submit(lambda rs: rs, depends_on=[a, b])
+    time.sleep(0.2)
+    assert tm.get(down)["status"] == "pending"
+    gate.set()
+    t = _wait(tm, down, "done")
+    assert t["result"] == ["A", "B"]
+
+
+# ── 取消级联 ────────────────────────────────────────────────
+
+def test_cancel_pending_upstream_cascades(conn) -> None:
+    """pending 上游被取消 → 下游立即 error，不再永久 waiting。"""
+    import threading as _th
+    tm = TaskManager(conn=conn, cpu_workers=1)
+    gate = _th.Event()
+    blocker = tm.submit(gate.wait, 3.0)   # 占满唯一的 cpu worker
+    up = tm.submit(lambda: 1)             # 因此 up 保持 pending（排队）
+    down = tm.submit(lambda r: r, depends_on=up)
+    assert tm.cancel(up) is True          # 取消 pending 上游 → 级联
+    t = _wait(tm, down, "error")
+    assert tm.get(up)["id"] in t["message"]
+    gate.set()                            # 释放 blocker，避免遗留后台线程
+    _wait(tm, blocker, "done")
+
+
+def test_fanout_two_downstreams_both_run(conn) -> None:
+    tm = TaskManager(conn=conn, cpu_workers=2)
+    up = tm.submit(lambda: 10)
+    d1 = tm.submit(lambda r: r + 1, depends_on=up)
+    d2 = tm.submit(lambda r: r * 2, depends_on=up)
+    _wait(tm, up, "done")
+    assert _wait(tm, d1, "done")["result"] == 11
+    assert _wait(tm, d2, "done")["result"] == 20
+
+
+# ── pipeline 助手 ───────────────────────────────────────────
+
+def test_pipeline_chains_steps(conn) -> None:
+    tm = TaskManager(conn=conn)
+    final = tm.pipeline([lambda: 1, lambda r: r + 1, lambda r: r * 10])
+    t = _wait(tm, final, "done")
+    assert t["result"] == 20
+    # 链回溯：final.depends_on 应指向上一步 id
+    mid = t["depends_on"]
+    assert tm.get(mid)["result"] == 2
+
+
+def test_pipeline_empty_raises(conn) -> None:
+    tm = TaskManager(conn=conn)
+    with pytest.raises(ValueError):
+        tm.pipeline([])
