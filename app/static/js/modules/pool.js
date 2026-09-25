@@ -5,7 +5,7 @@ export function createPool(ctx) {
   const { $, $$, esc, shortName, fmtT, toast, state, api, trackTask,
           needItem, charById, uid, paletteNext, pushUndo,
           scheduleSaveProject, scheduleSavePool, loadAllItemData,
-          segments, renderSubs } = ctx;
+          segments, renderSubs, setPage, playSequence } = ctx;
 
   // ── 角色池子页面 ──
   function openPool() {
@@ -82,12 +82,25 @@ export function createPool(ctx) {
   function poolAudition(cid) {
     const rows = segments.charSegs(cid);
     if (!rows.length) return toast("该角色暂无片段");
-    segments.gotoEditAndPlay(rows[0].item, rows[0].seg);
+    startCharSeq(rows, 0);
   }
   function poolPlaySeg(segId, itemId) {
     const item = state.items.find(x => x.id === itemId);
     const seg = item ? segments.segsFor(item.id).find(s => s.id === segId) : null;
-    if (item && seg) segments.gotoEditAndPlay(item, seg);
+    if (!item || !seg) return;
+    // 从点击的这段开始，连续跳播该角色全部片段
+    const rows = segments.charSegs(seg.characterId);
+    const idx = rows.findIndex(r => r.seg.id === segId);
+    if (idx < 0) { segments.gotoEditAndPlay(item, seg); return; }
+    startCharSeq(rows, idx);
+  }
+  // 角色连续试听：回到剪辑页，按顺序逐段播放并在片段列表/字幕上高亮跟随
+  function startCharSeq(rows, idx) {
+    closePool();
+    setPage("edit");
+    const seq = rows.map(r => ({ item: r.item, itemId: r.item.id, segId: r.seg.id,
+                                 start: r.seg.start, end: r.seg.end }));
+    playSequence(seq, idx);
   }
   function poolRename(cid) {
     const ch = charById(cid); if (!ch) return;

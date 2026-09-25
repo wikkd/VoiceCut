@@ -328,6 +328,10 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 tr.seg-row.sel td { background: var(--accent-dim) !important; }
 tr.seg-row.sel td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 
+/* ── 角色池连续试听：当前播放片段行高亮 ── */
+tr.seg-row.playing td { background: var(--accent-dim); }
+tr.seg-row.playing td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
 /* ── M2 角色池子页面 ── */
 #pool-view {
   position: fixed; inset: 0; z-index: 200; background: var(--bg);

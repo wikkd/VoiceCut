@@ -5,7 +5,7 @@ export function createWaveform(ctx) {
   const { $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
           WaveSurfer, Timeline, Regions, Minimap,
           renderMediaList, loadProject, saveProjectNow, savePoolNow,
-          renderSegments, subtitles } = ctx;
+          renderSegments, subtitles, auditionFocus } = ctx;
 
   // ── 素材选择 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
@@ -156,12 +156,23 @@ export function createWaveform(ctx) {
     state.ws.setTime(state.selection.start);
     state.ws.play();
   }
-  function playSeqItem() {
+  async function playSeqItem() {
     const m = state.auditionSeq && state.auditionSeq[state.auditionIdx];
     if (!m) { state.auditionSeq = null; return; }
+    // 序列可跨素材（角色池连续试听）：先切素材再定位播放
+    if (m.item && state.currentItem !== m.item) await selectItem(m.item);
+    if (!state.ws) { state.auditionSeq = null; return; }
     state.ws.setTime(m.start);
     state.ws.play();
     state.auditioning = { start: m.start, end: m.end };
+    if (m.segId && auditionFocus) auditionFocus(m.itemId, m.segId);
+  }
+  // 外部入口：按给定顺序连续试听（角色池 = 单一角色的全部片段）
+  async function playSequence(seq, idx = 0) {
+    if (!seq || !seq.length) return;
+    state.auditionSeq = seq;
+    state.auditionIdx = Math.max(0, Math.min(idx, seq.length - 1));
+    await playSeqItem();
   }
   // 循环/试听到位检测的防重入守卫：timeupdate 可能在 seek 生效前连发旧位置，
   // 不设防会反复 setTime/pause，听感即"一帧一暂停一开始"的抖动。
@@ -394,7 +405,7 @@ export function createWaveform(ctx) {
     });
   }
 
-  return { selectItem, togglePlay, toggleLoop, playSelection,
+  return { selectItem, togglePlay, toggleLoop, playSelection, playSequence,
            updatePlayUI, updateTransport, updateSelUI,
            setupMMSeek, seekBy, adjVolume,
            markForward, unmarkLast, clearMultiRegions, clearSelection,

@@ -86,6 +86,8 @@ export function createSegments(ctx) {
         </td>`;
       tb.appendChild(tr);
     });
+    // 重渲染后恢复试听高亮（不滚动，避免打扰）
+    if (state.auditionFocus) auditionFocus(state.auditionFocus.itemId, state.auditionFocus.segId, false);
   }
 
   function addSegmentFromSelection() {
@@ -141,7 +143,20 @@ export function createSegments(ctx) {
     if (tr && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
+  // 试听跳转高亮：给当前正在试听的片段行加 .playing（角色池连续试听时逐段跟随）
+  function auditionFocus(itemId, segId, scroll = true) {
+    state.auditionFocus = { itemId, segId };
+    document.querySelectorAll("#seg-tbody tr.seg-row.playing")
+      .forEach(el => el.classList.remove("playing"));
+    const segs = segsFor(itemId);
+    const i = segs.findIndex(s => s.id === segId);
+    const tr = document.querySelector(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
+    if (!tr) return;
+    tr.classList.add("playing");
+    if (scroll && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments,
            addSegmentFromSelection, deleteSegment, jumpToSegment, auditionSegment,
-           gotoEditAndPlay, scrollSegRow };
+           gotoEditAndPlay, scrollSegRow, auditionFocus };
 }

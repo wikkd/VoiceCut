@@ -427,7 +427,8 @@ import { createProjects } from "/static/js/modules/projects.js";
   pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
     needItem, charById: store.charById, uid: store.uid, paletteNext: store.paletteNext, pushUndo: store.pushUndo,
     scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool,
-    loadAllItemData: projects.loadAllItemData, segments,
+    loadAllItemData: projects.loadAllItemData, segments, setPage,
+    playSequence: (seq, idx) => waveform.playSequence(seq, idx),
     renderSubs: () => subtitles.renderSubs() });
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
     speakerLabelAt: store.speakerLabelAt, segsFor: segments.segsFor, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject,
@@ -443,6 +444,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderMediaList: projects.renderMediaList, loadProject: store.loadProject,
     saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     renderSegments: segments.renderSegments,
+    auditionFocus: segments.auditionFocus,
     subtitles });
   setupMenus();
   setupShortcuts();
@@ -477,6 +479,7 @@ import { createProjects } from "/static/js/modules/projects.js";
   // 调试/自动化钩子
   window.__vc = { state, selectItem: waveform.selectItem, selectProject: projects.selectProject,
     renderSegments: segments.renderSegments,
+    playSequence: (seq, idx) => waveform.playSequence(seq, idx),
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
     clearMultiRegions: waveform.clearMultiRegions,
