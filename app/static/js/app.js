@@ -314,6 +314,8 @@ import { createProjects } from "/static/js/modules/projects.js";
         if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
         // Ctrl+O 导入：不因焦点在输入框内而漏给浏览器（Chrome 会弹打开文件）
         if (k === "o" || k === "O") { e.preventDefault(); io.importDialog(); return; }
+        // Ctrl+Enter：把当前选区写回聚焦片段（修改识别片段起止）
+        if (k === "Enter") { e.preventDefault(); segments.applySelectionToActive(); return; }
       }
       const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
@@ -413,6 +415,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !evtEl(e).checked));
     $("#btn-add-seg").addEventListener("click", segments.addSegmentFromSelection);
+    $("#btn-apply-seg").addEventListener("click", segments.applySelectionToActive);
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
       if (confirm("清空当前素材的全部片段？")) {

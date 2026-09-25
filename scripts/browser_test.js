@@ -291,6 +291,37 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, awaitPromise: true, returnByValue: true });
     console.log("FEAT:", JSON.stringify(rF.result && rF.result.result && rF.result.result.value));
 
+    // APPLY：选区写回聚焦片段——点击行聚焦 → 选区一致不修改 → 调整选区写回 → undo 恢复
+    const rA = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const seg = (vc.state.segmentsByItem.get(itId) || [])[0];
+      if (!seg) return { skip: 'no seg' };
+      const row = document.querySelector('#seg-tbody tr.seg-row');
+      row.click();
+      await new Promise(r => setTimeout(r, 400));
+      const focused = !!vc.state.activeSeg && vc.state.activeSeg.segId === seg.id
+        && !!vc.state.selection && Math.abs(vc.state.selection.end - seg.end) < 0.05;
+      const before = { start: seg.start, end: seg.end };
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await new Promise(r => setTimeout(r, 200));
+      const sameOk = seg.start === before.start && seg.end === before.end;   // 选区一致 → 不修改
+      vc.state.selection = { start: before.start, end: before.end + 1 };     // 模拟手柄拉伸 +1s
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+      const segNow = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === seg.id);   // restoreSnapshot 会整体替换数组，undo 后必须重新取引用
+      const applied = segNow && Math.abs(segNow.end - (before.end + 1)) < 0.01 && Math.abs(segNow.start - before.start) < 0.001;
+      vc.undo();
+      await new Promise(r => setTimeout(r, 300));
+      const segUndo = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === seg.id);
+      const undone = segUndo && Math.abs(segUndo.end - before.end) < 0.01;   // undo 恢复原区间
+      return { focused, sameOk, applied, undone, segEnd: segNow ? segNow.end : null, before };
+    })()`, awaitPromise: true, returnByValue: true });
+    const av = rA.result && rA.result.result && rA.result.result.value;
+    console.log("APPLY:", JSON.stringify(av));
+    if (rA.result && rA.result.exceptionDetails) console.log("APPLY-EXC:", JSON.stringify(rA.result.exceptionDetails));
+    console.log("APPLY:", JSON.stringify({ ok: !!(av && !av.skip && av.focused && av.sameOk && av.applied && av.undone) }));
+
     // 项目式：新建空项目 → 切换 → 素材/角色池隔离 → 删除
     const newProj = await (await fetch(`${BASE}/api/projects`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "test-proj" }) })).json();

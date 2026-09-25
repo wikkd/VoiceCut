@@ -252,8 +252,30 @@ export function createSegments(ctx) {
     scheduleSaveProject();
     renderSegments();
   }
-  function deleteSegment(itemId, i) {
-    const segs = segsFor(itemId);
+  // 把当前工作选区写回聚焦片段（activeSeg）——修改识别片段的起止：
+  // 点击片段行聚焦 → 波形上拖手柄/键盘微调选区 → 此处写回
+  function applySelectionToActive() {
+    const a = state.activeSeg;
+    if (!a) return toast("请先点击片段行聚焦要修改的片段");
+    if (!state.selection) return toast("请先在波形上调整出目标区间");
+    const seg = segsFor(a.itemId).find(s => s.id === a.segId);
+    if (!seg) return toast("聚焦片段不存在（可能已被删除）");
+    const item = (state.items || []).find(x => x.id === a.itemId);
+    let { start, end } = state.selection;
+    const dur = item ? (item.duration || 0) : 0;   // clamp 到素材时长
+    if (dur > 0) { start = Math.max(0, Math.min(start, dur)); end = Math.max(0, Math.min(end, dur)); }
+    if (end - start < 0.01) return toast("选区过短，无法应用");
+    if (Math.abs(start - seg.start) < 0.005 && Math.abs(end - seg.end) < 0.005)
+      return toast("选区与片段区间一致，无需修改");
+    pushUndo("修改片段选区");
+    seg.start = +start.toFixed(3);
+    seg.end = +end.toFixed(3);
+    scheduleSaveProject(a.itemId);
+    renderSegments();
+    toast(`已更新片段区间 ${fmtT(seg.start)} ~ ${fmtT(seg.end)}`);
+  }
+
+  function deleteSegment(itemId, i) {    const segs = segsFor(itemId);
     const s = segs[i];
     if (s) state.selectedSegs.delete(s.id);
     pushUndo("删除片段");
@@ -309,6 +331,6 @@ export function createSegments(ctx) {
   }
 
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments, viewSegIds,
-           addSegmentFromSelection, deleteSegment, jumpToSegment, auditionSegment,
+           addSegmentFromSelection, applySelectionToActive, deleteSegment, jumpToSegment, auditionSegment,
            gotoEditAndPlay, scrollSegRow, auditionFocus };
 }

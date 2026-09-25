@@ -171,6 +171,7 @@
       <div class="panel-grip">
         <span class="grip-title">片段列表 <small id="seg-count"></small></span>
         <button id="btn-add-seg" class="chip">加片段</button>
+        <button id="btn-apply-seg" class="chip" title="把波形上当前选区写回聚焦片段（先点击片段行，再拖手柄/键盘微调选区，Ctrl+Enter 或点此应用）">应用选区</button>
         <button id="btn-transcribe" class="chip">批量转写</button>
         <button id="btn-quality-scan" class="chip" data-act="quality-scan" title="为全部片段做人声清晰度打分（0~100）">清晰度</button>
         <button id="btn-align-speech" class="chip" data-act="align-speech" title="把片段窗口收缩到实际发音区间（修复字幕链式时间导致的静音窗口）">对齐发音</button>
@@ -494,6 +495,7 @@
         <tr><td>Enter</td><td>片段文本框：确认并退出编辑</td></tr>
         <tr><td>Esc</td><td>退出输入编辑 / 取消当前选区</td></tr>
         <tr><td>Ctrl+A</td><td>全选 / 取消全选片段（按当前筛选可见范围）</td></tr>
+        <tr><td>Ctrl+Enter</td><td>把当前选区写回聚焦片段（修改识别片段起止：点片段行 → 拖手柄微调 → 写回）</td></tr>
         <tr><td>Delete</td><td>删除选中片段行</td></tr>
         <tr><td>右键</td><td>取消当前选区 / 取消本次拖拽（不弹浏览器菜单）</td></tr>
         <tr><td>Ctrl + / −</td><td>放大 / 缩小时间轴（替代浏览器页面缩放）</td></tr>
