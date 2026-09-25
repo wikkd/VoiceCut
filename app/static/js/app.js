@@ -125,6 +125,13 @@ import { createProjects } from "/static/js/modules/projects.js";
     }
     segments.updateSegBadge(itemId, i);
   });
+  // 片段文本框内 Enter = 确认并退出编辑（焦点交还页面，快捷键恢复）
+  $("#seg-tbody").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.classList && e.target.classList.contains("seg-text")) {
+      e.preventDefault();
+      e.target.blur();
+    }
+  });
   $("#seg-tbody").addEventListener("change", (e) => {
     const el = evtEl(e);
     const tr = closestEl(el, "tr.seg-row");
@@ -266,16 +273,24 @@ import { createProjects } from "/static/js/modules/projects.js";
         segments.renderSegments();
         return;
       }
+      // Esc：输入框/下拉/复选框内 = 退出编辑（失焦，快捷键恢复）；页面空白处 = 取消当前选区
+      if (e.key === "Escape") {
+        const tg = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
+        if (tg === "input" || tg === "textarea" || tg === "select") { e.target.blur(); return; }
+        if (state.selection || state.multiRegions.length) { waveform.clearSelection(); toast("已取消选区"); }
+        return;
+      }
       // Ctrl/Cmd + +/-/0: 屏蔽浏览器页面缩放，改为时间轴缩放
       if (e.ctrlKey || e.metaKey) {
         const k = e.key;
         if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); waveform.zoomIn(); return; }
         if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); waveform.zoomOut(); return; }
         if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
+        // Ctrl+O 导入：不因焦点在输入框内而漏给浏览器（Chrome 会弹打开文件）
+        if (k === "o" || k === "O") { e.preventDefault(); io.importDialog(); return; }
       }
       const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) store.redo(); else store.undo();
@@ -347,6 +362,13 @@ import { createProjects } from "/static/js/modules/projects.js";
 
   // ── 事件绑定 ───────────────────────────────────────────
   function bindUI() {
+    // 下拉/复选框/取色器用完立即失焦：防止焦点滞留导致空格、单键快捷键被控件原生行为劫持
+    document.addEventListener("change", (e) => {
+      const t = e.target;
+      if (!t || t.nodeType !== 1) return;
+      const tag = t.tagName.toLowerCase();
+      if (tag === "select" || t.type === "checkbox" || t.type === "color" || t.type === "radio") t.blur();
+    }, true);
     ["#project-select", "#project-select2"].forEach((psSel) => {
       const ps = /** @type {HTMLSelectElement|null} */ ($(psSel));
       if (ps) ps.addEventListener("change", () => {

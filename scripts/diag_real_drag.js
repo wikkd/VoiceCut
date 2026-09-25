@@ -146,6 +146,23 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const okA = n1 > 0 && n2 === 0 && (!inFocus || (n3 > 0 && nativeSel === ""));
     console.log("Ctrl+A 全选:", JSON.stringify({ before: n0, all: n1, toggled: n2, inFocus: inFocus ? n3 : "skip", nativeSel }), okA ? "CTRL-A PASS" : "CTRL-A FAIL");
 
+    // Enter 确认退出编辑 / Esc 退出编辑（焦点交还页面）
+    const enterEsc = await send("Runtime.evaluate", { expression: `(async () => {
+      const inp = document.querySelector("#seg-tbody .seg-text");
+      if (!inp) return { skip: true };
+      const out = {};
+      inp.focus();
+      inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      out.enterBlurred = document.activeElement !== inp;
+      inp.focus();
+      inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+      out.escBlurred = document.activeElement !== inp;
+      return out;
+    })()`, returnByValue: true, awaitPromise: true });
+    const ee = enterEsc.result.result.value;
+    const okE = ee.skip || (ee.enterBlurred && ee.escBlurred);
+    console.log("Enter/Esc 退出编辑:", JSON.stringify(ee), okE ? "ENTER-ESC PASS" : "ENTER-ESC FAIL");
+
     console.log("页面错误:", errors.length ? errors.join(" | ") : "（无）");
     console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL");
     process.exitCode = (ok && okW && okK && okA) ? 0 : 1;
