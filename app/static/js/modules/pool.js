@@ -22,14 +22,57 @@ export function createPool(ctx) {
   function reassignSegments(segIds, characterId) {
     pushUndo();
     let n = 0;
+    const samples = [];
     (state.items || []).forEach(item => {
       const segs = segments.segsFor(item.id);
       let changed = false;
-      segs.forEach(s => { if (segIds.includes(s.id)) { s.characterId = characterId || null; n++; changed = true; } });
+      segs.forEach(s => {
+        if (segIds.includes(s.id)) {
+          s.characterId = characterId || null;
+          s.locked = true;   // 人工重定向 → 锁定
+          if (characterId) samples.push({ item_id: item.id, seg_id: s.id,
+            character_id: characterId, start: s.start, end: s.end });
+          n++; changed = true;
+        }
+      });
       if (changed) scheduleSaveProject(item.id);
     });
     segments.renderSegments(); renderPool();
     toast(`已重定向 ${n} 段片段`);
+    sendCharacterFeedback(samples);   // 声纹反馈：静默更新其他片段
+  }
+
+  // ── 声纹反馈：人工修正的片段作为样本 → 角色质心吸收 → 静默重匹配其他片段 ──
+  let fbBusy = false;
+  async function sendCharacterFeedback(samples) {
+    if (!state.currentProject || !samples || !samples.length) return;
+    if (fbBusy || state.identifying) return;   // 识别/反馈进行中不叠加
+    const seen = new Set(); const uniq = [];
+    samples.slice(0, 20).forEach(s => {       // 单次最多吸收 20 个样本
+      const k = s.item_id + ":" + s.seg_id;
+      if (s.character_id && !seen.has(k)) { seen.add(k); uniq.push(s); }
+    });
+    if (!uniq.length) return;
+    fbBusy = true;
+    state.identifying = true;   // 冻结池落盘与聚焦刷新，防止读写竞态（同识别任务）
+    try {
+      const j = await api("/api/speakers/feedback", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: state.currentProject.id, samples: uniq }) });
+      trackTask(j.task_id, async (result) => {
+        state.identifying = false; fbBusy = false;
+        if (Array.isArray(result.characters)) state.characters = result.characters;
+        await loadAllItemData();
+        renderPool(); segments.renderSegments();
+        const n = (result.bound || 0) + (result.moved || 0);
+        if (n > 0) toast(`已参考你的修正静默更新 ${n} 个片段（新绑定 ${result.bound || 0}，改绑 ${result.moved || 0}）`);
+        else if (result.absorbed) toast("已吸收声纹样本，其余片段暂无需更新");
+      });
+      toast("声纹样本吸收中，其他片段将静默更新…");
+    } catch (e) {
+      state.identifying = false; fbBusy = false;
+      toast("声纹反馈启动失败: " + e.message, 6000);
+    }
   }
 
   function poolCard(ch) {
@@ -256,5 +299,5 @@ export function createPool(ctx) {
 
   return { openPool, closePool, renderPool, doIdentifySpeakers, toggleAutoAnalyze,
            renderAutoAnalyzeBtn, reassignSegments, createPoolCharacter,
-           mergePoolSelected };
+           mergePoolSelected, sendCharacterFeedback };
 }

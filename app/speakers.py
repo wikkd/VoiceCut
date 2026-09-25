@@ -319,7 +319,9 @@ def normalize_segments(segments: list, *, edge_gap: float = 0.05,
                             float(s["end"]) - float(s["start"]))
                 same_edge = (abs(float(p["start"]) - float(s["start"])) < edge_gap
                              or abs(float(p["end"]) - float(s["end"])) < edge_gap)
-                if short > 0 and same_edge and ov / short >= contain_ratio:
+                if short > 0 and same_edge and ov / short >= contain_ratio \
+                        and not p.get("locked") and not s.get("locked"):
+                    # 人工锁定片段不参与合并：既不被删除，也不吞噬重复段（保守保留两者）
                     p_text = (p.get("text") or "").strip()
                     s_text = (s.get("text") or "").strip()
                     keep_new = (not p_text and bool(s_text)) or \
@@ -355,6 +357,10 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
     mixed_count = 0
     for seg in segments:
         seg = dict(seg)
+        if seg.get("locked"):
+            # 人工锁定片段：重跑识别不重绑角色、不拆 mixed、不改任何人工成果
+            out.append(seg)
+            continue
         lb, mixed = dominant_label(
             seg.get("start", 0.0), seg.get("end", 0.0), speaker_segments)
         if lb:
@@ -1194,3 +1200,106 @@ def match_labels_strong(item_id, label_embeddings, characters,
         best["emb_count"] = cnt + 1
         matched.append(label)
     return assignments, characters, matched
+
+
+def _pick_embed_fn():
+    """优先 ECAPA；模型不可用时降级 MFCC。
+
+    注意：池质心的向量空间由当初识别所用 embedder 决定。正常路径（有 GPU）
+    池内质心均为 ECAPA 空间，反馈匹配有效；若池是 MFCC 时代产物，匹配相似度
+    会系统性偏低，行为退化为"少匹配、宁少勿多"，不会误绑。
+    """
+    try:
+        _load_embedder()
+        return _ecapa_embedding
+    except Exception:
+        return _mfcc_embedding
+
+
+def absorb_character_sample(characters: list, character_id: str, emb) -> list:
+    """把人工修正片段的声纹作为样本并入角色质心（运行平均，与识别并入一致）。
+
+    返回新池（调用方负责持久化）。角色不存在或样本无效时原样返回。
+    """
+    characters = [dict(c) for c in characters]
+    target = next((c for c in characters if c.get("id") == character_id), None)
+    if target is None or emb is None:
+        return characters
+    emb = np.asarray(emb, dtype=np.float32)
+    old = embedding_from_b64(target.get("embedding"))
+    cnt = int(target.get("emb_count") or 0)
+    if old is None or cnt <= 0:
+        target["embedding"] = embedding_to_b64(emb)
+        target["emb_count"] = 1
+    else:
+        target["embedding"] = embedding_to_b64((old * cnt + emb) / (cnt + 1))
+        target["emb_count"] = cnt + 1
+    return characters
+
+
+def rescan_assignments(sources: list, characters: list, *, progress_cb=None,
+                       cancelled_cb=None, bind_thr: float = 0.80,
+                       bind_margin: float = 0.05, move_margin: float = 0.08):
+    """人工修正后的静默重匹配：把强化过的角色质心应用到项目内其他片段。
+
+    sources: [{"item_id", "wav_path", "segments": [seg, ...]}]（项目内全部素材）
+    规则（宁少勿多；人工 locked 片段与 mixed 混合段永不改动）：
+    - 未分配段：best_sim >= bind_thr 且领先第二名 >= bind_margin -> 绑定 best；
+    - 已分配段：仅当另一角色以 >= bind_thr 相似且比当前角色质心高出
+      >= move_margin 时才改绑（防止单样本并入造成归属来回震荡）。
+
+    返回 (changes, stats)：
+      changes = {(item_id, seg_id): character_id}（仅发生变更的段）
+      stats   = {"scanned", "bound", "moved", "skipped"}
+    """
+    emb_fn = _pick_embed_fn()
+    cents: list = []
+    for c in characters:
+        e = embedding_from_b64(c.get("embedding"))
+        if e is not None:
+            cents.append((c["id"], np.asarray(e, dtype=np.float32)))
+    changes: dict = {}
+    stats = {"scanned": 0, "bound": 0, "moved": 0, "skipped": 0}
+    total = sum(len(s.get("segments") or []) for s in sources) or 1
+    done = 0
+    for src in sources:
+        segs = src.get("segments") or []
+        done += len(segs)
+        if not src.get("wav_path") or not Path(src["wav_path"]).exists():
+            continue
+        mono, sr = read_mono16k(src["wav_path"])
+        for seg in segs:
+            if progress_cb:
+                progress_cb(min(1.0, done / total))
+            if cancelled_cb and cancelled_cb():
+                return changes, stats
+            sid = seg.get("id")
+            if not sid or seg.get("locked") or seg.get("mixed"):
+                stats["skipped"] += 1
+                continue
+            try:
+                emb = emb_fn(mono, sr, float(seg.get("start", 0)),
+                             float(seg.get("end", 0)))
+            except Exception:
+                emb = None
+            if emb is None:
+                stats["skipped"] += 1
+                continue
+            stats["scanned"] += 1
+            sims = sorted(((cid, _cos(emb, ce)) for cid, ce in cents),
+                          key=lambda x: -x[1])
+            if not sims:
+                continue
+            best_cid, best_sim = sims[0]
+            second = sims[1][1] if len(sims) > 1 else -1.0
+            cur = seg.get("characterId")
+            if not cur:
+                if best_sim >= bind_thr and (best_sim - second) >= bind_margin:
+                    changes[(src["item_id"], sid)] = best_cid
+                    stats["bound"] += 1
+            elif cur != best_cid:
+                cur_sim = next((s for cid, s in sims if cid == cur), -1.0)
+                if best_sim >= bind_thr and (best_sim - cur_sim) >= move_margin:
+                    changes[(src["item_id"], sid)] = best_cid
+                    stats["moved"] += 1
+    return changes, stats

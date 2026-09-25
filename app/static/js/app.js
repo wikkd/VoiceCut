@@ -103,7 +103,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     if (!segs[i]) return;
     if (el.classList.contains("seg-text")) {
       if (!el.dataset.undoed) { el.dataset.undoed = "1"; store.pushUndo(); }
-      segs[i].text = el.value; store.scheduleSaveProject(itemId);
+      segs[i].text = el.value; segs[i].locked = true;   // 人工编辑 → 锁定，自动识别不再覆盖
+      store.scheduleSaveProject(itemId);
     }
     segments.updateSegBadge(itemId, i);
   });
@@ -120,7 +121,11 @@ import { createProjects } from "/static/js/modules/projects.js";
     if (el.classList.contains("seg-lang")) { segs[i].language = el.value; store.scheduleSaveProject(itemId); }
     if (el.classList.contains("seg-speaker")) {
       segs[i].characterId = el.value || null;
+      segs[i].locked = true;   // 人工指派 → 锁定
       store.scheduleSaveProject(itemId); segments.renderSegments();
+      // 声纹反馈：修正样本并入角色质心并静默更新其他片段
+      if (el.value) pool.sendCharacterFeedback([{ item_id: itemId, seg_id: segs[i].id,
+        character_id: el.value, start: segs[i].start, end: segs[i].end }]);
     }
   });
   function showRedirectMenu(x, y, segIds) {

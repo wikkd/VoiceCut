@@ -365,6 +365,97 @@ def api_project_speakers_generate(project_id: str) -> object:
     return jsonify({"task_id": tid})
 
 
+@bp.post("/api/speakers/feedback")
+def api_speakers_feedback() -> object:
+    """声纹反馈：用户人工修正的片段作为样本并入角色质心，并静默重匹配
+    项目内其他片段（locked 人工锁定片段永不改动）。"""
+    c = ctx()
+    body = request.get_json(force=True) or {}
+    project_id = body.get("project_id")
+    samples = body.get("samples") or []
+    if not project_id or db_mod.fetch_project_record(
+            db_mod.get_conn(c.cfg.workdir), project_id) is None:
+        return jsonify({"error": "project not found"}), 404
+    clean = []
+    for sp in samples:
+        try:
+            clean.append({"item_id": str(sp["item_id"]), "seg_id": str(sp["seg_id"]),
+                          "character_id": str(sp["character_id"]),
+                          "start": float(sp["start"]), "end": float(sp["end"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    if not clean:
+        return jsonify({"error": "无有效样本"}), 400
+    tid = c.tasks.submit(_speakers_feedback_worker, c, project_id, clean, gpu=True)
+    return jsonify({"task_id": tid})
+
+
+def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
+    tid = c.tasks.current_task_id()
+    pool = project_mod.load_pool(c.cfg.workdir, project_id)
+    chars = pool["characters"]
+    emb_fn = speakers_mod._pick_embed_fn()
+    # 1) 样本声纹并入角色质心（仅收样本段各自的角色）
+    n_absorbed = 0
+    for sp in samples:
+        if not any(ch["id"] == sp["character_id"] for ch in chars):
+            continue
+        item = c.store.get(sp["item_id"])
+        if item is None or not item.wav_path or not Path(item.wav_path).exists():
+            continue
+        try:
+            mono, sr = speakers_mod.read_mono16k(item.wav_path)
+            emb = emb_fn(mono, sr, sp["start"], sp["end"])
+        except Exception:
+            emb = None
+        if emb is None:
+            continue
+        chars = speakers_mod.absorb_character_sample(chars, sp["character_id"], emb)
+        n_absorbed += 1
+    if not n_absorbed:
+        return {"absorbed": 0, "bound": 0, "moved": 0, "characters": chars}
+    # 2) 静默重匹配：项目内全部素材的片段逐段重算声纹比对池质心
+    #    （识别 worker 同款GPU路径；locked/mixed 段在 rescan 内部跳过）
+    items = [it for it in c.store.by_project(project_id)
+             if it.wav_path and Path(it.wav_path).exists()]
+    sources = []
+    for it in items:
+        pj = project_mod.load_project(c.cfg.workdir, it.id)
+        sources.append({"item_id": it.id, "wav_path": it.wav_path,
+                        "segments": pj["segments"]})
+    changes, stats = speakers_mod.rescan_assignments(
+        sources, chars,
+        progress_cb=lambda p: c.tasks.update(tid, progress=0.1 + p * 0.85,
+                                             message=f"声纹重匹配 {p * 100:.0f}%"),
+        cancelled_cb=lambda: c.tasks.cancelled(tid))
+    # 3) 写回（样本段自身用 sample_keys 双保险排除：其 locked 标记可能尚未落盘）
+    sample_keys = {(sp["item_id"], sp["seg_id"]) for sp in samples}
+    per_item: dict[str, dict[str, str]] = {}
+    for (item_id, seg_id), cid in changes.items():
+        if (item_id, seg_id) in sample_keys:
+            continue
+        per_item.setdefault(item_id, {})[seg_id] = cid
+    touched = 0
+    for it in items:
+        segmap = per_item.get(it.id)
+        if not segmap:
+            continue
+        pj = project_mod.load_project(c.cfg.workdir, it.id)
+        changed = False
+        for seg in pj["segments"]:
+            new_cid = segmap.get(seg.get("id"))
+            if new_cid and seg.get("characterId") != new_cid and not seg.get("locked"):
+                seg["characterId"] = new_cid
+                changed = True
+        if changed:
+            project_mod.save_project(c.cfg.workdir, it.id, pj)
+            touched += 1
+    project_mod.save_pool(c.cfg.workdir, project_id, chars)
+    return {"absorbed": n_absorbed, "bound": stats["bound"], "moved": stats["moved"],
+            "scanned": stats["scanned"], "skipped": stats["skipped"],
+            "items_touched": touched, "characters": chars}
+
+
 def submit_project_analyze(c, project_id: str, *, force: bool = False) -> str | None:
     """提交项目级说话人识别（每项目去重排队）。
 

@@ -144,7 +144,7 @@ export function createIo(ctx) {
     let total = 0;
     (state.items || []).forEach((item) => {
       const segs = segsFor(item.id);
-      const todo = segs.map((s, i) => ({ ...s, idx: i })).filter(x => !x.text.trim());
+      const todo = segs.map((s, i) => ({ ...s, idx: i })).filter(x => !x.text.trim() && !x.locked);
       if (!todo.length) return;
       total += todo.length;
       api("/api/transcribe", { method: "POST",

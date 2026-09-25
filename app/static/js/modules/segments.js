@@ -88,7 +88,8 @@ export function createSegments(ctx) {
     const ch = charById(seg.characterId);
     const tr = document.createElement("tr");
     tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "")
-      + (state.activeSeg && state.activeSeg.segId === seg.id ? " active" : "");
+      + (state.activeSeg && state.activeSeg.segId === seg.id ? " active" : "")
+      + (seg.locked ? " locked" : "");
     tr.dataset.item = item.id;
     tr.dataset.i = i;
     if (ch) tr.style.borderLeft = "4px solid " + ch.color;
@@ -223,6 +224,7 @@ export function createSegments(ctx) {
     const seg = segs.find(s => s.id === segId);
     if (!seg) return;
     seg.start = start; seg.end = end;
+    seg.locked = true;   // 人工调整边界 → 锁定（自动转写回填仍会执行，但批量转写/识别不再覆盖）
     scheduleSaveProject(itemId);
     const i = segs.indexOf(seg);
     const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);

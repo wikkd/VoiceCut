@@ -392,6 +392,10 @@ tr.seg-row.playing td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 tr.seg-row.active td { background: rgba(255, 209, 102, 0.10); }
 tr.seg-row.active td:first-child { box-shadow: inset 3px 0 0 #ffd166; }
 
+/* ── 人工锁定片段：行号带锁标记（自动识别/转写不再覆盖） ── */
+tr.seg-row.locked .seg-num { color: #ffd166; }
+tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left: 2px; }
+
 /* ── M2 角色池子页面 ── */
 #pool-view {
   position: fixed; inset: 0; z-index: 200; background: var(--bg);
