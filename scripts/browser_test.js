@@ -337,6 +337,37 @@ const makeWav = (seconds, sr = 16000) => {
     if (rA.result && rA.result.exceptionDetails) console.log("APPLY-EXC:", JSON.stringify(rA.result.exceptionDetails));
     console.log("APPLY:", JSON.stringify({ ok: !!(av && !av.skip && av.focused && av.sameOk && av.applied && av.undone) }));
 
+    // SPEAKER：说话人下拉可更改——change 写回 characterId；点击下拉不再触发行重建（回归：行重建曾吞掉下拉交互）
+    const rS = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const seg = (vc.state.segmentsByItem.get(itId) || [])[0];
+      if (!seg) return { skip: 'no seg' };
+      vc.state.characters.push({ id: 'c-t1', name: '测试角色', color: '#ff6600' });
+      vc.renderSegments();
+      const sel = document.querySelector('#seg-tbody .seg-speaker');
+      if (!sel) return { skip: 'no speaker select' };
+      const before = seg.characterId;
+      // 点击下拉（行点击委托曾重建行 → 元素引用失效、下拉被关）
+      sel.click();
+      const sameEl = document.querySelector('#seg-tbody .seg-speaker') === sel;
+      sel.value = 'c-t1';
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+      const after = (vc.state.segmentsByItem.get(itId) || [])[0];
+      const applied = after.characterId === 'c-t1';
+      const selNow = document.querySelector('#seg-tbody .seg-speaker');
+      const selKept = !!selNow && selNow.value === 'c-t1';           // 重渲染后仍显示新值
+      vc.undo();
+      await new Promise(r => setTimeout(r, 300));
+      const segUndo = (vc.state.segmentsByItem.get(itId) || []).find(s => s.id === seg.id);
+      const undone = segUndo && segUndo.characterId === before;      // undo 恢复
+      return { sameEl, applied, selKept, undone, before: before || null };
+    })()`, awaitPromise: true, returnByValue: true });
+    const sv = rS.result && rS.result.result && rS.result.result.value;
+    if (rS.result && rS.result.exceptionDetails) console.log("SPEAKER-EXC:", JSON.stringify(rS.result.exceptionDetails));
+    console.log("SPEAKER:", JSON.stringify({ ...sv, ok: !!(sv && !sv.skip && sv.sameEl && sv.applied && sv.selKept && sv.undone) }));
+
     // 项目式：新建空项目 → 切换 → 素材/角色池隔离 → 删除
     const newProj = await (await fetch(`${BASE}/api/projects`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "test-proj" }) })).json();
@@ -388,7 +419,7 @@ const makeWav = (seconds, sr = 16000) => {
     })()`, returnByValue: true });
     console.log("RELOAD:", JSON.stringify(rR.result && rR.result.result && rR.result.result.value));
 
-    const rS = await send("Runtime.evaluate", { expression: `(() => {
+    const rSpk = await send("Runtime.evaluate", { expression: `(() => {
       const vc = window.__vc;
       vc.workspace.resetLayout();
       return {
@@ -397,7 +428,7 @@ const makeWav = (seconds, sr = 16000) => {
         subTrack: getComputedStyle(document.querySelector('#workspace')).getPropertyValue('--w-sub').trim(),
       };
     })()`, returnByValue: true });
-    console.log("RESET:", JSON.stringify(rS.result && rS.result.result && rS.result.result.value));
+    console.log("RESET:", JSON.stringify(rSpk.result && rSpk.result.result && rSpk.result.result.value));
 
     // A3: import through the UI auto-selects the new item (pollTasks refresh-then-doneCb)
     const rA3 = await send("Runtime.evaluate", { expression: `(async () => {

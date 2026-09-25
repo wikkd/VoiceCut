@@ -117,6 +117,9 @@ import { createProjects } from "/static/js/modules/projects.js";
       else if (btn.classList.contains("seg-jump")) { waveform.focusSegment(state.items.find(x => x.id === itemId), seg); return; }
       else if (btn.classList.contains("seg-del")) { segments.deleteSegment(itemId, i); return; }
     }
+    // 行内编辑控件（文本框/语言/说话人下拉）：不触发行选中——否则 renderSegments 重建行，
+    // 正在交互的控件被替换，下拉打不开/change 丢失（曾导致说话人无法更改）
+    if (evtEl(e).closest("input, select")) return;
     e.preventDefault();
     const rows = segments.allSegs();
     const flatIdx = rows.findIndex(r => r.seg.id === seg.id);
