@@ -517,7 +517,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderSubs: () => subtitles.renderSubs() });
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
     speakerLabelAt: store.speakerLabelAt, segsFor: segments.segsFor, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject,
-    renderSegments: segments.renderSegments });
+    renderSegments: segments.renderSegments,
+    setSelection: (s, e) => waveform.setSelection(s, e) });
   training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask: tasks.trackTask });
   io = createIo({ $, api, state, toast, trackTask: tasks.trackTask, needItem,
     selectResultItem: tasks.selectResultItem, autoAnalyzeDone: tasks.autoAnalyzeDone,

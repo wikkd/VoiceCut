@@ -52,7 +52,6 @@ export function createWaveform(ctx) {
 
     // 实时字幕
     state.subs = []; state.currentSubIdx = -1;
-    subtitles.resetSubRegion();
     subtitles.renderSubs();
     if (item.subs_url) {
       try {
@@ -69,7 +68,6 @@ export function createWaveform(ctx) {
     state.multiRegions = [];
     state.auditionSeq = null; state.auditionIdx = 0;
     state.activeSeg = null;
-    activeSegRegion = null;   // 旧波形的片段高亮块已随 regions 插件销毁
     $("#empty-state").classList.add("hidden");
 
     const timeline = Timeline.create({ container: "#timeline", height: 24 });
@@ -176,19 +174,14 @@ export function createWaveform(ctx) {
   }
 
   // ── 片段定位 ───────────────────────────────────────────
-  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点 + 波形上琥珀色高亮块。
-  // 高亮块 drag/resize 全关：纯视觉定位，不可拖动/缩放，不进入选区数据。
-  let activeSegRegion = null;
+  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点 + 把工作选区设为该片段区间
+  // （蓝色可拉伸选区，导出/试听/加片段直接可用）。
   async function focusSegment(item, seg) {
     if (!state.ws || !state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.activeSeg = { itemId: item.id, segId: seg.id };
-    if (activeSegRegion) { try { activeSegRegion.remove(); } catch (e) {} activeSegRegion = null; }
-    activeSegRegion = progAddRegion({
-      start: seg.start, end: seg.end, color: "rgba(255,209,102,0.30)",
-      drag: false, resize: false,
-    });
+    setSelection(seg.start, seg.end);
     renderSegments();   // 刷新行高亮（seg-jump 按钮路径不经过列表点击渲染）
   }
 
@@ -349,7 +342,10 @@ export function createWaveform(ctx) {
     updateSelUI();
   }
   function clearMultiRegions() {
-    state.multiRegions.slice().forEach((m) => { try { m.region.remove(); } catch (e) {} });
+    state.multiRegions.slice().forEach((m) => {
+      if (state.selectionRegion === m.region) state.selectionRegion = null;   // 被清的是多选标记则弃用引用
+      try { m.region.remove(); } catch (e) {}
+    });
     state.multiRegions = [];
     updateSelUI();
   }
@@ -406,6 +402,19 @@ export function createWaveform(ctx) {
   }
   function zoomIn() { zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5); }
   function zoomOut() { zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5); }
+  // 把工作选区设为指定区间（片段行点击 / 字幕「选区」按钮共用入口）：
+  // 单一蓝色选区（整体不可拖走、两端可 ↔ 拉伸），替换旧选区与多选标记。
+  function setSelection(start, end) {
+    if (!state.ws) return;
+    const wasMark = state.multiRegions.some(m => m.region === state.selectionRegion);
+    clearMultiRegions();
+    if (wasMark) state.selectionRegion = null;   // 旧选区是多选标记，已随 clear 移除，弃用引用
+    const region = _ensureSelRegion(start, end, SEL_COLOR);
+    state.selectionRegion = region;
+    state.selection = { start, end };
+    updateSelUI();
+  }
+
   function nudgeSelection(delta, mode) {
     if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先在波形或时间轴上拖拽出选区");
     let { start, end } = state.selection;
@@ -529,7 +538,7 @@ export function createWaveform(ctx) {
   }
 
   return { selectItem, togglePlay, toggleLoop, playSelection, playSequence,
-           focusSegment,
+           focusSegment, setSelection,
            updatePlayUI, updateTransport, updateSelUI,
            setupMMSeek, seekBy, adjVolume,
            markForward, unmarkLast, clearMultiRegions, clearSelection,
