@@ -69,6 +69,7 @@ export function createWaveform(ctx) {
     state.multiRegions = [];
     state.auditionSeq = null; state.auditionIdx = 0;
     state.activeSeg = null;
+    activeSegRegion = null;   // 旧波形的片段高亮块已随 regions 插件销毁
     $("#empty-state").classList.add("hidden");
 
     const timeline = Timeline.create({ container: "#timeline", height: 24 });
@@ -165,13 +166,19 @@ export function createWaveform(ctx) {
   }
 
   // ── 片段定位 ───────────────────────────────────────────
-  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点。波形上不再绑定可拖拽的
-  // 片段选区（拖动调整边界 + 自动转写回填已按需求移除），选区行为回归纯选择。
+  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点 + 波形上琥珀色高亮块。
+  // 高亮块 drag/resize 全关：纯视觉定位，不可拖动/缩放，不进入选区数据。
+  let activeSegRegion = null;
   async function focusSegment(item, seg) {
     if (!state.ws || !state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.activeSeg = { itemId: item.id, segId: seg.id };
+    if (activeSegRegion) { try { activeSegRegion.remove(); } catch (e) {} activeSegRegion = null; }
+    activeSegRegion = progAddRegion({
+      start: seg.start, end: seg.end, color: "rgba(255,209,102,0.30)",
+      drag: false, resize: false,
+    });
     renderSegments();   // 刷新行高亮（seg-jump 按钮路径不经过列表点击渲染）
   }
 
