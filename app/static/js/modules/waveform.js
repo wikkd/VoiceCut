@@ -5,8 +5,7 @@ export function createWaveform(ctx) {
   const { $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
           WaveSurfer, Timeline, Regions, Minimap,
           renderMediaList, loadProject, saveProjectNow, savePoolNow,
-          renderSegments, subtitles, auditionFocus,
-          trackTask, syncSegBounds, applySegText } = ctx;
+          renderSegments, subtitles, auditionFocus } = ctx;
 
   // ── 素材选择 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
@@ -57,8 +56,7 @@ export function createWaveform(ctx) {
     state.dragRegion = null;
     state.multiRegions = []; state.ctrlMarking = false;
     state.auditionSeq = null; state.auditionIdx = 0;
-    state.activeSeg = null; state.activeSegRegion = null;
-    clearTimeout(segTransTimer);
+    state.activeSeg = null;
     $("#empty-state").classList.add("hidden");
 
     const timeline = Timeline.create({ container: "#timeline", height: 24 });
@@ -116,22 +114,11 @@ export function createWaveform(ctx) {
         if (m) { m.start = region.start; m.end = region.end; }
         state.selection = { start: region.start, end: region.end };
         updateSelUI();
-        // 活动片段边界优化：拖动/缩放选区结束 → 同步片段起止 + 防抖自动转写回填文本
-        if (state.activeSeg && region === state.activeSegRegion) {
-          const { itemId, segId } = state.activeSeg;
-          syncSegBounds(itemId, segId, region.start, region.end);
-          scheduleSegTranscribe(itemId, segId, region.start, region.end);
-        }
       }
     });
     state.regions.on("region-removed", (region) => {
       const i = state.multiRegions.findIndex((m) => m.region === region);
       if (i >= 0) { state.multiRegions.splice(i, 1); updateSelUI(); }
-      if (region === state.activeSegRegion) {          // 绑定选区被移除（右键取消/新选拖拽）→ 解绑片段
-        state.activeSegRegion = null;
-        state.activeSeg = null;
-        clearTimeout(segTransTimer);
-      }
     });
 
     ws.on("play", () => { state.playing = true; updatePlayUI(); videoPlay(); });
@@ -165,46 +152,15 @@ export function createWaveform(ctx) {
     }
   }
 
-  // ── 片段定位与边界优化 ─────────────────────────────────
-  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点 + 生成可拖拽的绑定选区，
-  // 用户左右拖动选区边界即可优化片段范围，拖完防抖自动转写回填文本。
+  // ── 片段定位 ───────────────────────────────────────────
+  // 点击片段行/跳转：高亮行 + 播放头跳到片段起点。波形上不再绑定可拖拽的
+  // 片段选区（拖动调整边界 + 自动转写回填已按需求移除），选区行为回归纯选择。
   async function focusSegment(item, seg) {
     if (!state.ws || !state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
-    // 先移除旧绑定选区（region-removed 会清掉旧的 activeSeg/计时器）
-    if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} state.selectionRegion = null; }
-    state.dragRegion = null;
-    clearMultiRegions();
     state.ws.setTime(seg.start);
     state.activeSeg = { itemId: item.id, segId: seg.id };
-    const region = state.regions.addRegion({
-      start: seg.start, end: seg.end, color: "rgba(255,209,102,0.30)",
-      drag: true, resize: true,
-    });
-    state.activeSegRegion = region;   // region-created 同步将其设为 selectionRegion
-    updateSelUI();
-  }
-
-  let segTransTimer = 0;
-  function scheduleSegTranscribe(itemId, segId, start, end) {
-    clearTimeout(segTransTimer);
-    if (end - start < 0.3) return;    // 过短的选区不识别
-    segTransTimer = setTimeout(() => autoTranscribeSeg(itemId, segId, start, end), 1200);
-  }
-  async function autoTranscribeSeg(itemId, segId, start, end) {
-    if (!state.currentItem || state.currentItem.id !== itemId) return;
-    const model = ($("#tr-model") && $("#tr-model").value) || "medium";
-    toast(`正在识别 ${fmtT(start)}~${fmtT(end)} 的文本…`);
-    try {
-      const j = await api("/api/transcribe", { method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ item_id: itemId, segments: [{ start, end }], model }) });
-      trackTask(j.task_id, (result) => {
-        const text = (result.texts || [])[0] || "";
-        if (text.trim()) applySegText(itemId, segId, text.trim());
-        else toast("该区间未识别到语音文本");
-      });
-    } catch (e) { toast("自动转写启动失败: " + e.message, 6000); }
+    renderSegments();   // 刷新行高亮（seg-jump 按钮路径不经过列表点击渲染）
   }
 
   function updatePlayUI() {
@@ -433,11 +389,6 @@ export function createWaveform(ctx) {
     state.selectionRegion.setOptions({ start, end });  // vendored Region 无 setExtent（此前 Shift 微调静默抛错）
     state.selection = { start, end };
     updateSelUI();
-    // 键盘微调同样联动活动片段边界（setOptions 不发 update-end，需手动同步）
-    if (state.activeSeg && state.selectionRegion === state.activeSegRegion) {
-      syncSegBounds(state.activeSeg.itemId, state.activeSeg.segId, start, end);
-      scheduleSegTranscribe(state.activeSeg.itemId, state.activeSeg.segId, start, end);
-    }
   }
 
   // ── DOM 事件（波形区 / 视频区 / 滚轮缩放） ─────────────
