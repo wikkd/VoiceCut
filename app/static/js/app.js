@@ -119,7 +119,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     if (el.classList.contains("seg-text")) {
-      if (!el.dataset.undoed) { el.dataset.undoed = "1"; store.pushUndo(); }
+      if (!el.dataset.undoed) { el.dataset.undoed = "1"; store.pushUndo("编辑文本"); }
       segs[i].text = el.value; segs[i].locked = true;   // 人工编辑 → 锁定，自动识别不再覆盖
       store.scheduleSaveProject(itemId);
     }
@@ -134,7 +134,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     const segs = segments.segsFor(itemId);
     if (!segs[i]) return;
     delete el.dataset.undoed;
-    if (!el.classList.contains("seg-text")) store.pushUndo();
+    if (!el.classList.contains("seg-text")) store.pushUndo("修改片段属性");
     if (el.classList.contains("seg-lang")) { segs[i].language = el.value; store.scheduleSaveProject(itemId); }
     if (el.classList.contains("seg-speaker")) {
       segs[i].characterId = el.value || null;
@@ -289,7 +289,7 @@ import { createProjects } from "/static/js/modules/projects.js";
         case "ArrowUp": case "ArrowDown": e.preventDefault(); waveform.adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;
         case "Delete":
           if (state.selectedSegs.size) {
-            store.pushUndo();
+            store.pushUndo("批量删除片段");
             (state.items || []).forEach(item => {
               const segs = segments.segsFor(item.id);
               const before = segs.length;
@@ -348,7 +348,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-clear-segs").addEventListener("click", () => {
       if (!state.currentItem) return;
       if (confirm("清空当前素材的全部片段？")) {
-        store.pushUndo();
+        store.pushUndo("清空片段");
         segments.segsFor(state.currentItem.id).length = 0;
         state.selectedSegs = new Set();
         store.scheduleSaveProject(); segments.renderSegments();
@@ -456,7 +456,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderAutoTrainingBtn: () => pool.renderAutoTrainingBtn(),
     renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
     attachActiveTasks: () => tasks.attachActiveTasks() });
-  tasks = createTasks({ $, api, toast, state,
+  tasks = createTasks({ $, api, toast, state, pushUndo: store.pushUndo,
     renderMediaList: projects.renderMediaList, refreshItems: projects.refreshItems,
     loadAllItemData: projects.loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),

@@ -214,7 +214,7 @@ export function createSegments(ctx) {
     if (!state.currentItem) return toast("请先导入素材");
     if (!state.selection) return toast("请先在波形上拖拽出选区");
     const segs = segsFor(state.currentItem.id);
-    pushUndo();
+    pushUndo("加入片段");
     const list = state.multiRegions.length >= 2 ? state.multiRegions : [];
     if (list.length) {
       list.forEach((m) => segs.push(newSegment(m.start, m.end)));
@@ -231,7 +231,7 @@ export function createSegments(ctx) {
     const segs = segsFor(itemId);
     const s = segs[i];
     if (s) state.selectedSegs.delete(s.id);
-    pushUndo();
+    pushUndo("删除片段");
     segs.splice(i, 1);
     scheduleSaveProject(itemId); renderSegments();
   }

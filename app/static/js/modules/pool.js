@@ -20,7 +20,7 @@ export function createPool(ctx) {
   }
 
   function reassignSegments(segIds, characterId) {
-    pushUndo();
+    pushUndo("重定向片段");
     let n = 0;
     const samples = [];
     (state.items || []).forEach(item => {
@@ -61,6 +61,7 @@ export function createPool(ctx) {
         body: JSON.stringify({ project_id: state.currentProject.id, samples: uniq }) });
       trackTask(j.task_id, async (result) => {
         state.identifying = false; fbBusy = false;
+        pushUndo("声纹反馈");   // 反馈会静默改绑大量片段，纳入撤销
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
         renderPool(); segments.renderSegments();
@@ -163,7 +164,7 @@ export function createPool(ctx) {
     const ch = charById(cid); if (!ch) return;
     const name = prompt("角色名称：", ch.name);
     if (name == null || !name.trim()) return;
-    pushUndo();
+    pushUndo("重命名角色");
     ch.name = name.trim();
     scheduleSavePool(); renderPool(); segments.renderSegments();
   }
@@ -171,7 +172,7 @@ export function createPool(ctx) {
     const ch = charById(cid); if (!ch) return;
     const n = segments.charSegs(cid).length;
     if (!confirm(`删除角色「${ch.name}」？其 ${n} 段片段将变为未分配`)) return;
-    pushUndo();
+    pushUndo("删除角色");
     state.characters = state.characters.filter(c => c.id !== cid);
     (state.items || []).forEach(item => {
       let changed = false;
@@ -182,7 +183,7 @@ export function createPool(ctx) {
   }
   function poolSetColor(cid, color) {
     const ch = charById(cid); if (!ch) return;
-    pushUndo();
+    pushUndo("修改配色");
     ch.color = color;
     scheduleSavePool(); renderPool(); segments.renderSegments();
   }
@@ -198,7 +199,7 @@ export function createPool(ctx) {
     const name = prompt("合并后角色名：", chs.map(c => c.name).join("+"));
     if (name == null || !name.trim()) return;
     const target = chs[0];
-    pushUndo();
+    pushUndo("合并角色");
     target.name = name.trim();
     target.speakerLabels = Array.from(new Set(chs.flatMap(c => c.speakerLabels || [])));
     state.characters = state.characters.filter(c => !ids.includes(c.id) || c.id === target.id);
@@ -214,7 +215,7 @@ export function createPool(ctx) {
   function createPoolCharacter() {
     const name = prompt("新角色名称：", "新角色");
     if (name == null || !name.trim()) return;
-    pushUndo();
+    pushUndo("新建角色");
     state.characters.push({ id: uid("char"), name: name.trim(), color: paletteNext(), speakerLabels: [], created: Date.now() });
     scheduleSavePool(); renderPool(); segments.renderSegments();
   }
@@ -235,6 +236,7 @@ export function createPool(ctx) {
         body: JSON.stringify({ reset: !!reset }) });
       trackTask(j.task_id, async (result) => {
         state.identifying = false;
+        pushUndo(reset ? "重新识别" : "说话人识别");   // 识别结果覆盖前快照，使识别本身可撤销
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
         renderPool(); segments.renderSegments(); renderSubs();
@@ -340,7 +342,12 @@ export function createPool(ctx) {
       const sid = dragSegId || e.dataTransfer.getData("text/plain");
       const item = state.items.find(x => x.id === dragSegItem);
       const seg = item ? segments.segsFor(item.id).find(s => s.id === sid) : null;
-      if (seg) { seg.characterId = card.dataset.poolChar || null; scheduleSaveProject(item.id); segments.renderSegments(); renderPool(); }
+      if (seg) {
+        pushUndo("拖拽重定向");   // 与右键重定向(reassignSegments)对齐：拖拽改指派同样可撤销
+        seg.characterId = card.dataset.poolChar || null;
+        seg.locked = true;   // 人工重定向 → 锁定（与 reassignSegments 一致）
+        scheduleSaveProject(item.id); segments.renderSegments(); renderPool();
+      }
     });
   }
 

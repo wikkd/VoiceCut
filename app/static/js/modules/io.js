@@ -60,7 +60,7 @@ export function createIo(ctx) {
     if (!confirm("将替换当前素材「" + item.name + "」的全部片段，确定继续？")) return;
     await saveProjectNow();
     toast("开始按静音自动切分…");
-    pushUndo();
+    pushUndo("自动切分");
     try {
       const j = await api(`/api/items/${item.id}/autosplit`, { method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -141,7 +141,7 @@ export function createIo(ctx) {
     if (!state.currentProject) return;
     const model = $("#tr-model").value;
     hideModal("#modal-transcribe");
-    pushUndo();
+    pushUndo("转写回填");
     let total = 0;
     (state.items || []).forEach((item) => {
       const segs = segsFor(item.id);
@@ -171,6 +171,7 @@ export function createIo(ctx) {
       const j = await api(`/api/items/${item.id}/align-speech`, { method: "POST",
         headers: { "Content-Type": "application/json" }, body: "{}" });
       trackTask(j.task_id, async (result) => {
+        pushUndo("对齐发音");   // 后端已改窗口并落盘，应用前快照使本次收缩可撤销
         await loadAllItemData();
         renderSegments();
         const changed = (result && result.changed) || 0;
@@ -190,6 +191,7 @@ export function createIo(ctx) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ project_id: state.currentProject.id }) });
       trackTask(j.task_id, async (result) => {
+        pushUndo("清晰度打分");   // 打分会写回 s.q，纳入撤销范围
         await loadAllItemData();
         renderSegments();
         toast(`清晰度打分完成：${result.scored} 段，平均 ${result.avg != null ? result.avg : "—"} 分（≥80 优 / 60~79 良 / <60 差）`);

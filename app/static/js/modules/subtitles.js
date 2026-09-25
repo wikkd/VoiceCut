@@ -57,7 +57,7 @@ export function createSubtitles(ctx) {
     const s = state.subs[i];
     if (!s) return;
     const segs = segsFor(state.currentItem.id);
-    pushUndo();
+    pushUndo("字幕加片段");
     segs.push(newSegment(s.start, s.end, s.text || ""));
     scheduleSaveProject();
     renderSegments();
@@ -68,7 +68,7 @@ export function createSubtitles(ctx) {
     if (state.currentSubIdx >= 0 && state.subs[state.currentSubIdx]) { addSubToSegments(state.currentSubIdx); return; }
     if (state.selection) {
       const segs = segsFor(state.currentItem.id);
-      pushUndo();
+      pushUndo("选区加片段");
       segs.push(newSegment(state.selection.start, state.selection.end));
       scheduleSaveProject();
       renderSegments();

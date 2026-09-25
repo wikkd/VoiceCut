@@ -3,7 +3,7 @@
 // 本模块在其他功能模块之前创建，trackTask 等对外是真函数；
 // 对 pool/segments/subtitles/waveform 的调用以闭包注入，规避模块创建顺序耦合。
 export function createTasks(ctx) {
-  const { $, api, toast, state,
+  const { $, api, toast, state, pushUndo,
           renderMediaList, refreshItems, loadAllItemData,
           renderPool, renderSegments, renderSubs, selectItem } = ctx;
 
@@ -18,6 +18,7 @@ export function createTasks(ctx) {
   // 后台自动分析完成：刷新角色池 / 素材 / 片段 / 字幕
   async function autoAnalyzeDone(result) {
     if (!result) return;
+    pushUndo("说话人识别");   // 识别结果覆盖前快照（导入自动分析 / 刷新后重挂任务均覆盖）
     if (Array.isArray(result.characters)) state.characters = result.characters;
     try {
       if (state.currentProject) {

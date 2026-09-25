@@ -130,21 +130,24 @@ export function createStore(ctx) {
   }
 
   // ── 撤销 / 重做（片段 + 角色池，快照式，刷新即清空） ──
+  // pushUndo(label)：label 用于撤销/重做时在 toast 中显示是哪一步操作。
   const UNDO_MAX = 50;
-  const undoStack = [];
+  const undoStack = [];   // 元素 { snap, label }
   const redoStack = [];
   function workspaceSnapshot() {
     const segs = {};
     state.segmentsByItem.forEach((list, id) => { segs[id] = JSON.parse(JSON.stringify(list || [])); });
     return { segs, characters: JSON.parse(JSON.stringify(state.characters || [])) };
   }
-  function pushUndo() {
-    undoStack.push(workspaceSnapshot());
+  function pushUndo(label) {
+    undoStack.push({ snap: workspaceSnapshot(), label: label || "操作" });
     if (undoStack.length > UNDO_MAX) undoStack.shift();
     redoStack.length = 0;
   }
   function restoreSnapshot(snap) {
-    const segs = new Map();
+    // 合并式恢复：仅覆盖快照中存在的素材，保留快照之后新加载/新导入素材的数据，
+    // 避免 undo 把新素材的片段从内存里整个抹掉。
+    const segs = new Map(state.segmentsByItem);
     Object.keys(snap.segs || {}).forEach(id => segs.set(id, snap.segs[id]));
     state.segmentsByItem = segs;
     state.characters = snap.characters || [];
@@ -160,15 +163,17 @@ export function createStore(ctx) {
   }
   function undo() {
     if (!undoStack.length) return toast("没有可撤销的操作");
-    redoStack.push(workspaceSnapshot());
-    restoreSnapshot(undoStack.pop());
-    toast("已撤销");
+    const entry = undoStack.pop();
+    redoStack.push({ snap: workspaceSnapshot(), label: entry.label });
+    restoreSnapshot(entry.snap);
+    toast("已撤销：" + entry.label);
   }
   function redo() {
     if (!redoStack.length) return toast("没有可重做的操作");
-    undoStack.push(workspaceSnapshot());
-    restoreSnapshot(redoStack.pop());
-    toast("已重做");
+    const entry = redoStack.pop();
+    undoStack.push({ snap: workspaceSnapshot(), label: entry.label });
+    restoreSnapshot(entry.snap);
+    toast("已重做：" + entry.label);
   }
 
   function fillItemStates(states) {
