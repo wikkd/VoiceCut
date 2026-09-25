@@ -658,3 +658,7 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
   border-radius: 6px; padding: 6px 10px; text-align: left;
 }
 #busy-overlay .busy-log-line { white-space: pre-wrap; word-break: break-all; }
+
+/* 角色卡片：已吸收声纹样本数（进化程度可见） */
+.pool-emb { font-size: 10px; color: var(--muted, #9aa); margin-left: 6px; white-space: nowrap; }
+.pool-emb.strong { color: var(--accent, #6c9cff); font-weight: 600; }

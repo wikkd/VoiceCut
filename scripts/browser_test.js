@@ -184,6 +184,22 @@ const makeWav = (seconds, sr = 16000) => {
       vc.openPool();
       const poolVisible = !document.querySelector('#pool-view').classList.contains('hidden');
       const poolCards = document.querySelectorAll('#pool-grid .pool-card').length;
+      // 角色卡片声纹样本数徽标（emb_count 可见化：<10 弱化 / >=10 高亮）
+      const embProbe = (() => {
+        const made = !vc.state.characters.length;
+        if (made) vc.state.characters.push({ id: 'c-emb', name: '样本测试', color: '#ff6600' });
+        vc.state.characters[0].emb_count = 3;
+        vc.renderPool();
+        const e1 = document.querySelector('#pool-grid .pool-card .pool-emb');
+        const weak = !!e1 && e1.textContent.includes('3') && !e1.classList.contains('strong');
+        vc.state.characters[0].emb_count = 12;
+        vc.renderPool();
+        const e2 = document.querySelector('#pool-grid .pool-card .pool-emb');
+        const strong = !!e2 && e2.textContent.includes('12') && e2.classList.contains('strong');
+        if (made) vc.state.characters = vc.state.characters.filter(c => c.id !== 'c-emb');
+        vc.renderPool();
+        return { weak, strong };
+      })();
       const segs = vc.state.segmentsByItem.get(vc.state.currentItem.id);
       segs.push(vc.newSegment(0, 5, "test"));
       vc.renderSegments();
@@ -297,7 +313,9 @@ const makeWav = (seconds, sr = 16000) => {
       if (_ai >= 0) _audList.splice(_ai, 1);
       // 把关键可见性并入 ok：此前只打印不判定，曾漏掉右键重定向菜单打不开的回归
       return { ok: poolVisible && redirVisible && mediaMenuVisible && bbIsTextarea && cancelBtn && hasAutosplitMenu
-               && !!a1 && a1.focusKept && a1.draftNotSaved && a1.discarded && a1.committed,
+               && !!a1 && a1.focusKept && a1.draftNotSaved && a1.discarded && a1.committed
+               && !!embProbe && embProbe.weak && embProbe.strong,
+               embProbe,
                poolVisible, poolCards, spkOptions, redirVisible, mediaMenuVisible,
                mmLeft, mmTime, bbIsTextarea, cancelBtn, segCount: (vc.state.segmentsByItem.get(itId) || []).length,
                hasProjectSelect, projectSelectOpts, projectName, srcCells, poolTitle,

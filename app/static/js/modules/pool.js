@@ -89,6 +89,8 @@ export function createPool(ctx) {
         ${ch ? `<input type="color" class="pool-color" data-char="${ch.id}" value="${esc(ch.color)}" title="修改颜色">` : ""}
         <span class="pool-name">${isU ? "未分配" : esc(ch.name)}</span>
         <span class="pool-count">${mine.length} 段</span>
+        ${ch ? `<span class="pool-emb${(ch.emb_count || 0) >= 10 ? " strong" : ""}"
+          title="已吸收 ${ch.emb_count || 0} 条声纹样本（每次人工修正说话人都会计入，样本越多质心越稳）">🧬 ${ch.emb_count || 0}</span>` : ""}
       </div>
       ${ch && (ch.speakerLabels || []).length ? `<div class="pool-labels">自动标签: ${ch.speakerLabels.map(esc).join("、")}</div>` : ""}
       ${ch && ch.sample_url ? `<div class="pool-sample">
