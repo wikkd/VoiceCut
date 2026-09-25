@@ -413,7 +413,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderPool: () => pool.renderPool() });
   projects = createProjects({ $, esc, fmtDur, toast, api, state, LS_PROJECT,
     loadProject: store.loadProject, saveProjectNow: store.saveProjectNow,
-    savePoolNow: store.savePoolNow,
+    savePoolNow: store.savePoolNow, setPage,
     selectItem: (item) => waveform.selectItem(item),
     resetWaveUI: () => { waveform.updatePlayUI(); waveform.updateSelUI(); waveform.updateTransport(); },
     renderPool: () => pool.renderPool(),

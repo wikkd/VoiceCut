@@ -5,7 +5,7 @@ export function createProjects(ctx) {
   const { $, esc, fmtDur, toast, api, state, LS_PROJECT,
           loadProject, saveProjectNow, savePoolNow,
           selectItem, resetWaveUI, renderPool, renderAutoAnalyzeBtn,
-          renderSegments, renderSubs, attachActiveTasks } = ctx;
+          renderSegments, renderSubs, attachActiveTasks, setPage } = ctx;
 
   // ── 素材列表 ──
   function _mediaLi(item) {
@@ -27,15 +27,117 @@ export function createProjects(ctx) {
     return li;
   }
   function renderMediaList() {
-    const pairs = [["#media-list", "#media-empty"], ["#media-page-list", "#media-page-empty"]];
-    pairs.forEach(([ulSel, emptySel]) => {
-      const ul = $(ulSel), empty = $(emptySel);
-      if (!ul) return;
+    // 侧栏列表（工作区左侧）
+    const ul = $("#media-list"), empty = $("#media-empty");
+    if (ul) {
       ul.innerHTML = "";
       if (empty) empty.classList.toggle("hidden", state.items.length > 0);
       state.items.forEach((item) => ul.appendChild(_mediaLi(item)));
-    });
+    }
+    // 素材库页（卡片 + 搜索/排序/统计）
+    const pul = $("#media-page-list"), pempty = $("#media-page-empty"), stats = $("#media-page-stats");
+    if (pul) {
+      pul.innerHTML = "";
+      const items = _visibleItems();
+      items.forEach((item) => pul.appendChild(_mediaCard(item)));
+      if (pempty) {
+        pempty.classList.toggle("hidden", state.items.length > 0);
+        pempty.textContent = mediaFilter ? "没有匹配的素材" : "拖拽文件到窗口，或点「导入文件」";
+      }
+      if (stats) {
+        const total = state.items.reduce((s, it) => s + (it.duration || 0), 0);
+        const scope = mediaFilter ? `${items.length} / ${state.items.length} 个素材` : `${state.items.length} 个素材`;
+        stats.textContent = `${scope} · 总时长 ${fmtDur(total)}`;
+      }
+    }
   }
+
+  // ── 素材库页卡片 ──
+  let mediaFilter = "";
+  let mediaSort = "default";
+  const peaksCache = new Map();   // item.id -> peaks [[min,max],...]
+
+  function _visibleItems() {
+    let items = state.items.slice();
+    if (mediaFilter) {
+      const q = mediaFilter.toLowerCase();
+      items = items.filter((it) => (it.name || "").toLowerCase().includes(q));
+    }
+    if (mediaSort === "name") items.sort((a, b) => (a.name || "").localeCompare(b.name || "", "zh"));
+    else if (mediaSort === "dur") items.sort((a, b) => (b.duration || 0) - (a.duration || 0));
+    return items;
+  }
+
+  function _paintWave(canvas, peaks) {
+    if (!canvas) return;
+    const w = canvas.clientWidth || 220, h = canvas.clientHeight || 44;
+    canvas.width = w; canvas.height = h;
+    const g = canvas.getContext("2d");
+    g.clearRect(0, 0, w, h);
+    if (!peaks || !peaks.length) return;
+    let max = 0.01;
+    for (const p of peaks) max = Math.max(max, Math.abs(p[0]), Math.abs(p[1]));
+    g.fillStyle = "rgba(108,156,255,0.55)";
+    const cols = Math.min(peaks.length, Math.floor(w / 2));
+    const step = peaks.length / cols;
+    for (let i = 0; i < cols; i++) {
+      const p = peaks[Math.floor(i * step)];
+      const bh = Math.max(2, ((Math.abs(p[0]) + Math.abs(p[1])) / (2 * max)) * h);
+      g.fillRect(i * 2, (h - bh) / 2, 1.4, bh);
+    }
+  }
+
+  function _loadWave(canvas, item) {
+    if (peaksCache.has(item.id)) { _paintWave(canvas, peaksCache.get(item.id)); return; }
+    api(`/api/peaks/${item.id}`).then((j) => {
+      peaksCache.set(item.id, j.peaks || []);
+      _paintWave(canvas, j.peaks || []);
+    }).catch(() => {});
+  }
+
+  function _mediaCard(item) {
+    const li = document.createElement("li");
+    li.dataset.id = item.id;
+    if (state.currentItem && state.currentItem.id === item.id) li.classList.add("active");
+    const kindMap = { video: "视频", audio: "音频", denoised: "降噪", vocal: "人声",
+                      instrumental: "伴奏", trimmed: "去静音", bilibili: "B站", url: "网络" };
+    const kind = kindMap[item.kind] || item.kind;
+    const parent = item.derived_from ? state.items.find((x) => x.id === item.derived_from) : null;
+    const derived = parent ? `派生自 ${esc(parent.name)}` : "";
+    const srcTag = (item.kind === "bilibili" || item.kind === "url") ? "网络导入" : "";
+    li.innerHTML = `
+      <div class="m-wave-wrap"><canvas class="m-wave"></canvas></div>
+      <div class="m-name" title="${esc(item.name)}">${esc(item.name)}</div>
+      <div class="m-meta">
+        <span class="m-badge k-${esc(item.kind)}">${kind}</span>
+        <span class="m-dur">${fmtDur(item.duration)}</span>
+        ${item.sample_rate ? `<span class="m-dim">${Math.round(item.sample_rate / 1000)} kHz</span>` : ""}
+        <span class="m-grow"></span>
+        <button class="m-del" title="删除素材">✕</button>
+      </div>
+      ${derived || srcTag ? `<div class="m-sub">${derived}${derived && srcTag ? " · " : ""}${srcTag}</div>` : ""}`;
+    li.addEventListener("click", () => selectItem(item));
+    li.addEventListener("dblclick", () => { selectItem(item); if (setPage) setPage("edit"); });
+    li.addEventListener("contextmenu", (e) => { e.preventDefault(); showMediaMenu(e.clientX, e.clientY, item); });
+    li.querySelector(".m-del").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteMediaItem(item);
+    });
+    _loadWave(li.querySelector(".m-wave"), item);
+    return li;
+  }
+
+  // 素材库页工具行（搜索 / 排序），一次性绑定
+  const searchInput = $("#media-search");
+  if (searchInput) searchInput.addEventListener("input", () => {
+    mediaFilter = searchInput.value.trim();
+    renderMediaList();
+  });
+  const sortSel = $("#media-sort");
+  if (sortSel) sortSel.addEventListener("change", () => {
+    mediaSort = sortSel.value;
+    renderMediaList();
+  });
   // 素材右键菜单：删除 / 重命名 / 添加到工作区
   function showMediaMenu(x, y, item) {
     const menu = $("#media-menu");

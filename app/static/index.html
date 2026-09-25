@@ -235,12 +235,24 @@
   <section id="page-media" class="vc-page hidden">
     <div class="page-head">
       <span class="page-title">素材库</span>
+      <span id="media-page-stats" class="chip">—</span>
+      <span class="spacer"></span>
       <button id="btn-import2" class="btn primary">导入文件</button>
       <button id="btn-url2" class="btn">从 URL 导入</button>
       <button id="btn-auto-analyze2" class="btn" title="导入后自动生成字幕并识别说话人">自动分析</button>
       <button id="btn-pool2" class="btn">角色池</button>
-      <span class="spacer"></span>
+    </div>
+    <div id="media-page-toolbar">
+      <input id="media-search" type="text" placeholder="搜索素材名称…">
+      <label class="chip">排序
+        <select id="media-sort">
+          <option value="default" selected>导入顺序</option>
+          <option value="name">名称</option>
+          <option value="dur">时长 ↓</option>
+        </select>
+      </label>
       <label class="chip">项目 <select id="project-select2"></select></label>
+      <span class="muted" id="media-page-hint">单击载入工作区 · 双击进入剪辑 · 右键更多操作</span>
     </div>
     <div id="media-page-body">
       <ul id="media-page-list"></ul>
