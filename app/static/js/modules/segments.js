@@ -29,6 +29,18 @@ export function createSegments(ctx) {
   function charSegs(cid) {
     return allSegs().filter(r => (cid ? r.seg.characterId === cid : !r.seg.characterId));
   }
+  // 状态标签文本：合规/问题 + 清晰度分数（有分时附后）
+  function _tagText(seg, issues) {
+    const base = issues.length ? issues.join("，") : "合规";
+    return seg.q != null ? `${base} · ${Math.round(seg.q)}分` : base;
+  }
+  // 分数档位类：>=80 ok（绿）、60~79 warn（黄）、<60 bad（红）；无分数不染色
+  function _qCls(seg, tagCls) {
+    if (seg.q == null || tagCls === "bad") return tagCls;
+    if (seg.q < 60) return "bad";
+    if (seg.q < 80 && tagCls === "ok") return "warn";
+    return tagCls;
+  }
   function updateSegBadge(itemId, i) {
     const tr = $(`#seg-tbody tr.seg-row[data-item="${itemId}"][data-i="${i}"]`);
     if (!tr) return;
@@ -36,10 +48,9 @@ export function createSegments(ctx) {
     const seg = segs[i];
     if (!seg) return;
     const issues = segIssues(seg);
-    const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
-    const tagTxt = issues.length ? issues.join("，") : "合规";
+    const tagCls = _qCls(seg, issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok");
     const cell = tr.querySelector(".tag");
-    if (cell) { cell.className = "tag " + tagCls; cell.textContent = tagTxt; }
+    if (cell) { cell.className = "tag " + tagCls; cell.textContent = _tagText(seg, issues); }
     tr.classList.toggle("bad", issues.length > 0);
     const ch = charById(seg.characterId);
     tr.style.borderLeft = ch ? "4px solid " + ch.color : "";
@@ -83,8 +94,8 @@ export function createSegments(ctx) {
   function _buildRow(item, seg, i) {
     const issues = segIssues(seg);
     const cls = issues.length ? "bad" : "";
-    const tagCls = issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok";
-    const tagTxt = issues.length ? issues.join("，") : "合规";
+    const tagCls = _qCls(seg, issues.length ? (issues.some(x => x === "空文本" || x === "混合") ? "warn" : "bad") : "ok");
+    const tagTxt = _tagText(seg, issues);
     const ch = charById(seg.characterId);
     const tr = document.createElement("tr");
     tr.className = "seg-row" + (cls ? " " + cls : "") + (state.selectedSegs.has(seg.id) ? " sel" : "")

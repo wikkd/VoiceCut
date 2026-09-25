@@ -5,7 +5,7 @@
 // 说话人分段
 /** @typedef {{start: number, end: number, label: string|null}} SpeakerSeg */
 // 训练片段（对应 /api/items/<id>/project 的 segments）
-/** @typedef {{id: string, start: number, end: number, text: string, language: "JP"|"ZH"|"EN", speakerLabel?: string|null, characterId?: string|null, mixed?: boolean, locked?: boolean}} Segment */
+/** @typedef {{id: string, start: number, end: number, text: string, language: "JP"|"ZH"|"EN", speakerLabel?: string|null, characterId?: string|null, mixed?: boolean, locked?: boolean, q?: number|null}} Segment */
 // 素材（对应 /api/items）
 /** @typedef {{id: string, name: string, kind: string, duration: number, sample_rate?: number, video_url?: string|null, peaks?: number[][]|null, peaks_url?: string, project_id?: string}} Item */
 // 实时字幕行

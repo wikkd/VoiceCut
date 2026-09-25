@@ -170,6 +170,7 @@
         <span class="grip-title">片段列表 <small id="seg-count"></small></span>
         <button id="btn-add-seg" class="chip">加片段</button>
         <button id="btn-transcribe" class="chip">批量转写</button>
+        <button id="btn-quality-scan" class="chip" data-act="quality-scan" title="为全部片段做人声清晰度打分（0~100）">清晰度</button>
         <div class="menu seg-menu">
           <button class="menu-title chip" title="更多操作">⋯</button>
           <div class="menu-items">
@@ -391,11 +392,14 @@
   <div id="modal-dataset" class="modal-mask hidden">
     <div class="modal">
       <h3>导出训练集（GPT-SoVITS）</h3>
-      <p class="muted">生成 001.wav + 001.txt + list.txt，32kHz 单声道，自动去静音 + 响度标准化；空文本/过短片段跳过。</p>
+      <p class="muted">生成 001.wav + 001.txt + list.txt，32kHz 单声道，自动去静音 + 响度标准化；空文本/过短片段跳过。list.txt 按清晰度分数降序排列（高分片段优先）。</p>
       <label>说话人
         <input id="ds-speaker" type="text" value="speaker" placeholder="speaker">
       </label>
       <label class="toggle"><input type="checkbox" id="ds-per-speaker" checked> 按说话人分目录导出（每角色 train/val 子目录）</label>
+      <label>清晰度阈值（低于该分的片段跳过，0=不过滤；先在片段面板点「清晰度」打分）
+        <input id="ds-min-score" type="number" min="0" max="100" step="5" value="60">
+      </label>
       <label>验证集比例
         <select id="ds-val-ratio">
           <option value="0">不分验证集</option>

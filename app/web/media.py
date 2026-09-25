@@ -9,15 +9,18 @@ from pathlib import Path
 from flask import Blueprint, current_app, jsonify, request
 
 from app import dataset as dataset_mod
+from app import db as db_mod
 from app import denoise as denoise_mod
 from app import project as project_mod
 from app import separate as separate_mod
 from app import subtitles as subtitles_mod
 from app import transcribe as transcribe_mod
-from app.audio_ops import compute_peaks
+from app import voice_quality as vq_mod
+from app.audio_ops import compute_peaks, read_wav
 from app.ffmpeg_util import export_segment, extract_audio, remux_preview, trim_silence
 from app.media_store import MediaItem
 from app.streaming import stream_file
+from app.tasks import TaskCancelled
 
 bp = Blueprint("media", __name__)
 
@@ -360,13 +363,16 @@ def api_dataset_export() -> object:
                 text=(s.get("text") or "").strip(),
                 language=(s.get("language") or language),
                 speaker=(s.get("speaker") or speaker),
+                score=(float(s["q"]) if s.get("q") is not None else None),
             )
             for s in clips
         ]
         out_dir = out_dir or str(c.cfg.workdir / "datasets" / f"{body['project_id']}_{int(time.time())}")
         layout = body.get("layout") or "flat"
         val_ratio = float(body.get("val_ratio") or 0.0)
-        tid = c.tasks.submit(_dataset_worker, c, sources, ds_segs, Path(out_dir), layout, val_ratio)
+        min_score = float(body.get("min_score") or 0.0)
+        tid = c.tasks.submit(_dataset_worker, c, sources, ds_segs, Path(out_dir),
+                             layout, val_ratio, min_score)
         return jsonify({"task_id": tid})
 
     item = c.store.require(body.get("item_id"))
@@ -388,8 +394,72 @@ def api_dataset_export() -> object:
 
 
 def _dataset_worker(c, sources, ds_segs: list, out_dir: Path,
-                    layout: str = "flat", val_ratio: float = 0.0) -> dict:
+                    layout: str = "flat", val_ratio: float = 0.0,
+                    min_score: float = 0.0) -> dict:
     tid = c.tasks.current_task_id()
     return dataset_mod.export_dataset(sources, ds_segs, out_dir,
                                       tasks=c.tasks, task_id=tid,
-                                      layout=layout, val_ratio=val_ratio)
+                                      layout=layout, val_ratio=val_ratio,
+                                      min_score=min_score)
+
+
+# ── 清晰度打分 ───────────────────────────────────────────
+
+@bp.post("/api/quality/scan")
+def api_quality_scan() -> object:
+    """项目内全部片段做人声清晰度打分，结果写回 seg["q"]（0~100）。
+
+    打分只读音频、不改文本/角色，对 locked 片段同样适用。
+    """
+    c = ctx()
+    body = request.get_json(force=True) or {}
+    project_id = body.get("project_id")
+    if not project_id or db_mod.fetch_project_record(
+            db_mod.get_conn(c.cfg.workdir), project_id) is None:
+        return jsonify({"error": "project not found"}), 404
+    tid = c.tasks.submit(_quality_scan_worker, c, project_id)
+    return jsonify({"task_id": tid})
+
+
+def _quality_scan_worker(c, project_id: str) -> dict:
+    tid = c.tasks.current_task_id()
+    items = [it for it in c.store.by_project(project_id)
+             if it.wav_path and Path(it.wav_path).exists()]
+    total = 0
+    for it in items:
+        total += len(project_mod.load_project(c.cfg.workdir, it.id)["segments"])
+    if not total:
+        return {"scored": 0, "items": [], "avg": None}
+    done = 0
+    scored = 0
+    q_sum = 0.0
+    items_out = []
+    for it in items:
+        if c.tasks.cancelled(tid):
+            raise TaskCancelled()
+        pj = project_mod.load_project(c.cfg.workdir, it.id)
+        if not pj["segments"]:
+            continue
+        try:
+            data, sr = read_wav(it.wav_path)
+        except Exception:
+            continue
+        n = data.shape[0]
+        changed = False
+        for seg in pj["segments"]:
+            s = max(0, int(float(seg.get("start", 0)) * sr))
+            e = min(int(float(seg.get("end", 0)) * sr), n)
+            res = (vq_mod.score_clip_data(data[s:e], sr) if e > s
+                   else {"q": 0.0})
+            seg["q"] = res["q"]
+            q_sum += res["q"]
+            scored += 1
+            changed = True
+        done += len(pj["segments"])
+        if changed:
+            project_mod.save_project(c.cfg.workdir, it.id, pj)
+        items_out.append({"id": it.id, "count": len(pj["segments"])})
+        c.tasks.update(tid, progress=done / total,
+                       message=f"清晰度打分 {done}/{total}")
+    return {"scored": scored, "items": items_out,
+            "avg": round(q_sum / scored, 1) if scored else None}

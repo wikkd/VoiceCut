@@ -41,6 +41,7 @@ class DatasetSegment:
     language: str = "JP"
     speaker: str = "speaker"
     note: str = ""                      # subjective tag: clean / bgm / reverb
+    score: float | None = None          # 人声清晰度分 (0~100, voice_quality)
     ok: bool | None = None              # validation result (filled on export)
     issues: list[str] = field(default_factory=list)
 
@@ -60,7 +61,7 @@ def _default_workers() -> int:
 
 
 def _build_work(out_dir: Path, groups: dict, order: list, *, per_speaker: bool,
-                val_n: int, min_dur: float) -> tuple:
+                val_n: int, min_dur: float, min_score: float = 0.0) -> tuple:
     """Sequential pre-pass: skip/val/index decision identical to old logic.
 
     Returns (items, skipped); item[0] (seq) is the final output order.
@@ -86,6 +87,9 @@ def _build_work(out_dir: Path, groups: dict, order: list, *, per_speaker: bool,
                 continue
             if seg.end - seg.start < min_dur:
                 skipped.append({"reason": f"片段过短(<{min_dur:.1f}s)", "seg": seg})
+                continue
+            if min_score > 0 and seg.score is not None and seg.score < min_score:
+                skipped.append({"reason": f"清晰度过低({seg.score:.0f}分)", "seg": seg})
                 continue
             is_val = bool(val_dir) and bool(val_n) and ((gi + 1) % val_n == 0)
             target_dir = val_dir if is_val else train_dir
@@ -204,6 +208,7 @@ def export_dataset(
     trim: bool = True,
     normalize: bool = True,
     min_dur: float = 0.8,
+    min_score: float = 0.0,
     layout: str = "flat",
     val_ratio: float = 0.0,
     workers: int | None = None,
@@ -252,9 +257,15 @@ def export_dataset(
             order.append(key)
         groups[key].append(seg)
 
+    # 分数降序（组内）：高清晰度片段排前 = 训练的主要素材；无分数的排其后
+    if any(g.score is not None for grp in groups.values() for g in grp):
+        for key in order:
+            groups[key].sort(
+                key=lambda s: -(s.score if s.score is not None else -1.0))
+
     items, skipped = _build_work(out_dir, groups, order,
                                  per_speaker=per_speaker, val_n=val_n,
-                                 min_dur=min_dur)
+                                 min_dur=min_dur, min_score=min_score)
     written = _run_export(
         _src, out_dir, items, len(skipped), len(segments), workers=workers,
         tasks=tasks, task_id=task_id, sample_rate=sample_rate,
@@ -303,6 +314,7 @@ def export_dataset(
     list_lines = [_line(w) for w in written]
     list_file.write_text("\n".join(list_lines) + ("\n" if list_lines else ""),
                          encoding="utf-8")
+    list_content = "\n".join(list_lines) + ("\n" if list_lines else "")
 
     return {
         "out_dir": str(out_dir),
@@ -312,7 +324,7 @@ def export_dataset(
                     for s in skipped],
         "files": [w["rel"] for w in written],
         "list_file": str(list_file),
-        "list_content": "".join(list_lines),
+        "list_content": list_content,
         "layout": layout,
         "speakers": speaker_summaries,
     }

@@ -208,6 +208,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       "trim": () => io.doTrim(),
       "transcribe": () => io.openTranscribeModal(),
       "dataset-export": () => io.openDatasetModal(),
+      "quality-scan": () => io.doQualityScan(),
       "autosplit": () => showModal("#modal-autosplit"),
       "undo": store.undo,
       "redo": store.redo,
@@ -454,6 +455,7 @@ import { createProjects } from "/static/js/modules/projects.js";
   io = createIo({ $, api, state, toast, trackTask: tasks.trackTask, needItem,
     selectResultItem: tasks.selectResultItem, autoAnalyzeDone: tasks.autoAnalyzeDone,
     showModal, hideModal, showResult, saveProjectNow: store.saveProjectNow, pushUndo: store.pushUndo, loadProject: store.loadProject,
+    loadAllItemData: projects.loadAllItemData,
     renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById: store.charById, scheduleSaveProject: store.scheduleSaveProject,
     fmtSel, fmtT });
   waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,

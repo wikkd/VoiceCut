@@ -4,6 +4,7 @@
 export function createIo(ctx) {
   const { $, api, state, toast, trackTask, needItem, selectResultItem, autoAnalyzeDone,
           showModal, hideModal, showResult, saveProjectNow, pushUndo, loadProject,
+          loadAllItemData,
           renderSegments, segsFor, charById, scheduleSaveProject, fmtSel, fmtT } = ctx;
 
   // ── 导入 ───────────────────────────────────────────────
@@ -161,6 +162,22 @@ export function createIo(ctx) {
     toast(`转写 ${total} 段（${model}）…`);
   }
 
+  // ── 清晰度打分 ─────────────────────────────────────────
+  async function doQualityScan() {
+    if (!state.currentProject) return toast("请先选择项目");
+    try {
+      const j = await api("/api/quality/scan", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: state.currentProject.id }) });
+      trackTask(j.task_id, async (result) => {
+        await loadAllItemData();
+        renderSegments();
+        toast(`清晰度打分完成：${result.scored} 段，平均 ${result.avg != null ? result.avg : "—"} 分（≥80 优 / 60~79 良 / <60 差）`);
+      });
+      toast("清晰度打分中…");
+    } catch (e) { toast("清晰度打分启动失败: " + e.message, 6000); }
+  }
+
   // ── 训练集导出 ─────────────────────────────────────────
   function openDatasetModal() {
     if (!state.currentProject) return toast("请先选择项目");
@@ -172,12 +189,22 @@ export function createIo(ctx) {
     if (!state.currentProject) return;
     hideModal("#modal-dataset");
     const clips = [];
+    let nScored = 0;
     (state.items || []).forEach(item => {
-      segsFor(item.id).forEach(s => clips.push({
-        item_id: item.id, start: s.start, end: s.end, text: s.text,
-        language: s.language, speaker: (charById(s.characterId) || {}).name || "",
-      }));
+      segsFor(item.id).forEach(s => {
+        clips.push({
+          item_id: item.id, start: s.start, end: s.end, text: s.text,
+          language: s.language, speaker: (charById(s.characterId) || {}).name || "",
+          q: s.q != null ? s.q : null,
+        });
+        if (s.q != null) nScored++;
+      });
     });
+    if (!nScored) {
+      const go = confirm("片段尚未打清晰度分（将不做过滤/排序）。是否先去片段面板点「清晰度」打分？\n确定=继续导出，取消=中止");
+      if (!go) return;
+    }
+    const minScore = Number($("#ds-min-score") && $("#ds-min-score").value) || 0;
     toast("导出训练集…");
     try {
       const j = await api("/api/dataset/export", { method: "POST",
@@ -189,6 +216,7 @@ export function createIo(ctx) {
           language: $("#ds-language").value,
           layout: $("#ds-per-speaker").checked ? "per_speaker" : "flat",
           val_ratio: Number($("#ds-val-ratio").value) || 0,
+          min_score: minScore,
           out_dir: $("#ds-outdir").value.trim() || undefined,
         }) });
       trackTask(j.task_id, (result) => {
@@ -203,5 +231,6 @@ export function createIo(ctx) {
 
   return { importDialog, uploadFile, doDenoise, doSeparate, doTrim, doAutosplit,
            openExportModal, doExportSelection, doUrlOpen,
-           openTranscribeModal, doTranscribe, openDatasetModal, doDatasetExport };
+           openTranscribeModal, doTranscribe, doQualityScan,
+           openDatasetModal, doDatasetExport };
 }
