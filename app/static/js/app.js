@@ -464,6 +464,34 @@ import { createProjects } from "/static/js/modules/projects.js";
       if (training) training.loadTraining(false);
     }
   }, 8000);
+  // ── 顶栏性能显示（CPU / 内存 / GPU，3s 轮询，后台标签页暂停） ──
+  function perfLevel(v) { return v >= 85 ? "lv-bad" : v >= 60 ? "lv-warn" : ""; }
+  function startPerfMonitor() {
+    const elCpu = document.getElementById("perf-cpu");
+    const elMem = document.getElementById("perf-mem");
+    const elGpu = document.getElementById("perf-gpu");
+    const chip = document.getElementById("perf-chip");
+    if (!elCpu) return;
+    const gb = (b) => (b / 1073741824).toFixed(1);
+    async function tick() {
+      if (document.hidden) return;
+      try {
+        const j = await api("/api/sysperf");
+        const set = (el, v) => { el.textContent = Math.round(v) + "%"; el.className = perfLevel(v); };
+        set(elCpu, j.cpu); set(elMem, j.mem);
+        if (j.gpu) set(elGpu, j.gpu.util);
+        else { elGpu.textContent = "N/A"; elGpu.className = "off"; }
+        if (chip) chip.title =
+          `CPU ${Math.round(j.cpu)}%（${j.cpu_cores} 核）\n` +
+          `内存 ${Math.round(j.mem)}%（${gb(j.mem_used)} / ${gb(j.mem_total)} GB）\n` +
+          (j.gpu ? `GPU ${j.gpu.name}：负载 ${Math.round(j.gpu.util)}%，显存 ${gb(j.gpu.vram_used)} / ${gb(j.gpu.vram_total)} GB`
+                 : "GPU：未检测到 NVIDIA 显卡");
+      } catch (e) { /* 后端未就绪，下轮重试 */ }
+    }
+    tick();
+    setInterval(tick, 3000);
+  }
+  startPerfMonitor();
   function beaconSave() {
     try {
       Array.from(state.dirtyItems).forEach(id => {

@@ -18,6 +18,7 @@ from app.web import bilibili as bilibili_bp
 from app.web import media as media_bp
 from app.web import projects as projects_bp
 from app.web import subtitles as subtitles_bp
+from app.web import sysinfo as sysinfo_bp
 from app.web import tasks as tasks_bp
 from app.web import training as training_bp
 from app.web.context import WebContext
@@ -74,4 +75,5 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     app.register_blueprint(training_bp.bp)
     app.register_blueprint(tasks_bp.bp)
     app.register_blueprint(bilibili_bp.bp)
+    app.register_blueprint(sysinfo_bp.bp)
     return app

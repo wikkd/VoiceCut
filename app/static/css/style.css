@@ -80,6 +80,21 @@ input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
 .menu-items button:hover { background: var(--panel-3); }
 .menu-sep { height: 1px; background: var(--border); margin: 5px 4px; }
 
+/* ── 顶栏性能显示（CPU / 内存 / GPU） ───────────── */
+#perf-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin-left: 12px; padding: 3px 10px; border-radius: 12px;
+  background: var(--panel-2); border: 1px solid var(--border);
+  font-size: 11px; color: var(--muted); user-select: none;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+#perf-chip .p-item { display: inline-flex; align-items: center; gap: 4px; }
+#perf-chip .p-sep { width: 1px; height: 10px; background: var(--border); }
+#perf-chip b { font-weight: 600; color: var(--ok); min-width: 30px; text-align: right; }
+#perf-chip b.lv-warn { color: var(--warn); }
+#perf-chip b.lv-bad { color: var(--danger); }
+#perf-chip b.off { color: var(--muted); }
+
 /* ── ② 工具栏 ─────────────────────────────── */
 #toolbar {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
