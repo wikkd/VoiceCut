@@ -3,7 +3,7 @@ import Timeline from "/static/vendor/plugins/timeline.esm.js";
 import Regions from "/static/vendor/plugins/regions.esm.js";
 import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
-import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN,
+import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, LS_PROJECT,
          SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
 import { state, toast, toastBusy, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
@@ -15,6 +15,7 @@ import { createSegments } from "/static/js/modules/segments.js";
 import { createPool } from "/static/js/modules/pool.js";
 import { createTasks } from "/static/js/modules/tasks.js";
 import { createStore } from "/static/js/modules/store.js";
+import { createProjects } from "/static/js/modules/projects.js";
 
 // VoiceCut 前端 — wavesurfer v7 (UMD) + Flask REST
 (() => {
@@ -28,210 +29,20 @@ import { createStore } from "/static/js/modules/store.js";
     document.body.dataset.vc = "error";
     $("#boot-state").textContent = "❌ " + msg;
   }
-  const LS_PROJECT = "vc.project.v1";
   async function boot() {
     if (typeof WaveSurfer === "undefined") return fail("wavesurfer 未加载");
     try {
       const cfg = await api("/api/config");
-      const projects = await api("/api/projects");
-      state.projects = projects;
-      renderProjectSelect();
+      const projList = await api("/api/projects");
+      state.projects = projList;
+      projects.renderProjectSelect();
       let pid = null;
       try { pid = localStorage.getItem(LS_PROJECT); } catch (e) {}
-      const proj = projects.find(p => p.id === pid) || projects[0] || null;
-      if (proj) await selectProject(proj);
+      const proj = projList.find(p => p.id === pid) || projList[0] || null;
+      if (proj) await projects.selectProject(proj);
       $("#boot-state").textContent = "后端 OK · ffmpeg: " + cfg.ffmpeg.split(/[\\/]/).pop();
       document.body.dataset.vc = "ok";
     } catch (e) { return fail("后端连接失败: " + e.message); }
-  }
-
-  // ── 素材列表 ───────────────────────────────────────────
-  function _mediaLi(item) {
-    const li = document.createElement("li");
-    li.dataset.id = item.id;
-    if (state.currentItem && state.currentItem.id === item.id) li.classList.add("active");
-    const kindMap = { video: "视频", audio: "音频", denoised: "降噪", vocal: "人声",
-                      instrumental: "伴奏", trimmed: "去静音", bilibili: "B站", url: "网络" };
-    li.innerHTML = `<div class="m-name">${esc(item.name)}</div>
-      <div class="m-meta"><span class="m-badge">${kindMap[item.kind] || item.kind}</span>
-      <span>${fmtDur(item.duration)}</span>
-      <button class="m-del" title="删除素材">✕</button></div>`;
-    li.addEventListener("click", () => waveform.selectItem(item));
-    li.addEventListener("contextmenu", (e) => { e.preventDefault(); showMediaMenu(e.clientX, e.clientY, item); });
-    li.querySelector(".m-del").addEventListener("click", (e) => {
-      e.stopPropagation();
-      deleteMediaItem(item);
-    });
-    return li;
-  }
-  function renderMediaList() {
-    const pairs = [["#media-list", "#media-empty"], ["#media-page-list", "#media-page-empty"]];
-    pairs.forEach(([ulSel, emptySel]) => {
-      const ul = $(ulSel), empty = $(emptySel);
-      if (!ul) return;
-      ul.innerHTML = "";
-      if (empty) empty.classList.toggle("hidden", state.items.length > 0);
-      state.items.forEach((item) => ul.appendChild(_mediaLi(item)));
-    });
-  }
-  // 素材右键菜单：删除 / 重命名 / 添加到工作区
-  function showMediaMenu(x, y, item) {
-    const menu = $("#media-menu");
-    menu.style.left = x + "px"; menu.style.top = y + "px";
-    const btnDel = menu.querySelector(".mm-del");
-    const btnRen = menu.querySelector(".mm-rename");
-    const btnAdd = menu.querySelector(".mm-add");
-    btnDel.onclick = () => { hideMediaMenu(); deleteMediaItem(item); };
-    btnRen.onclick = async () => { hideMediaMenu(); await renameMediaItem(item); };
-    btnAdd.onclick = () => {
-      hideMediaMenu();
-      if (state.currentItem && state.currentItem.id === item.id) toast("该素材已在当前工作区");
-      else waveform.selectItem(item);
-    };
-    const isCurrent = !!(state.currentItem && state.currentItem.id === item.id);
-    btnAdd.disabled = isCurrent;
-    btnAdd.textContent = isCurrent ? "已在工作区" : "添加到工作区";
-    menu.classList.remove("hidden");
-  }
-  function hideMediaMenu() { const m = $("#media-menu"); if (m) m.classList.add("hidden"); }
-  document.addEventListener("click", hideMediaMenu);
-  document.addEventListener("contextmenu", (e) => { if (!e.target.closest("#media-list li")) hideMediaMenu(); });
-  async function renameMediaItem(item) {
-    const name = prompt("重命名素材：", item.name);
-    if (name == null || !name.trim()) return;
-    try {
-      await api(`/api/items/${item.id}/rename`, { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
-    } catch (e) { toast("重命名失败: " + e.message, 6000); }
-    await refreshItems();
-  }
-
-  async function refreshItems() {
-    try {
-      const q = state.currentProject ? `?project_id=${encodeURIComponent(state.currentProject.id)}` : "";
-      state.items = await api("/api/items" + q);
-      renderMediaList();
-    } catch (e) { /* ignore */ }
-  }
-
-  // ---- 项目切换 / 管理 ----
-  function renderProjectSelect() {
-    ["#project-select", "#project-select2"].forEach((selSel) => {
-      const sel = $(selSel);
-      if (!sel) return;
-      sel.innerHTML = "";
-      state.projects.forEach(proj => {
-        const opt = document.createElement("option");
-        opt.value = proj.id;
-        opt.textContent = proj.name;
-        sel.appendChild(opt);
-      });
-      if (state.currentProject) sel.value = state.currentProject.id;
-    });
-  }
-
-  async function selectProject(proj) {
-    if (state.dirtyItems.size) await store.saveProjectNow();
-    if (state.poolDirty) await store.savePoolNow();
-    state.currentProject = proj;
-    try { localStorage.setItem(LS_PROJECT, proj.id); } catch (e) {}
-    state.currentItem = null;
-    state.selection = null; state.selectionRegion = null; state.dragRegion = null;
-    state.multiRegions = []; state.ctrlMarking = false;
-    state.selectedSegs = new Set(); state.poolMerge = new Set();
-    renderProjectSelect();
-    const j = await api(`/api/projects/${proj.id}`);
-    state.items = j.items || [];
-    state.characters = j.characters || [];
-    state.autoAnalyze = (j.auto_analyze !== false);
-    pool.renderAutoAnalyzeBtn();
-    state.segmentsByItem = new Map();
-    state.speakerSegsByItem = new Map();
-    renderMediaList();
-    await loadAllItemData();
-    if (state.items.length) await waveform.selectItem(state.items[0]);
-    else clearWorkbench();
-    tasks.attachActiveTasks();
-  }
-
-  async function loadAllItemData() {
-    const items = state.items || [];
-    await Promise.all(items.map(item => store.loadProject(item, true)));
-  }
-
-  function clearWorkbench() {
-    state.currentItem = null;
-    state.subs = []; state.currentSubIdx = -1; state.auditioning = null; state.playing = false;
-    if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
-    $("#video-panel").classList.add("no-video");
-    const v = $("#video-preview"); if (v) v.removeAttribute("src");
-    $("#empty-state").classList.remove("hidden");
-    $("#sub-current").textContent = "—";
-    segments.renderSegments(); subtitles.renderSubs(); pool.renderPool();
-    waveform.updateTransport(); waveform.updateSelUI(); waveform.updatePlayUI();
-  }
-
-  async function createProject() {
-    const name = prompt("新项目名称：", "新项目");
-    if (name == null || !name.trim()) return;
-    try {
-      const j = await api("/api/projects", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
-      state.projects.push(j);
-      renderProjectSelect();
-      await selectProject(j);
-      toast("项目已创建");
-    } catch (e) { toast("创建项目失败: " + e.message, 6000); }
-  }
-  async function renameProject() {
-    if (!state.currentProject) return;
-    const name = prompt("重命名项目：", state.currentProject.name);
-    if (name == null || !name.trim()) return;
-    try {
-      await api(`/api/projects/${state.currentProject.id}/rename`, { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: name.trim() }) });
-      state.currentProject.name = name.trim();
-      renderProjectSelect();
-      toast("项目已重命名");
-    } catch (e) { toast("重命名失败: " + e.message, 6000); }
-  }
-  async function deleteProject() {
-    if (!state.currentProject) return;
-    if (state.items && state.items.length) return toast("项目非空，请先移除素材");
-    if (!confirm(`删除项目「${state.currentProject.name}」？角色池将一并删除。`)) return;
-    try {
-      await api(`/api/projects/${state.currentProject.id}`, { method: "DELETE" });
-      state.projects = state.projects.filter(pp => pp.id !== state.currentProject.id);
-      if (state.projects.length) await selectProject(state.projects[0]);
-      else clearWorkbench();
-      toast("项目已删除");
-    } catch (e) { toast("删除失败: " + e.message, 6000); }
-  }
-  async function deleteMediaItem(item) {
-    if (!confirm("删除素材「" + item.name + "」？")) return;
-    try {
-      await api(`/api/items/${item.id}`, { method: "DELETE" });
-      if (state.currentItem && state.currentItem.id === item.id) {
-        state.currentItem = null;
-        state.selection = null; state.selectionRegion = null; state.dragRegion = null;
-        state.multiRegions = []; state.ctrlMarking = false;
-        state.auditionSeq = null; state.auditionIdx = 0;
-        state.subs = []; state.currentSubIdx = -1; state.auditioning = null;
-        state.playing = false;
-        if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
-        $("#video-panel").classList.add("no-video");
-        const v = $("#video-preview"); v.removeAttribute("src");
-        $("#empty-state").classList.remove("hidden");
-        $("#sub-current").textContent = "—";
-        waveform.updatePlayUI();
-        waveform.updateSelUI();
-        waveform.updateTransport();
-        subtitles.renderSubs();
-        segments.renderSegments();
-      }
-      await refreshItems();
-      toast("已删除素材");
-    } catch (e) { toast("删除失败: " + e.message, 6000); }
   }
 
   let focusedSeg = null;
@@ -371,9 +182,9 @@ import { createStore } from "/static/js/modules/store.js";
       "import": () => io.importDialog(),
       "bilibili": () => showModal("#modal-bilibili"),
       "url-open": () => showModal("#modal-bilibili"),
-      "project-new": createProject,
-      "project-rename": renameProject,
-      "project-delete": deleteProject,
+      "project-new": () => projects.createProject(),
+      "project-rename": () => projects.renameProject(),
+      "project-delete": () => projects.deleteProject(),
       "pool": () => pool.openPool(),
       "identify-speakers": () => pool.doIdentifySpeakers(),
       "export-selection": () => io.openExportModal(),
@@ -485,7 +296,7 @@ import { createStore } from "/static/js/modules/store.js";
       const ps = $(psSel);
       if (ps) ps.addEventListener("change", () => {
         const proj = state.projects.find(pp => pp.id === ps.value);
-        if (proj && state.currentProject && proj.id !== state.currentProject.id) selectProject(proj);
+        if (proj && state.currentProject && proj.id !== state.currentProject.id) projects.selectProject(proj);
       });
     });
     $("#btn-cancel-task").addEventListener("click", () => tasks.cancelAllTasks());
@@ -563,6 +374,7 @@ import { createStore } from "/static/js/modules/store.js";
   let waveform = null;   // 波形/播放模块实例（启动区由 createWaveform 创建）
   let segments = null;   // 片段列表模块实例（启动区由 createSegments 创建）
   let store = null;      // 数据层模块实例（启动区由 createStore 创建，最先）
+  let projects = null;   // 素材库/项目模块实例（启动区由 createProjects 创建）
   let tasks = null;      // 任务跟踪模块实例（启动区由 createTasks 创建）
   let pool = null;       // 角色池模块实例（启动区由 createPool 创建）
   const PAGE_KEY = "vc.page.v1";
@@ -576,7 +388,7 @@ import { createStore } from "/static/js/modules/store.js";
     const el = document.getElementById("page-" + name);
     if (el) el.classList.remove("hidden");
     $$("#pagebar .page-btn").forEach(b => b.classList.toggle("active", b.dataset.page === name));
-    if (name === "media") { renderMediaList(); renderProjectSelect(); }
+    if (name === "media") { projects.renderMediaList(); projects.renderProjectSelect(); }
     if (name === "train" && training) training.loadTraining(true);
   }
   function setupPagebar() {
@@ -593,8 +405,18 @@ import { createStore } from "/static/js/modules/store.js";
     segsFor: (id) => segments.segsFor(id),
     renderSegments: () => segments.renderSegments(),
     renderPool: () => pool.renderPool() });
+  projects = createProjects({ $, esc, fmtDur, toast, api, state, LS_PROJECT,
+    loadProject: store.loadProject, saveProjectNow: store.saveProjectNow,
+    savePoolNow: store.savePoolNow,
+    selectItem: (item) => waveform.selectItem(item),
+    resetWaveUI: () => { waveform.updatePlayUI(); waveform.updateSelUI(); waveform.updateTransport(); },
+    renderPool: () => pool.renderPool(),
+    renderAutoAnalyzeBtn: () => pool.renderAutoAnalyzeBtn(),
+    renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
+    attachActiveTasks: () => tasks.attachActiveTasks() });
   tasks = createTasks({ $, api, toast, toastBusy, state,
-    renderMediaList, refreshItems, loadAllItemData,
+    renderMediaList: projects.renderMediaList, refreshItems: projects.refreshItems,
+    loadAllItemData: projects.loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
     renderSubs: () => subtitles.renderSubs(),
     selectItem: (item) => waveform.selectItem(item) });
@@ -604,7 +426,9 @@ import { createStore } from "/static/js/modules/store.js";
     selectItem: (item) => waveform.selectItem(item) });
   pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
     needItem, charById: store.charById, uid: store.uid, paletteNext: store.paletteNext, pushUndo: store.pushUndo,
-    scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool, loadAllItemData, segments, subtitles });
+    scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool,
+    loadAllItemData: projects.loadAllItemData, segments,
+    renderSubs: () => subtitles.renderSubs() });
   subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
     speakerLabelAt: store.speakerLabelAt, segsFor: segments.segsFor, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject,
     renderSegments: segments.renderSegments });
@@ -616,7 +440,9 @@ import { createStore } from "/static/js/modules/store.js";
     fmtSel, fmtT });
   waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
     WaveSurfer, Timeline, Regions, Minimap,
-    renderMediaList, loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow, renderSegments: segments.renderSegments,
+    renderMediaList: projects.renderMediaList, loadProject: store.loadProject,
+    saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
+    renderSegments: segments.renderSegments,
     subtitles });
   setupMenus();
   setupShortcuts();
@@ -649,7 +475,7 @@ import { createStore } from "/static/js/modules/store.js";
   boot();
 
   // 调试/自动化钩子
-  window.__vc = { state, selectItem: waveform.selectItem, selectProject,
+  window.__vc = { state, selectItem: waveform.selectItem, selectProject: projects.selectProject,
     renderSegments: segments.renderSegments,
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
@@ -657,7 +483,8 @@ import { createStore } from "/static/js/modules/store.js";
     loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     openPool: pool.openPool, closePool: pool.closePool, renderPool: pool.renderPool,
     undo: store.undo, redo: store.redo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
-    createProject, renameProject, deleteProject,
+    createProject: projects.createProject, renameProject: projects.renameProject,
+    deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
     autoAnalyzeDone: tasks.autoAnalyzeDone, attachActiveTasks: tasks.attachActiveTasks,

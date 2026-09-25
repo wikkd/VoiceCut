@@ -5,7 +5,7 @@ export function createPool(ctx) {
   const { $, $$, esc, shortName, fmtT, toast, state, api, trackTask,
           needItem, charById, uid, paletteNext, pushUndo,
           scheduleSaveProject, scheduleSavePool, loadAllItemData,
-          segments, subtitles } = ctx;
+          segments, renderSubs } = ctx;
 
   // ── 角色池子页面 ──
   function openPool() {
@@ -157,7 +157,7 @@ export function createPool(ctx) {
       trackTask(j.task_id, async (result) => {
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
-        renderPool(); segments.renderSegments(); subtitles.renderSubs();
+        renderPool(); segments.renderSegments(); renderSubs();
         const created = (result.created || []).length;
         const merged = (result.merged || 0);
         const mixed = result.mixed || 0;

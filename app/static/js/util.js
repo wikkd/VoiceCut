@@ -2,6 +2,7 @@
 export const $ = (s) => document.querySelector(s);
 export const $$ = (s) => Array.from(document.querySelectorAll(s));
 
+export const LS_PROJECT = "vc.project.v1";   // 记住上次选中的项目
 export const SEG_MIN = 1.0, SEG_MAX = 15.0;
 export const SEEK_STEP = 5, SEEK_FAST = 15, VOL_STEP = 0.05; // 快退快进秒数 / 音量步进(5%)
 
