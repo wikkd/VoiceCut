@@ -46,11 +46,18 @@ export function createSubtitles(ctx) {
       tb.appendChild(tr);
     });
   }
+  // 字幕高亮块：与选区同色的蓝色 region，仅作视觉标记。
+  // 必须拖/缩放全关 + 只保留一个（否则会堆出一堆可拖动的"假选区"）。
+  let subRegion = null;
   function selectSubRange(i) {
     const s = state.subs[i];
     if (!state.ws || !s) return;
-    state.regions.addRegion({ start: s.start, end: s.end, color: "rgba(108,156,255,0.25)" });
+    if (subRegion) { try { subRegion.remove(); } catch (e) {} subRegion = null; }
+    subRegion = state.regions.addRegion({ start: s.start, end: s.end, color: "rgba(108,156,255,0.25)", drag: false, resize: false });
     state.ws.setTime(s.start);
+  }
+  function resetSubRegion() {   // 切换素材时由 waveform 调用：旧波形的 region 已随插件销毁
+    subRegion = null;
   }
   function addSubToSegments(i) {
     if (!state.currentItem) return toast("请先选择素材");
@@ -107,6 +114,6 @@ export function createSubtitles(ctx) {
     } catch (e) { toast("生成失败: " + e.message); }
   }
 
-  return { updateCurrentSub, renderSubs, selectSubRange, addSubToSegments,
+  return { updateCurrentSub, renderSubs, selectSubRange, resetSubRegion, addSubToSegments,
            addCurrentSubToSegments, uploadSubFile, generateSubs };
 }

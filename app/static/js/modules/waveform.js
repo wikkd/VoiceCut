@@ -40,6 +40,7 @@ export function createWaveform(ctx) {
 
     // 实时字幕
     state.subs = []; state.currentSubIdx = -1;
+    subtitles.resetSubRegion();
     subtitles.renderSubs();
     if (item.subs_url) {
       try {
