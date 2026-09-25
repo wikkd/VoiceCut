@@ -136,7 +136,20 @@ export function createWaveform(ctx) {
   }
 
   // ── 播放控制 ───────────────────────────────────────────
-  function togglePlay() { if (state.ws) { if (state.playing) state.ws.pause(); else state.ws.play(); } }
+  // 手动暂停（按钮/空格）＝终止试听序列：否则跨素材切换中 in-flight 的
+  // playSeqItem 会在 selectItem 返回后把播放重新拉起，表现为"无法暂停"。
+  function togglePlay() {
+    if (!state.ws) return;
+    if (state.playing) {
+      state.auditionSeq = null;
+      state.auditioning = null;
+      document.querySelectorAll("#seg-tbody tr.seg-row.playing")
+        .forEach((el) => el.classList.remove("playing"));
+      state.ws.pause();
+    } else {
+      state.ws.play();
+    }
+  }
   function updatePlayUI() {
     const icon = state.playing ? "⏸" : "▶";
     $("#btn-play2").textContent = icon;
@@ -157,11 +170,15 @@ export function createWaveform(ctx) {
     state.ws.play();
   }
   async function playSeqItem() {
+    // 换素材切换（selectItem 耗秒级）前先停旧素材尾音；同素材时紧接 setTime+play 无感
+    if (state.ws && state.ws.isPlaying()) state.ws.pause();
     const m = state.auditionSeq && state.auditionSeq[state.auditionIdx];
     if (!m) { state.auditionSeq = null; return; }
     // 序列可跨素材（角色池连续试听）：先切素材再定位播放
     if (m.item && state.currentItem !== m.item) await selectItem(m.item);
     if (!state.ws) { state.auditionSeq = null; return; }
+    // await selectItem 期间用户可能已手动暂停（togglePlay 清空序列）——此时不得继续播放
+    if (!state.auditionSeq || state.auditionSeq[state.auditionIdx] !== m) return;
     state.ws.setTime(m.start);
     state.ws.play();
     state.auditioning = { start: m.start, end: m.end };
@@ -205,7 +222,7 @@ export function createWaveform(ctx) {
   }
   function updateTransport() {
     if (!state.currentItem) { $("#dur-info").textContent = "—"; return; }
-    $("#dur-info").textContent = fmtDur(state.currentItem.duration);
+    $("#dur-info").textContent = fmtDur(state.currentItem.duration || 0);
   }
 
   // ── 总览条播放头（M6） ──
