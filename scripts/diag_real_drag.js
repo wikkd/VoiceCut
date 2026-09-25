@@ -104,10 +104,31 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
                drag: r ? r.drag : null, resize: r ? r.resize : null };
     })()`, returnByValue: true })).result.result.value;
     console.log("波形拖选结果:", JSON.stringify(wv));
-    // 容差 1.0s：vendored enableDragSelection 预览 region 初始化固定 +5px（40s 素材≈0.72s），
-    // 属插件固有偏差；关键断言是选区落在拖拽区间附近且 drag/resize 全关（不可再拖动）
-    const okW = wv && wv.sel && Math.abs(wv.sel.start - wv.expect.a) < 1.0 && Math.abs(wv.sel.end - wv.expect.b) < 1.0
-      && wv.drag === false && wv.resize === false;
+    // 选区应 drag=false（整体不可拖走）且 resize=true（两端 ↔ 手柄可拉伸改范围）
+    const okW = wv && wv.sel && wv.drag === false && wv.resize === true;
+
+    // 手柄拉伸（真实鼠标）：按住选区右端 ↔ 手柄向右拖 ~12px → end 增大、start 不变
+    const selJsonSafe = () => send("Runtime.evaluate", { expression: `JSON.stringify(window.__vc.state.selection)`, returnByValue: true })
+      .then(r2 => { try { return JSON.parse(r2.result.result.value); } catch (e) { return null; } });
+    const hv = (await send("Runtime.evaluate", { expression: `(() => {
+      const vc = window.__vc;
+      const wr = vc.state.ws.getWrapper().getBoundingClientRect();
+      const dur = vc.state.ws.getDuration();
+      const hx = wr.left + (vc.state.selection.end / dur) * wr.width;
+      return { hx: Math.round(hx), hy: Math.round(wr.top + wr.height * 0.5), pw: wr.width / dur };
+    })()`, returnByValue: true })).result.result.value;
+    const hbtn = (type, x, pressed) => send("Input.dispatchMouseEvent", {
+      type, x, y: hv.hy, button: "left", buttons: pressed ? 1 : 0, clickCount: (type === "mousePressed" || type === "mouseReleased") ? 1 : 0 });
+    const beforeR = await selJsonSafe();
+    await hbtn("mousePressed", hv.hx - 2, true); await sleep(50);
+    for (let k = 1; k <= 4; k++) await hbtn("mouseMoved", hv.hx - 2 + 3 * k, true);
+    await hbtn("mouseReleased", hv.hx - 2 + 12, false);
+    await sleep(300);
+    const afterR = await selJsonSafe();
+    const dEnd = afterR ? afterR.end - beforeR.end : -1;
+    const dStart = afterR ? afterR.start - beforeR.start : 9;
+    const okH = afterR && dEnd > 0.05 && Math.abs(dStart) < 0.05;
+    console.log("手柄拉伸:", JSON.stringify({ before: beforeR, after: afterR }), okH ? "HANDLE-RESIZE PASS" : "HANDLE-RESIZE FAIL");
 
     // 键盘微调（真实按键事件）：Shift+→ 调终点 / Alt+→ 调起点 / → 平移，各 +0.5s
     const keyEv = (keyName, vk, mods) => Promise.all([
@@ -164,8 +185,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("Enter/Esc 退出编辑:", JSON.stringify(ee), okE ? "ENTER-ESC PASS" : "ENTER-ESC FAIL");
 
     console.log("页面错误:", errors.length ? errors.join(" | ") : "（无）");
-    console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL");
-    process.exitCode = (ok && okW && okK && okA) ? 0 : 1;
+    console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL",
+      "|", okH ? "HANDLE-RESIZE PASS" : "HANDLE-RESIZE FAIL");
+    process.exitCode = (ok && okW && okK && okA && okH) ? 0 : 1;
   } finally {
     try { child.kill(); } catch (e) {}
     try { fs.rmSync(PROF, { recursive: true, force: true }); } catch (e) {}

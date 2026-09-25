@@ -132,7 +132,17 @@ export function createWaveform(ctx) {
       updateSelUI();
     });
     if (dragSelUnbind) { try { dragSelUnbind(); } catch (e) {} }
-    dragSelUnbind = state.regions.enableDragSelection({ color: SEL_COLOR, drag: false, resize: false });
+    dragSelUnbind = state.regions.enableDragSelection({ color: SEL_COLOR, drag: false, resize: true, minLength: 0.05 });
+
+    // 鼠标拖选区两端 ↔ 手柄调整范围：把 region 的最新 start/end 同步回 state.selection
+    const syncSelFromRegion = (region) => {
+      if (region === state.selectionRegion && state.selection) {
+        state.selection = { start: region.start, end: region.end };
+        updateSelUI();
+      }
+    };
+    state.regions.on("region-update", syncSelFromRegion);    // 拉伸过程中实时跟随
+    state.regions.on("region-updated", syncSelFromRegion);   // 松开鼠标终值
 
     ws.on("play", () => { state.playing = true; updatePlayUI(); videoPlay(); });
     ws.on("pause", () => { state.playing = false; updatePlayUI(); videoPause(); });
@@ -454,10 +464,11 @@ export function createWaveform(ctx) {
   }
   function _ensureSelRegion(start, end, color) {
     if (state.selectionRegion) {
-      state.selectionRegion.setOptions({ start, end, color, drag: false, resize: false });
+      state.selectionRegion.setOptions({ start, end, color, drag: false, resize: true });
       return state.selectionRegion;
     }
-    return progAddRegion({ start, end, color, drag: false, resize: false });
+    // drag:false=整体不可拖走；resize:true=两端 ↔ 手柄可拉伸改范围（minLength 防止缩成 0）
+    return progAddRegion({ start, end, color, drag: false, resize: true, minLength: 0.05 });
   }
   function bindTimelineSelection() {
     const tl = $("#timeline");
