@@ -403,6 +403,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     });
     // 波形区域内右键取消选区（波形模块内绑定）
     waveform.bindWaveBox();
+    waveform.bindTimelineSelection();
   }
 
 

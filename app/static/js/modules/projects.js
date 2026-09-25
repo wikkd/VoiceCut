@@ -199,8 +199,8 @@ export function createProjects(ctx) {
     state.currentProject = proj;
     try { localStorage.setItem(LS_PROJECT, proj.id); } catch (e) {}
     state.currentItem = null;
-    state.selection = null; state.selectionRegion = null; state.dragRegion = null;
-    state.multiRegions = []; state.ctrlMarking = false;
+    state.selection = null; state.selectionRegion = null;
+    state.multiRegions = [];
     state.selectedSegs = new Set(); state.poolMerge = new Set();
     renderProjectSelect();
     const j = await api(`/api/projects/${proj.id}`);
@@ -287,8 +287,8 @@ export function createProjects(ctx) {
       await api(`/api/items/${item.id}`, { method: "DELETE" });
       if (state.currentItem && state.currentItem.id === item.id) {
         state.currentItem = null;
-        state.selection = null; state.selectionRegion = null; state.dragRegion = null;
-        state.multiRegions = []; state.ctrlMarking = false;
+        state.selection = null; state.selectionRegion = null;
+        state.multiRegions = [];
         state.auditionSeq = null; state.auditionIdx = 0;
         state.subs = []; state.currentSubIdx = -1; state.auditioning = null;
         state.playing = false;

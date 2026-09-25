@@ -53,8 +53,7 @@ export function createWaveform(ctx) {
   function loadWavesurfer(item, peaks) {
     if (state.ws) { try { state.ws.destroy(); } catch (e) {} state.ws = null; }
     state.selection = null; state.selectionRegion = null;
-    state.dragRegion = null;
-    state.multiRegions = []; state.ctrlMarking = false;
+    state.multiRegions = [];
     state.auditionSeq = null; state.auditionIdx = 0;
     state.activeSeg = null;
     $("#empty-state").classList.add("hidden");
@@ -92,30 +91,8 @@ export function createWaveform(ctx) {
     ws.on("redraw", syncTimeline);
     ws.on("scroll", syncTimeline);
 
-    // 选区
-    state.regions.enableDragSelection({ color: "rgba(108,156,255,0.25)" });
-    // 拖拽进行中（未松手）会先触发 region-initialized，记录以便右键取消
-    state.regions.on("region-initialized", (region) => { state.dragRegion = region; });
-    state.regions.on("region-created", (region) => {
-      state.dragRegion = null;
-      if (!state.ctrlMarking) {                       // Ctrl 快进多选：保留之前标记
-        if (state.selectionRegion && state.selectionRegion !== region) {
-          try { state.selectionRegion.remove(); } catch (e) {}
-        }
-        clearMultiRegions();                          // 普通拖选：清空多选标记
-      }
-      state.selectionRegion = region;
-      state.selection = { start: region.start, end: region.end };
-      updateSelUI();
-    });
-    state.regions.on("region-updated", (region) => {
-      if (region === state.selectionRegion) {
-        const m = state.multiRegions.find((x) => x.region === region);
-        if (m) { m.start = region.start; m.end = region.end; }
-        state.selection = { start: region.start, end: region.end };
-        updateSelUI();
-      }
-    });
+    // 选区显示：regions 插件仅用于"渲染"选区/多选标记（全部程序创建，
+    // drag/resize 关闭）；创建选区的唯一交互入口是时间轴拖拽（bindTimelineSelection）
     state.regions.on("region-removed", (region) => {
       const i = state.multiRegions.findIndex((m) => m.region === region);
       if (i >= 0) { state.multiRegions.splice(i, 1); updateSelUI(); }
@@ -171,7 +148,7 @@ export function createWaveform(ctx) {
   }
   function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
   function playSelection() {
-    if (!state.ws || !state.selection) return toast("请先拖拽出选区");
+    if (!state.ws || !state.selection) return toast("请先在时间轴上拖拽出选区");
     if (state.multiRegions.length >= 2) {       // 多选：顺序试听全部标记段
       state.auditionSeq = state.multiRegions.slice();
       state.auditionIdx = 0;
@@ -302,9 +279,7 @@ export function createWaveform(ctx) {
     const t = state.ws.getCurrentTime();
     const start = t, end = Math.min(dur, t + SEEK_STEP);
     if (end - start < 0.05) return toast("已到末尾");
-    state.ctrlMarking = true;
-    const region = state.regions.addRegion({ start, end, color: MULTI_COLOR, drag: true, resize: true });
-    state.ctrlMarking = false;
+    const region = state.regions.addRegion({ start, end, color: MULTI_COLOR, drag: false, resize: false });
     state.multiRegions.push({ start, end, region });
     state.selectionRegion = region;
     state.selection = { start, end };
@@ -331,7 +306,6 @@ export function createWaveform(ctx) {
     if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (e) {} }
     state.selectionRegion = null;
     state.selection = null;
-    state.dragRegion = null;
     state.auditionSeq = null; state.auditionIdx = 0;
     clearMultiRegions();
     updateSelUI();
@@ -381,7 +355,7 @@ export function createWaveform(ctx) {
   function zoomIn() { zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5); }
   function zoomOut() { zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5); }
   function nudgeSelection(delta, mode) {
-    if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先拖拽出选区");
+    if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先在时间轴上拖拽出选区");
     let { start, end } = state.selection;
     const dur = state.currentItem ? state.currentItem.duration : end;
     if (mode === "move") { start = Math.max(0, Math.min(dur, start + delta)); end = Math.max(0, Math.min(dur, end + delta)); }
@@ -418,17 +392,82 @@ export function createWaveform(ctx) {
   function bindWaveBox() {
     $("#wave-box").addEventListener("contextmenu", (e) => {
       e.preventDefault();
-      if (state.dragRegion) {
-        try { state.dragRegion.remove(); } catch (err) {}
-        if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (err) {} }
-        state.dragRegion = null;
-        state.selectionRegion = null;
-        state.selection = null;
-        updateSelUI();
-        toast("已取消选区");
-        return;
-      }
       if (state.selection && state.selectionRegion) {
+        clearSelection();
+        toast("已取消选区");
+      }
+    });
+  }
+
+  // ── 时间轴拖拽选区：创建选区的唯一交互入口（波形上不再有拖拽能力） ──
+  // 左键在 #timeline 上按下并拖动 → 创建/更新选区；Ctrl+拖动 → 追加橙色
+  // 多选标记；原地点击（位移 < 0.05s）= 跳转播放头；拖选中右键 = 取消本次。
+  const SEL_COLOR = "rgba(108,156,255,0.25)";
+  let tlDrag = null;   // {startT, moved, ctrl, region, cleared}
+  function _tlTime(e) {
+    const wr = state.ws.getWrapper().getBoundingClientRect();
+    const dur = state.ws.getDuration() || 0;
+    return clampN((e.clientX - wr.left) / (wr.width || 1) * dur, 0, dur);
+  }
+  function _ensureSelRegion(start, end, color) {
+    if (state.selectionRegion) {
+      state.selectionRegion.setOptions({ start, end, color, drag: false, resize: false });
+      return state.selectionRegion;
+    }
+    return state.regions.addRegion({ start, end, color, drag: false, resize: false });
+  }
+  function bindTimelineSelection() {
+    const tl = $("#timeline");
+    if (!tl) return;
+    tl.addEventListener("mousedown", (e) => {
+      if (e.button !== 0 || !state.ws) return;
+      e.preventDefault();
+      tlDrag = { startT: _tlTime(e), moved: false,
+                 ctrl: e.ctrlKey || e.metaKey, region: null, cleared: false };
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!tlDrag || !state.ws) return;
+      const t = _tlTime(e);
+      if (!tlDrag.moved && Math.abs(t - tlDrag.startT) < 0.05) return;
+      tlDrag.moved = true;
+      const a = Math.min(tlDrag.startT, t), b = Math.max(tlDrag.startT, t);
+      if (tlDrag.ctrl) {
+        // Ctrl 拖选：追加一个橙色标记，保留已有标记
+        if (!tlDrag.region) {
+          tlDrag.region = state.regions.addRegion({ start: a, end: b, color: MULTI_COLOR, drag: false, resize: false });
+        } else {
+          tlDrag.region.setOptions({ start: a, end: b });
+        }
+        state.selectionRegion = tlDrag.region;
+      } else {
+        // 普通拖选：清掉旧选区与多选标记，单一蓝色选区
+        if (!tlDrag.cleared) {
+          tlDrag.cleared = true;
+          if (state.selectionRegion) { try { state.selectionRegion.remove(); } catch (err) {} state.selectionRegion = null; }
+          clearMultiRegions();
+        }
+        state.selectionRegion = _ensureSelRegion(a, b, SEL_COLOR);
+      }
+      state.selection = { start: a, end: b };
+      updateSelUI();
+    });
+    window.addEventListener("mouseup", () => {
+      if (!tlDrag) return;
+      const d = tlDrag; tlDrag = null;
+      if (!state.ws) return;
+      if (!d.moved) { state.ws.setTime(d.startT); return; }   // 原地点击 = 跳转播放头
+      if (d.ctrl && d.region) {
+        state.multiRegions.push({ start: state.selection.start, end: state.selection.end, region: d.region });
+      }
+      updateSelUI();
+    });
+    tl.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      if (tlDrag) {   // 拖选中右键：取消本次拖拽
+        if (tlDrag.region) { try { tlDrag.region.remove(); } catch (err) {} }
+        tlDrag = null;
+        toast("已取消本次拖选");
+      } else if (state.selection || state.multiRegions.length) {
         clearSelection();
         toast("已取消选区");
       }
@@ -441,5 +480,5 @@ export function createWaveform(ctx) {
            setupMMSeek, seekBy, adjVolume,
            markForward, unmarkLast, clearMultiRegions, clearSelection,
            zoomSet, zoomIn, zoomOut, nudgeSelection,
-           bindVideoPreview, bindZoomWheel, bindWaveBox };
+           bindVideoPreview, bindZoomWheel, bindWaveBox, bindTimelineSelection };
 }

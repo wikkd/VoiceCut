@@ -83,7 +83,7 @@ export function createIo(ctx) {
   // ── 导出选区 ───────────────────────────────────────────
   function openExportModal() {
     if (!needItem()) return;
-    if (!state.selection) return toast("请先拖拽出选区");
+    if (!state.selection) return toast("请先在时间轴上拖拽出选区");
     $("#ex-range").textContent = fmtSel(state.selection);
     showModal("#modal-export");
   }

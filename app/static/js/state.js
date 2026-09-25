@@ -27,10 +27,7 @@ export const state = {
   /** @type {{start: number, end: number, itemId: string}|null} */
   auditioning: null,         // {start, end, itemId}
   zoomLevel: 0,              // 0=fit, >=1 缩放级别
-  dragRegion: null,          // 正在拖拽（未松手）的选区
-  /** @type {{start: number, end: number, region: any}[]} */
   multiRegions: [],          // Ctrl+→ 累积的多选区 [{start,end,region}]
-  ctrlMarking: false,        // 正在通过 Ctrl+→ 添加标记（不替换旧选区）
   auditionSeq: null,         // 多选顺序试听队列
   auditionIdx: 0,
   /** @type {import("./util.js").Character[]} */
