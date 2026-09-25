@@ -194,6 +194,11 @@ export function createPool(ctx) {
         b.textContent = on ? "自动分析·开" : "自动分析·关";
       }
     });
+    // 自动分析已包含"生成字幕 + 识别说话人"，开启时隐藏对应的手动按钮
+    ["#btn-identify-speakers", "#pool-identify", "#btn-sub-generate"].forEach((sel) => {
+      const b = $(sel);
+      if (b) b.classList.toggle("hidden", on);
+    });
   }
   async function toggleAutoAnalyze() {
     if (!state.currentProject) return toast("请先选择项目");
