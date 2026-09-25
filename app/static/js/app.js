@@ -258,6 +258,23 @@ import { createProjects } from "/static/js/modules/projects.js";
       const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
       if (tag === "input" || tag === "textarea" || tag === "select") return;
       if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
+      // Ctrl+A 全选/取消全选：范围为当前筛选下可见的片段（所见即所选，避免误删被过滤隐藏的行）；
+      // 输入框内不拦截，保留原生"全选文本"。
+      if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+        e.preventDefault();
+        const ids = segments.viewSegIds();
+        if (!ids.length) return toast("当前列表没有可选择的片段");
+        const allIn = ids.every(id => state.selectedSegs.has(id));
+        if (allIn && state.selectedSegs.size) {
+          ids.forEach(id => state.selectedSegs.delete(id));
+          toast("已取消全选（可见范围）");
+        } else {
+          ids.forEach(id => state.selectedSegs.add(id));
+          toast(`已全选 ${ids.length} 段（可见范围）——Delete 批量删除 / 右键批量重定向`, 4000);
+        }
+        segments.renderSegments();
+        return;
+      }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) store.redo(); else store.undo();

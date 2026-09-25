@@ -278,7 +278,12 @@ export function createSegments(ctx) {
     if (scroll && tr.scrollIntoView) tr.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
-  return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments,
+  // 当前筛选/排序下可见片段的 id 列表（Ctrl+A 全选范围 = 所见即所选）
+  function viewSegIds() {
+    return _viewRows(allSegs()).map(r => r.seg.id);
+  }
+
+  return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments, viewSegIds,
            addSegmentFromSelection, deleteSegment, jumpToSegment, auditionSegment,
            gotoEditAndPlay, scrollSegRow, auditionFocus };
 }
