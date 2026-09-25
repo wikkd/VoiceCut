@@ -610,13 +610,15 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 .queue-chip .qc-dot { width: 8px; height: 8px; border-radius: 50%; }
 
 /* ── 片段列表筛选/排序栏 ── */
-#seg-filterbar {
-  display: flex; gap: 5px; align-items: center;
-  padding: 4px 8px; border-bottom: 1px solid var(--border); background: var(--panel);
+/* 片段列表筛选控件（内嵌标题栏） */
+.grip-filter {
+  display: flex; gap: 4px; align-items: center;
+  margin-left: 10px; flex-shrink: 0;
 }
-#seg-filterbar input, #seg-filterbar select {
+.grip-filter input, .grip-filter select {
   font-size: 11px; color: var(--fg, #e6e6f0); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; height: 22px;
 }
-#seg-filterbar input { flex: 1 1 90px; min-width: 60px; }
-#seg-filterbar input:focus, #seg-filterbar select:focus { outline: none; border-color: var(--accent); }
+.grip-filter input { width: 110px; }
+.grip-filter input::placeholder { color: var(--muted); }
+.grip-filter input:focus, .grip-filter select:focus { outline: none; border-color: var(--accent); }
