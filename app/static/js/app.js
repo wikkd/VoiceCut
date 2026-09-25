@@ -5,7 +5,7 @@ import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
 import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, LS_PROJECT,
          SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
-import { state, toast, toastBusy, layout, applyLayout, saveLayout, resetLayout,
+import { state, toast, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
 import { createTraining } from "/static/js/modules/training.js";
 import { createSubtitles } from "/static/js/modules/subtitles.js";
@@ -299,7 +299,6 @@ import { createProjects } from "/static/js/modules/projects.js";
         if (proj && state.currentProject && proj.id !== state.currentProject.id) projects.selectProject(proj);
       });
     });
-    $("#btn-cancel-task").addEventListener("click", () => tasks.cancelAllTasks());
     $("#btn-import").addEventListener("click", () => io.importDialog());
     $("#btn-bilibili").addEventListener("click", () => showModal("#modal-bilibili"));
     $("#btn-export-dataset").addEventListener("click", () => io.openDatasetModal());
@@ -414,7 +413,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderAutoAnalyzeBtn: () => pool.renderAutoAnalyzeBtn(),
     renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
     attachActiveTasks: () => tasks.attachActiveTasks() });
-  tasks = createTasks({ $, api, toast, toastBusy, state,
+  tasks = createTasks({ $, api, toast, state,
     renderMediaList: projects.renderMediaList, refreshItems: projects.refreshItems,
     loadAllItemData: projects.loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
@@ -480,6 +479,7 @@ import { createProjects } from "/static/js/modules/projects.js";
   window.__vc = { state, selectItem: waveform.selectItem, selectProject: projects.selectProject,
     renderSegments: segments.renderSegments,
     playSequence: (seq, idx) => waveform.playSequence(seq, idx),
+    updateStatusbar: tasks.updateStatusbar, attachActiveTasks: tasks.attachActiveTasks,
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
     clearMultiRegions: waveform.clearMultiRegions,

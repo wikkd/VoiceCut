@@ -245,11 +245,38 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
   display: flex; align-items: center; gap: 10px; padding: 5px 12px;
   background: var(--panel-2); border-top: 1px solid var(--border); font-size: 12px; color: var(--muted);
 }
-#task-bar-wrap { flex: 1; max-width: 320px; height: 8px; background: var(--panel-3); border-radius: 4px; overflow: hidden; }
-#task-bar { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width 0.3s; }
 #boot-state { margin-left: auto; color: var(--warn); }
-#btn-cancel-task { background: transparent; border: 1px solid var(--border); color: var(--danger); border-radius: 50%; width: 18px; height: 18px; line-height: 1; font-size: 11px; cursor: pointer; padding: 0; flex: none; }
-#btn-cancel-task:hover { background: var(--danger); color: #fff; }
+
+/* ── 消息/任务气泡堆叠层（左下角，向上堆叠） ── */
+#toast-stack {
+  position: fixed; left: 14px; bottom: 36px; z-index: 1200;
+  display: flex; flex-direction: column; justify-content: flex-end; gap: 8px;
+  max-width: min(430px, 46vw); pointer-events: none;
+}
+.toast-bubble {
+  pointer-events: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 12px; font-size: 12.5px; color: var(--text, #d8d8e4);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  word-break: break-word; line-height: 1.45;
+  animation: toast-in 0.18s ease;
+  transition: opacity 0.26s, transform 0.26s;
+}
+.toast-bubble.out { opacity: 0; transform: translateY(8px); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.toast-bubble.task { padding: 7px 10px; }
+.toast-bubble.task .trow { display: flex; align-items: center; gap: 8px; }
+.toast-bubble.task .tmsg { flex: 1; }
+.toast-bubble.task .tclose {
+  background: transparent; border: 1px solid var(--border); color: var(--danger);
+  border-radius: 50%; width: 18px; height: 18px; line-height: 1; font-size: 11px;
+  cursor: pointer; padding: 0; flex: none;
+}
+.toast-bubble.task .tclose:hover { background: var(--danger); color: #fff; }
+.toast-bubble.task .tbar { margin-top: 6px; height: 4px; background: var(--panel-3); border-radius: 2px; overflow: hidden; }
+.toast-bubble.task .tfill { height: 100%; width: 0%; background: var(--accent); border-radius: 2px; transition: width 0.4s; }
+.toast-bubble.done { border-color: var(--ok, #4fbf67); color: var(--ok, #4fbf67); }
+.toast-bubble.err { border-color: var(--danger, #ff6b6b); color: var(--danger, #ff6b6b); }
 
 /* ── ⑥ 弹窗 ─────────────────────────────── */
 .modal-mask {

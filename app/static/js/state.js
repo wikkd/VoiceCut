@@ -35,15 +35,17 @@ export const state = {
   autoAnalyze: true,         // 导入后后台自动生成字幕 + 识别说话人
 };
 
-let toastTimer = null;
+// 消息气泡：追加到左下堆叠层，新的在底部把旧的向上推，超时淡出
 export function toast(msg, ms = 4000) {
-  const el = $("#task-info");
-  el.textContent = msg;
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { if (!state.activeTasks.size) el.textContent = "就绪"; }, ms);
+  const stack = $("#toast-stack");
+  if (!stack) return;
+  const b = document.createElement("div");
+  b.className = "toast-bubble";
+  b.textContent = msg;
+  stack.appendChild(b);
+  while (stack.children.length > 6) stack.firstElementChild.remove();  // 最多同时 6 条
+  setTimeout(() => { b.classList.add("out"); setTimeout(() => b.remove(), 280); }, ms);
 }
-// 是否有 toast 正在显示（供状态栏决定是否回写「就绪」）
-export function toastBusy() { return !!toastTimer; }
 
 // ── 工作区布局 ─────────────────────────────────────────────
 export const LS_KEY = "vc.workspace.v1";

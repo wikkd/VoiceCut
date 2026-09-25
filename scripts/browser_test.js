@@ -199,7 +199,7 @@ const makeWav = (seconds, sr = 16000) => {
       const mmTime = document.querySelector('#mm-time').textContent;
       const bb = document.querySelector('#bb-url');
       const bbIsTextarea = !!bb && bb.tagName === 'TEXTAREA';
-      const cancelBtn = !!document.querySelector('#btn-cancel-task');
+      const cancelBtn = !!document.querySelector('#toast-stack');
       const hasProjectSelect = !!document.querySelector('#project-select');
       const projectSelectOpts = document.querySelectorAll('#project-select option').length;
       const projectName = vc.state.currentProject ? vc.state.currentProject.name : null;
