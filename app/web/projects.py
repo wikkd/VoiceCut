@@ -322,6 +322,8 @@ def _speakers_worker(c, item_id: str) -> dict:
                 seg["characterId"] = None
     # 窗口化声纹分段重新绑定：同一句话含两人时标 mixed 且不自动绑定角色，
     # 避免旧逻辑（每字幕单一声纹）把两人并入同一个角色。
+    # 写回前先去重清理（历史棘轮碎片），重跑识别不再让片段数倍增。
+    proj["segments"], norm_removed = speakers_mod.normalize_segments(proj["segments"])
     proj["segments"], mixed_segs = speakers_mod.bind_segments(
         proj["segments"], speaker_segments, char_of_label,
         new_id=project_mod.new_uid)
@@ -329,6 +331,7 @@ def _speakers_worker(c, item_id: str) -> dict:
     project_mod.save_project(c.cfg.workdir, item.id, proj)
     return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
             "mixed": res.get("mixed", 0), "mixed_segments": mixed_segs,
+            "normalized_removed": norm_removed,
             "n_speakers": res["n_speakers"], "quality": res["quality"],
             "speaker_segments": speaker_segments,
             "characters": chars, "created": created, "merged": merged,
@@ -508,6 +511,7 @@ def _project_speakers_run(c, project_id: str) -> dict:
     total_segs = 0
     total_labeled = 0
     total_mixed = 0
+    total_norm_removed = 0
     items_out = []
     for si, s in enumerate(sources):
         if c.tasks.cancelled(tid):
@@ -521,12 +525,15 @@ def _project_speakers_run(c, project_id: str) -> dict:
             for sg in fresh:
                 sg["id"] = project_mod.new_uid("s")
             proj["segments"] = fresh
+        # 写回前先去重清理（历史棘轮碎片），重跑识别不再让片段数倍增
+        proj["segments"], norm_removed = speakers_mod.normalize_segments(proj["segments"])
         proj["segments"], mixed_segs = speakers_mod.bind_segments(
             proj["segments"], spk_segs, char_of_label,
             new_id=project_mod.new_uid)
         proj["speaker_segments"] = spk_segs
         project_mod.save_project(c.cfg.workdir, s["item"].id, proj)
         total_segs += len(spk_segs)
+        total_norm_removed += norm_removed
         total_labeled += res["items"][si]["labeled"]
         total_mixed += res["items"][si]["mixed"]
         items_out.append({"id": s["item"].id, "count": len(spk_segs),
@@ -534,6 +541,7 @@ def _project_speakers_run(c, project_id: str) -> dict:
     return {"count": total_segs,
             "total": sum(i["total"] for i in res["items"]),
             "labeled": total_labeled, "mixed": total_mixed,
+            "normalized_removed": total_norm_removed,
             "n_speakers": res["n_speakers"], "quality": res["quality"],
             "characters": chars, "created": created, "merged": merged,
             "cleaned": cleaned, "items": items_out}

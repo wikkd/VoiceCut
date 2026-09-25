@@ -288,6 +288,50 @@ def _split_parts(start, end, speaker_segments):
     return parts
 
 
+def normalize_segments(segments: list, *, edge_gap: float = 0.05,
+                       contain_ratio: float = 0.95, max_passes: int = 10) -> tuple[list, int]:
+    """按时间排序并去除识别重跑产生的重复/碎片片段（棘轮清理，保守规则）。
+
+    重复判定（同时满足才删，宁少勿多）：
+    - 两段时间重叠 ≥ contain_ratio × 较短者；
+    - 且起点或终点几乎相同（差 < edge_gap）——识别拆分产生的碎片必然与
+      原片段共享一条边界，跨素材的真实对话不会命中。
+    保留策略：文本非空者优先；其次保留时间跨度更长者。
+    迭代到不再有删除（碎片成链时需多轮）。返回 (cleaned, removed_total)。
+    """
+    removed_total = 0
+    out = [dict(s) for s in segments]
+    for _ in range(max_passes):
+        out.sort(key=lambda s: (float(s.get("start", 0)), float(s.get("end", 0))))
+        kept: list = []
+        removed = 0
+        for s in out:
+            if kept:
+                p = kept[-1]
+                ov = min(float(p["end"]), float(s["end"])) - max(float(p["start"]), float(s["start"]))
+                short = min(float(p["end"]) - float(p["start"]),
+                            float(s["end"]) - float(s["start"]))
+                same_edge = (abs(float(p["start"]) - float(s["start"])) < edge_gap
+                             or abs(float(p["end"]) - float(s["end"])) < edge_gap)
+                if short > 0 and same_edge and ov / short >= contain_ratio:
+                    p_text = (p.get("text") or "").strip()
+                    s_text = (s.get("text") or "").strip()
+                    keep_new = (not p_text and bool(s_text)) or \
+                               (bool(p_text) == bool(s_text)
+                                and float(s["end"]) - float(s["start"])
+                                > float(p["end"]) - float(p["start"]))
+                    if keep_new:
+                        kept[-1] = s
+                    removed += 1
+                    continue
+            kept.append(s)
+        out = kept
+        removed_total += removed
+        if not removed:
+            break
+    return out, removed_total
+
+
 def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
     """Rebind a segment list to speaker labels by time overlap.
 
@@ -297,6 +341,9 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
     apportioned by duration ratio; refine wording manually in the segment
     editor). Without ``new_id`` the old behaviour applies: keep them whole with
     ``characterId=None`` for manual correction. Returns (segments, mixed_count).
+
+    防棘轮：拆分产生的子片段带 ``was_split`` 标记；重跑识别时已拆过的片段只
+    重绑说话人、不再重切（聚类边界每轮漂移，重切会让片段数逐轮倍增）。
     """
     out = []
     mixed_count = 0
@@ -307,7 +354,7 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
         if lb:
             seg["speakerLabel"] = lb
             seg["mixed"] = bool(mixed)
-        if mixed:
+        if mixed and not seg.get("was_split"):
             mixed_count += 1
             parts = (_split_parts(seg.get("start", 0.0), seg.get("end", 0.0),
                                   speaker_segments)
@@ -327,11 +374,15 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
                     child = {**seg, "id": new_id("s"),
                              "start": round(ps, 3), "end": round(pe, 3),
                              "speakerLabel": plb, "mixed": False,
+                             "was_split": True,
                              "characterId": char_of_label.get(plb),
                              "text": text[pos:pos + take]}
                     pos += take
                     out.append(child)
                 continue
+            seg["characterId"] = None
+        elif mixed:
+            # 已拆过的片段再次判 mixed：只解除绑定留给人工，不再重切（防棘轮）
             seg["characterId"] = None
         elif not seg.get("characterId") and lb in char_of_label:
             seg["characterId"] = char_of_label[lb]
