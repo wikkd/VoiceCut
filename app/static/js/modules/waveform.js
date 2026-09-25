@@ -163,23 +163,33 @@ export function createWaveform(ctx) {
     state.ws.play();
     state.auditioning = { start: m.start, end: m.end };
   }
+  // 循环/试听到位检测的防重入守卫：timeupdate 可能在 seek 生效前连发旧位置，
+  // 不设防会反复 setTime/pause，听感即"一帧一暂停一开始"的抖动。
+  let lastWrap = null;   // 上次已回卷的选区对象（引用比较，重选/nudge 换新对象即重新武装）
   function loopCheck(t) {
-    if (state.loop && state.selection && state.selection.end - state.selection.start > 0.02
-        && t >= state.selection.end - 0.03) {
+    const sel = state.selection;
+    if (!(state.loop && sel && sel.end - sel.start > 0.02)) return;
+    if (t >= sel.end - 0.03) {
+      if (lastWrap === sel) return;   // 同一选区已回卷，等播放头真正离开触发带
+      lastWrap = sel;
       state.auditioning = null;
-      state.ws.setTime(state.selection.start);
+      state.ws.setTime(sel.start);
+    } else if (t < sel.end - 0.3 || t <= sel.start + 0.05) {
+      lastWrap = null;                // 已离开触发带或确认回卷到位，允许下一次回卷
     }
   }
   function auditionCheck(t) {
-    if (state.auditioning && t >= state.auditioning.end - 0.02) {
-      if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
-        state.auditionIdx++;
-        playSeqItem();
-      } else {
-        state.ws.pause();
-        state.auditioning = null;
-        state.auditionSeq = null;
-      }
+    const a = state.auditioning;
+    if (!a || a._handled) return;
+    if (t < a.end - 0.02) return;
+    a._handled = true;   // 本段只处理一次，防 seek 未生效期间连跳/反复停
+    if (state.auditionSeq && state.auditionIdx + 1 < state.auditionSeq.length) {
+      state.auditionIdx++;
+      playSeqItem();
+    } else {
+      state.ws.pause();
+      state.auditioning = null;
+      state.auditionSeq = null;
     }
   }
   function updateTransport() {
@@ -288,6 +298,7 @@ export function createWaveform(ctx) {
 
   // 视频同步
   let lastVidSync = 0;
+  let lastAudioSync = 0;   // 最近一次"音频→视频"同步时刻；其后的反向同步在窗口内一律抑制
   function videoPlay() {
     const v = $("#video-preview");
     if (v && v.src && v.paused) v.play().catch(() => {});
@@ -301,6 +312,7 @@ export function createWaveform(ctx) {
     lastVidSync = now;
     if (Math.abs(v.currentTime - t) > 0.05) {
       videoSeekByAudio = true;
+      lastAudioSync = now;   // 抑制本次视频 seek 的 seeked 事件反向回写音频
       v.currentTime = t;
     }
   }
@@ -311,6 +323,9 @@ export function createWaveform(ctx) {
     if (!state.ws) return;
     const v = $("#video-preview");
     if (!v || !v.src) return;
+    // 双向同步互斥：刚由音频驱动过视频 seek 就不再反向回写，
+    // 否则两边阈值带(0.05~0.15s)交界处会互相刷 seek，播放反复中断抖动。
+    if (performance.now() - lastAudioSync < 250) return;
     if (Math.abs(v.currentTime - state.ws.getCurrentTime()) > 0.15) {
       state.ws.setTime(v.currentTime);
     }
