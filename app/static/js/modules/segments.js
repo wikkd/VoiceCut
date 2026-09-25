@@ -3,7 +3,7 @@
 // 避免与主流程模块形成循环 import。selectItem 以闭包形式注入（waveform 实例晚于本模块创建）。
 export function createSegments(ctx) {
   const { $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
-          state, toast, charById, newSegment, pushUndo,
+          state, toast, api, trackTask, charById, newSegment, pushUndo,
           scheduleSaveProject, closePool, setPage, selectItem, refreshSelColor } = ctx;
 
   function segsFor(itemId) {
@@ -259,6 +259,64 @@ export function createSegments(ctx) {
     scheduleSaveProject();
     renderSegments();
   }
+  // ── 区间变更后自动重识别字幕 ──────────────────────────────────────────
+  // 改选区 / 合并片段后，旧文本与新区间不再对应 → 后台重跑 ASR 覆盖文本。
+  // 连续改动合并成一次请求（1.2s 防抖）；quiet 任务，不锁界面（可继续操作）。
+  const RETR_KEY = "vc.retranscribe.v1";
+  let reTrTimer = null;
+  const reTrQueue = new Map();   // "itemId|segId" -> { itemId, segId }：去重 + 保序
+  function retranscribeEnabled() {
+    try { return localStorage.getItem(RETR_KEY) !== "0"; } catch (e) { return true; }
+  }
+  function queueRetranscribe(pairs) {
+    if (!retranscribeEnabled() || !pairs || !pairs.length) return;
+    pairs.forEach(p => { if (p && p.itemId && p.segId) reTrQueue.set(p.itemId + "|" + p.segId, p); });
+    if (reTrTimer) clearTimeout(reTrTimer);
+    reTrTimer = setTimeout(flushRetranscribe, 1200);
+  }
+  async function flushRetranscribe() {
+    reTrTimer = null;
+    if (!reTrQueue.size) return;
+    const byItem = new Map();
+    reTrQueue.forEach(v => {
+      if (!byItem.has(v.itemId)) byItem.set(v.itemId, []);
+      byItem.get(v.itemId).push(v.segId);
+    });
+    reTrQueue.clear();
+    const sel = $("#tr-model");
+    const model = (sel && sel.value) || "medium";
+    let n = 0;
+    for (const [itemId, segIds] of byItem) {
+      const segs = segsFor(itemId);
+      // 以 segId 重新定位索引：防抖期间片段可能已被删除/重排，找不到就跳过
+      const targets = segIds.map(id => ({ id, i: segs.findIndex(s => s.id === id) })).filter(t => t.i >= 0);
+      if (!targets.length) continue;
+      n += targets.length;
+      pushUndo("重新识别字幕");   // 文本将被覆盖，可撤销回旧文本
+      try {
+        const j = await api("/api/transcribe", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ item_id: itemId, model,
+            segments: targets.map(t => ({ start: segs[t.i].start, end: segs[t.i].end })) }) });
+        trackTask(j.task_id, (result) => {
+          const cur = segsFor(itemId);
+          const texts = (result && result.texts) || [];
+          let hit = 0;
+          targets.forEach((t, k) => {
+            const seg = cur.find(s => s.id === t.id);
+            if (seg && texts[k] != null && String(texts[k]).trim()) { seg.text = String(texts[k]).trim(); hit++; }
+          });
+          if (hit) { scheduleSaveProject(itemId); renderSegments(); }
+          toast(hit ? `已重新识别 ${hit} 段字幕` : "字幕识别未返回文本");
+          return true;   // 已自定义提示，抑制默认「任务完成」
+        }, { quiet: true });
+      } catch (e) {
+        toast("字幕重新识别启动失败: " + e.message, 5000);
+      }
+    }
+    if (n) toast(`正在重新识别 ${n} 段字幕…`, 2500);
+  }
+
   // 把当前工作选区写回聚焦片段（activeSeg）——修改识别片段的起止：
   // 点击片段行聚焦 → 波形上拖手柄/键盘微调选区 → 此处写回
   function applySelectionToActive() {
@@ -280,6 +338,7 @@ export function createSegments(ctx) {
     scheduleSaveProject(a.itemId);
     renderSegments();
     if (refreshSelColor) refreshSelColor();   // 写回后选区与片段一致 → 黄色回蓝
+    queueRetranscribe([{ itemId: a.itemId, segId: seg.id }]);   // 区间变了 → 重识别文本
     toast(`已更新片段区间 ${fmtT(seg.start)} ~ ${fmtT(seg.end)}`);
   }
 
@@ -317,6 +376,7 @@ export function createSegments(ctx) {
     if (state.activeSeg && delIds.has(state.activeSeg.segId)) state.activeSeg = { itemId: item.id, segId: first.id };
     scheduleSaveProject(item.id);
     renderSegments();
+    queueRetranscribe([{ itemId: item.id, segId: first.id }]);   // 合并成长句 → 整句重识别
     toast(`已合并 ${found.length} 段 → ${fmtT(start)} ~ ${fmtT(end)}（${(end - start).toFixed(1)}s）`);
   }
 
@@ -378,5 +438,6 @@ export function createSegments(ctx) {
 
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments, viewSegIds,
            addSegmentFromSelection, applySelectionToActive, mergeSegments, deleteSegment, jumpToSegment, auditionSegment,
-           gotoEditAndPlay, scrollSegRow, auditionFocus };
+           gotoEditAndPlay, scrollSegRow, auditionFocus,
+           queueRetranscribe, retranscribeEnabled };
 }

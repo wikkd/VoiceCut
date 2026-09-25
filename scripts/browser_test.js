@@ -722,6 +722,77 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("POOL:", JSON.stringify(rPool.result && rPool.result.result && rPool.result.result.value));
     if (rPool.result && rPool.result.exceptionDetails) console.log("POOL-EXC:", JSON.stringify(rPool.result.exceptionDetails));
 
+    // RETR：改选区 / 合并片段后自动重识别字幕（打桩 fetch 拦截转写接口与假任务结果）
+    const rRetr = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const orig = window.fetch;
+      const calls = [];
+      let fakeTexts = ['新文本X'];
+      const json = (o) => Promise.resolve(new Response(JSON.stringify(o),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      window.fetch = (u, o) => {
+        const url = String(typeof u === 'string' ? u : ((u && u.url) || ''));
+        if (url.indexOf('/api/transcribe') >= 0) {
+          calls.push(JSON.parse((o && o.body) || '{}'));
+          return json({ task_id: 'fake-tr' });
+        }
+        if (url.indexOf('/api/tasks/fake-tr') >= 0)
+          return json({ status: 'done', progress: 1, result: { texts: fakeTexts } });
+        return orig(u, o);
+      };
+      const item = (vc.state.items || [])[0];
+      if (!item) return { err: 'no item' };
+      await vc.selectItem(item);
+      const segs = vc.state.segmentsByItem.get(item.id);
+      while (segs.length < 2) segs.push(vc.newSegment(1 + segs.length * 2, 1.5 + segs.length * 2));
+      segs[0].text = '旧文本A'; segs[1].text = '旧文本B';
+      vc.renderSegments();
+      // 1) 改选区 → 应带着新区间请求转写，并把识别结果写回文本
+      vc.state.activeSeg = { itemId: item.id, segId: segs[0].id };
+      vc.state.selection = { start: 3, end: 6 };
+      vc.applySelectionToActive();
+      await new Promise(r => setTimeout(r, 2600));
+      const c1 = calls.length;
+      const seg0 = calls[0] && calls[0].segments && calls[0].segments[0];
+      const called1 = c1 === 1;
+      const itemOk = !!(calls[0] && calls[0].item_id === item.id);
+      const rangeOk = !!seg0 && seg0.start === 3 && seg0.end === 6;
+      const textBack = segs[0].text === '新文本X';   // 假任务结果回填
+      // 2) 连续两次改动同一片段 → 防抖合并为一次请求
+      vc.state.activeSeg = { itemId: item.id, segId: segs[1].id };
+      vc.state.selection = { start: 8, end: 9 };
+      vc.applySelectionToActive();
+      await new Promise(r => setTimeout(r, 300));
+      vc.state.selection = { start: 8, end: 10 };
+      vc.applySelectionToActive();
+      await new Promise(r => setTimeout(r, 2600));
+      const debounced = (calls.length - c1) === 1;
+      // 3) 合并片段 → 整句重识别（区间取并集）
+      fakeTexts = ['新文本M'];
+      const nBefore = calls.length;
+      vc.mergeSegments([segs[0].id, segs[1].id]);
+      await new Promise(r => setTimeout(r, 2600));
+      const merged = (calls.length - nBefore) === 1;
+      const lastCall = calls[calls.length - 1];
+      const mergedRange = !!lastCall && !!lastCall.segments && lastCall.segments.length === 1
+        && Math.abs(lastCall.segments[0].start - 3) < 0.01 && Math.abs(lastCall.segments[0].end - 10) < 0.01;
+      // 4) 开关关闭 → 不再触发（避免 ASR 慢时打扰）
+      localStorage.setItem('vc.retranscribe.v1', '0');
+      const nOff = calls.length;
+      const seg2 = vc.state.segmentsByItem.get(item.id)[0];
+      vc.state.activeSeg = { itemId: item.id, segId: seg2.id };
+      vc.state.selection = { start: 12, end: 13 };
+      vc.applySelectionToActive();
+      await new Promise(r => setTimeout(r, 2000));
+      const offOk = calls.length === nOff;
+      localStorage.setItem('vc.retranscribe.v1', '1');
+      window.fetch = orig;
+      return { called1, itemOk, rangeOk, textBack, debounced, merged, mergedRange, offOk,
+        calls: calls.length, ok: called1 && itemOk && rangeOk && textBack && debounced && merged && mergedRange && offOk };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("RETR:", JSON.stringify(rRetr.result && rRetr.result.result && rRetr.result.result.value));
+    if (rRetr.result && rRetr.result.exceptionDetails) console.log("RETR-EXC:", JSON.stringify(rRetr.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

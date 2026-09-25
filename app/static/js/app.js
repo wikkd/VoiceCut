@@ -462,6 +462,9 @@ import { createProjects } from "/static/js/modules/projects.js";
     $("#btn-play-selection").addEventListener("click", () => waveform.playSelection());
     $("#btn-export-selection").addEventListener("click", () => io.openExportModal());
     $("#minimap-toggle").addEventListener("change", (e) => $("#minimap-wrap").classList.toggle("hidden", !evtEl(e).checked));
+    $("#tr-auto").addEventListener("change", (e) => {   // 改选区/合并后自动重识别字幕（持久化开关）
+      try { localStorage.setItem("vc.retranscribe.v1", evtEl(e).checked ? "1" : "0"); } catch (_) {}
+    });
     $("#btn-add-seg").addEventListener("click", segments.addSegmentFromSelection);
     $("#btn-apply-seg").addEventListener("click", segments.applySelectionToActive);
     $("#btn-clear-segs").addEventListener("click", () => {
@@ -582,7 +585,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderSubs: () => subtitles.renderSubs(),
     selectItem: (item) => waveform.selectItem(item) });
   segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
-    state, toast, charById: store.charById, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject, setPage,
+    state, toast, api, trackTask: tasks.trackTask,
+    charById: store.charById, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject, setPage,
     closePool: () => pool.closePool(),
     // waveform 晚于 segments 创建：用闭包注入，写回片段后把选区从黄色刷回蓝色
     refreshSelColor: () => waveform.refreshSelColor(),
@@ -708,6 +712,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     createProject: projects.createProject, renameProject: projects.renameProject,
     deleteProject: projects.deleteProject,
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
+    applySelectionToActive: segments.applySelectionToActive, mergeSegments: segments.mergeSegments,
+    queueRetranscribe: segments.queueRetranscribe,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
     toggleAutoTraining: pool.toggleAutoTraining,
     setPage, loadTraining: training.loadTraining, startTrain: training.startTrain,

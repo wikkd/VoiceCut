@@ -135,6 +135,8 @@ export function createIo(ctx) {
     if (!state.currentProject) return toast("请先选择项目");
     const n = (state.items || []).reduce((a, item) => a + segsFor(item.id).filter(s => !s.text.trim()).length, 0);
     if (!n) return toast("片段列表为空或都已填写文本");
+    const auto = $("#tr-auto");
+    if (auto) { try { auto.checked = localStorage.getItem("vc.retranscribe.v1") !== "0"; } catch (e) { auto.checked = true; } }
     showModal("#modal-transcribe");
   }
   async function doTranscribe() {
