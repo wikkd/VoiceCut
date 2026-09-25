@@ -397,10 +397,11 @@ export function createWaveform(ctx) {
   function zoomIn() { zoomSet(state.zoomLevel <= 0 ? 1 : state.zoomLevel * 1.5); }
   function zoomOut() { zoomSet(state.zoomLevel <= 1 ? 0 : state.zoomLevel / 1.5); }
   function nudgeSelection(delta, mode) {
-    if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先在时间轴上拖拽出选区");
+    if (!state.ws || !state.selection || !state.selectionRegion) return toast("请先在波形或时间轴上拖拽出选区");
     let { start, end } = state.selection;
     const dur = state.currentItem ? state.currentItem.duration : end;
     if (mode === "move") { start = Math.max(0, Math.min(dur, start + delta)); end = Math.max(0, Math.min(dur, end + delta)); }
+    else if (mode === "start") { start = Math.max(0, Math.min(end - 0.05, start + delta)); }
     else { end = Math.max(start + 0.05, Math.min(dur, end + delta)); }
     state.selectionRegion.setOptions({ start, end });  // vendored Region 无 setExtent（此前 Shift 微调静默抛错）
     state.selection = { start, end };

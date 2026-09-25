@@ -109,9 +109,24 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     const okW = wv && wv.sel && Math.abs(wv.sel.start - wv.expect.a) < 1.0 && Math.abs(wv.sel.end - wv.expect.b) < 1.0
       && wv.drag === false && wv.resize === false;
 
+    // 键盘微调（真实按键事件）：Shift+→ 调终点 / Alt+→ 调起点 / → 平移，各 +0.5s
+    const keyEv = (keyName, vk, mods) => Promise.all([
+      send("Input.dispatchKeyEvent", { type: "keyDown", key: keyName, code: keyName, windowsVirtualKeyCode: vk, modifiers: mods }),
+      send("Input.dispatchKeyEvent", { type: "keyUp", key: keyName, code: keyName, windowsVirtualKeyCode: vk, modifiers: mods }),
+    ]);
+    const selJson = () => send("Runtime.evaluate", { expression: `JSON.stringify(window.__vc.state.selection)`, returnByValue: true })
+      .then(r2 => JSON.parse(r2.result.result.value));
+    const S0 = await selJson();
+    await keyEv("ArrowRight", 39, 8);   // Shift → end +0.5
+    await keyEv("ArrowRight", 39, 1);   // Alt → start +0.5
+    await keyEv("ArrowRight", 39, 0);   // 平移 → 双边 +0.5
+    const S1 = await selJson();
+    const okK = S0 && S1 && Math.abs((S1.end - S0.end) - 1.0) < 0.26 && Math.abs((S1.start - S0.start) - 1.0) < 0.26;
+    console.log("键盘微调:", JSON.stringify({ before: S0, after: S1 }), okK ? "KEY-NUDGE PASS" : "KEY-NUDGE FAIL");
+
     console.log("页面错误:", errors.length ? errors.join(" | ") : "（无）");
     console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL");
-    process.exitCode = (ok && okW) ? 0 : 1;
+    process.exitCode = (ok && okW && okK) ? 0 : 1;
   } finally {
     try { child.kill(); } catch (e) {}
     try { fs.rmSync(PROF, { recursive: true, force: true }); } catch (e) {}

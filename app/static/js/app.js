@@ -4,7 +4,7 @@ import Regions from "/static/vendor/plugins/regions.esm.js";
 import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
 import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, evtEl, closestEl, LS_PROJECT,
-         SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
+         SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, NUDGE_STEP, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
 import { state, toast, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
 import { createTraining } from "/static/js/modules/training.js";
@@ -280,10 +280,12 @@ import { createProjects } from "/static/js/modules/projects.js";
         case "v": case "V": io.doSeparate(); break;
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
-          const d = e.key === "ArrowRight" ? SEEK_STEP : -SEEK_STEP;
+          const d = (e.key === "ArrowRight" ? 1 : -1) * NUDGE_STEP;
           if (e.ctrlKey) { (e.key === "ArrowRight" ? waveform.markForward() : waveform.unmarkLast()); } // Ctrl+→ 快进多选 / Ctrl+← 撤销上一段
-          else if (e.shiftKey) waveform.nudgeSelection(d, "end"); // Shift+←→ 微调选区终点边界
-          else waveform.seekBy(d);                                // ←→ 快退 / 快进 5 秒
+          else if (e.shiftKey) waveform.nudgeSelection(d, "end");   // Shift+←→ 微调选区终点
+          else if (e.altKey) waveform.nudgeSelection(d, "start");   // Alt+←→ 微调选区起点
+          else if (state.selection && state.selectionRegion) waveform.nudgeSelection(d, "move"); // ←→ 平移整个选区
+          else waveform.seekBy((e.key === "ArrowRight" ? 1 : -1) * SEEK_STEP);  // 无选区：快退 / 快进 5 秒
           break;
         }
         case "ArrowUp": case "ArrowDown": e.preventDefault(); waveform.adjVolume(e.key === "ArrowUp" ? VOL_STEP : -VOL_STEP); break;

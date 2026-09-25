@@ -115,29 +115,36 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("MAIN:", JSON.stringify(r.result && r.result.result && r.result.result.value, null, 2));
     if (r.result && r.result.exceptionDetails) console.log("EXC:", JSON.stringify(r.result.exceptionDetails));
 
-    // 快捷键：←→ 快退/快进、↑↓ 音量、小键盘 −/+ 快进
+    // 快捷键：有选区时 ←→ 平移选区(+0.5s)、播放头不动；↑↓ 音量；小键盘 −/+ 快进
     const kd = (key, code, vk, mods = 0) => send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: mods });
     const ku = (key, code, vk, mods = 0) => send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: mods });
     const press = async (key, code, vk, mods = 0) => { await kd(key, code, vk, mods); await ku(key, code, vk, mods); };
-    const rK0 = await send("Runtime.evaluate", { expression: `(() => { window.__vc.state.ws.setVolume(0.5); window.__vc.state.ws.setTime(1); return window.__vc.state.ws.getVolume(); })()`, returnByValue: true });
-    const volBefore = rK0.result && rK0.result.result && rK0.result.result.value;
-    await press("ArrowRight", "ArrowRight", 39);       // +5s
-    const rK1 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
-    await press("ArrowLeft", "ArrowLeft", 37);         // -5s
-    const rK2 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
+    const rK0 = await send("Runtime.evaluate", { expression: `(() => { window.__vc.state.ws.setVolume(0.5); window.__vc.state.ws.setTime(1); return JSON.stringify({ vol: window.__vc.state.ws.getVolume(), sel: window.__vc.state.selection }); })()`, returnByValue: true });
+    const base = JSON.parse(rK0.result.result.value);   // { vol, sel }
+    const volBefore = base.vol;
+    await press("ArrowRight", "ArrowRight", 39);       // 平移选区 +0.5s
+    const rK1 = await send("Runtime.evaluate", { expression: `JSON.stringify({ t: window.__vc.state.ws.getCurrentTime(), sel: window.__vc.state.selection })`, returnByValue: true });
+    await press("ArrowLeft", "ArrowLeft", 37);         // 平移选区 −0.5s（回原位）
+    const rK2 = await send("Runtime.evaluate", { expression: `JSON.stringify({ t: window.__vc.state.ws.getCurrentTime(), sel: window.__vc.state.selection })`, returnByValue: true });
     await press("ArrowUp", "ArrowUp", 38);             // +5%
     const rK3 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getVolume()`, returnByValue: true });
-    await press("NumpadAdd", "NumpadAdd", 107);        // +15s
+    await press("NumpadAdd", "NumpadAdd", 107);        // +15s（小键盘仍为跳转）
     const rK4 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
     await press("NumpadSubtract", "NumpadSubtract", 109); // -15s
     const rK5 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getCurrentTime()`, returnByValue: true });
     await press("ArrowDown", "ArrowDown", 40);         // -5%
     const rK6 = await send("Runtime.evaluate", { expression: `window.__vc.state.ws.getVolume()`, returnByValue: true });
     const v = (o) => o.result && o.result.result && o.result.result.value;
-    const t1 = 1, t2 = v(rK1), t3 = v(rK2), vol1 = v(rK3), t4 = v(rK4), t5 = v(rK5), vol2 = v(rK6);
-    const keysOk = t2 > t1 + 1 && t3 < t2 - 1 && Math.abs(vol1 - (volBefore + 0.05)) < 0.001
-      && t4 > t3 + 1 && t5 < t4 - 1 && Math.abs(vol2 - volBefore) < 0.001;
-    console.log("KEYS:", JSON.stringify({ t1, t2, t3, volBefore, vol1, t4, t5, vol2, ok: keysOk }));
+    const K1 = JSON.parse(v(rK1)), K2 = JSON.parse(v(rK2));
+    const vol1 = v(rK3), t4 = v(rK4), t5 = v(rK5), vol2 = v(rK6);
+    const near = (a, b, e) => Math.abs(a - b) < e;
+    const keysOk = base.sel && K1.sel && K2.sel
+      && near(K1.sel.start, base.sel.start + 0.5, 0.05) && near(K1.sel.end, base.sel.end + 0.5, 0.05)   // → 平移 +0.5
+      && near(K1.t, 1, 0.05)                                                                             // 播放头不动
+      && near(K2.sel.start, base.sel.start, 0.05) && near(K2.sel.end, base.sel.end, 0.05)                // ← 平移回原位
+      && Math.abs(vol1 - (volBefore + 0.05)) < 0.001
+      && t4 > 1 + 1 && t5 < t4 - 1 && Math.abs(vol2 - volBefore) < 0.001;                                // 小键盘跳转保留
+    console.log("KEYS:", JSON.stringify({ base: base.sel, K1, K2, vol1, t4, t5, vol2, ok: keysOk }));
 
     // Ctrl+→ 多选快进：导入 40s 长素材 → 连续标记多段 → Ctrl+← 撤销
     const fd = new FormData();
