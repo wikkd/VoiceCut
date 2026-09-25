@@ -56,12 +56,47 @@ export function createSegments(ctx) {
     tr.style.borderLeft = ch ? "4px solid " + ch.color : "";
   }
 
+  // ── 片段列表筛选/排序（只影响展示，data-i 始终是原始索引，编辑/删除不受影响） ──
+  function _viewRows(rows) {
+    const f = state.segFilter || { text: "", status: "all" };
+    const kw = (f.text || "").trim().toLowerCase();
+    let out = rows;
+    if (kw) out = out.filter(r => (r.seg.text || "").toLowerCase().includes(kw));
+    const st = f.status || "all";
+    if (st === "ok") out = out.filter(r => segIssues(r.seg).length === 0);
+    else if (st === "bad") out = out.filter(r => segIssues(r.seg).length > 0);
+    else if (st === "locked") out = out.filter(r => r.seg.locked);
+    else if (st === "unassigned") out = out.filter(r => !r.seg.characterId);
+    const sort = state.segSort || "time";
+    if (sort === "dur") {
+      out = out.slice().sort((a, b) => (b.seg.end - b.seg.start) - (a.seg.end - a.seg.start));
+    } else if (sort === "score") {
+      out = out.slice().sort((a, b) => (b.seg.q ?? -1) - (a.seg.q ?? -1));   // 未打分排后
+    } else if (sort === "char") {
+      const named = [], un = [];
+      out.forEach(r => (r.seg.characterId ? named : un).push(r));
+      named.sort((a, b) => {
+        const na = (charById(a.seg.characterId) || {}).name || "";
+        const nb = (charById(b.seg.characterId) || {}).name || "";
+        return na === nb ? a.seg.start - b.seg.start : na.localeCompare(nb, "zh");
+      });
+      un.sort((a, b) => a.seg.start - b.seg.start);   // 未分配组排最后
+      out = named.concat(un);
+    }
+    return out;
+  }
+
   function renderSegments() {
     const tb = $("#seg-tbody");
     const empty = $("#seg-empty");
-    const rows = allSegs();
+    const all = allSegs();
+    const rows = _viewRows(all);
     state._segRows = rows;                       // 虚拟渲染的数据源
-    $("#seg-count").textContent = rows.length ? `(${rows.length})` : "";
+    const cnt = $("#seg-count");
+    const filtered = (state.segFilter && (state.segFilter.text || "").trim())
+      || (state.segFilter && state.segFilter.status !== "all");
+    cnt.textContent = !all.length ? ""
+      : filtered ? `(${rows.length}/${all.length})` : `(${all.length})`;
     empty.classList.toggle("hidden", rows.length > 0);
     if (rows.length <= VIRTUAL_THRESHOLD) {
       tb.innerHTML = "";

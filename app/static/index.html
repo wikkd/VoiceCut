@@ -182,6 +182,22 @@
         </div>
         <button class="grip-close" data-close-panel="seg" title="隐藏面板">×</button>
       </div>
+      <div id="seg-filterbar">
+        <input id="seg-filter-text" type="text" placeholder="筛选文本…" title="按片段文本关键字过滤">
+        <select id="seg-filter-status" title="按状态过滤">
+          <option value="all">全部状态</option>
+          <option value="ok">合规</option>
+          <option value="bad">不合规</option>
+          <option value="locked">已锁定</option>
+          <option value="unassigned">未指派角色</option>
+        </select>
+        <select id="seg-sort" title="排序方式">
+          <option value="time">时间序</option>
+          <option value="dur">时长 ↓</option>
+          <option value="score">清晰度 ↓</option>
+          <option value="char">按角色</option>
+        </select>
+      </div>
       <div class="panel-body seg-body">
         <div id="seg-scroll">
           <table id="seg-table">

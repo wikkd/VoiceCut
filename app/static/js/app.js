@@ -60,6 +60,23 @@ import { createProjects } from "/static/js/modules/projects.js";
   }
 
   // 片段列表：点击/多选（Shift 区间、Ctrl 追加），右键重定向角色
+  // 筛选/排序控件（只影响展示顺序与可见性，行 data-i 仍是原始索引）
+  let _segFilterTimer = 0;
+  $("#seg-filter-text").addEventListener("input", (e) => {
+    clearTimeout(_segFilterTimer);
+    _segFilterTimer = setTimeout(() => {
+      state.segFilter.text = evtEl(e).value || "";
+      segments.renderSegments();
+    }, 200);
+  });
+  $("#seg-filter-status").addEventListener("change", (e) => {
+    state.segFilter.status = evtEl(e).value || "all";
+    segments.renderSegments();
+  });
+  $("#seg-sort").addEventListener("change", (e) => {
+    state.segSort = evtEl(e).value || "time";
+    segments.renderSegments();
+  });
   $("#seg-tbody").addEventListener("click", (e) => {
     const btn = evtEl(e).closest("button");
     const tr = closestEl(evtEl(e), "tr.seg-row");
