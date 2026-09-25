@@ -587,6 +587,30 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("MERGE:", JSON.stringify(rM.result && rM.result.result && rM.result.result.value));
     if (rM.result && rM.result.exceptionDetails) console.log("MERGE-EXC:", JSON.stringify(rM.result.exceptionDetails));
 
+    // SCROLL：点击片段行不应把列表跳回第一条（重渲染保持滚动位置）
+    const rSc = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const segs = vc.state.segmentsByItem.get(itId);
+      segs.length = 0;
+      for (let k = 0; k < 60; k++) segs.push(vc.newSegment(k, k + 0.5, 's' + k));
+      vc.renderSegments();
+      await new Promise(r => setTimeout(r, 250));
+      const sc = document.querySelector('#seg-scroll');
+      if (!sc || sc.scrollHeight <= sc.clientHeight + 10) return { skip: 'not scrollable' };
+      sc.scrollTop = 300;
+      await new Promise(r => setTimeout(r, 150));
+      const before = sc.scrollTop;
+      const rows = document.querySelectorAll('#seg-tbody tr.seg-row');
+      const target = rows[Math.min(10, rows.length - 1)];
+      target.click();                                  // 点击选中（此前会导致列表跳回顶部）
+      await new Promise(r => setTimeout(r, 450));
+      const after = sc.scrollTop;
+      return { before, after, rows: rows.length,
+        ok: before > 0 && Math.abs(after - before) < 5 };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("SCROLL:", JSON.stringify(rSc.result && rSc.result.result && rSc.result.result.value));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

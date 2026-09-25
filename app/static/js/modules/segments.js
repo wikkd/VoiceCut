@@ -114,6 +114,10 @@ export function createSegments(ctx) {
   function renderSegments() {
     _syncItemFilter();
     const tb = $("#seg-tbody");
+    const sc = $("#seg-scroll");
+    // 重建 tbody 会瞬间清空内容 → 浏览器把 scrollTop 归零（点击行/编辑等重渲染会莫名跳回第一条）。
+    // 渲染前后保持滚动位置；行数变少时由浏览器自动 clamp 到最大滚动值。
+    const keepTop = sc ? sc.scrollTop : 0;
     const empty = $("#seg-empty");
     const all = allSegs();
     const rows = _viewRows(all);
@@ -132,9 +136,11 @@ export function createSegments(ctx) {
       });
       if (tb.firstChild) _measureRowH(tb.firstChild);
     } else {
-      const sc = $("#seg-scroll");
-      if (sc) sc.scrollTop = 0;
       _renderWindow();
+    }
+    if (sc && sc.scrollTop !== keepTop) {
+      sc.scrollTop = keepTop;                                     // 保持滚动位置（跳转类调用会在其后自行滚动）
+      if (rows.length > VIRTUAL_THRESHOLD) _renderWindow();        // 大表：按恢复后的位置重建可视窗口
     }
     // 重渲染后恢复试听高亮（不滚动，避免打扰）
     if (state.auditionFocus) auditionFocus(state.auditionFocus.itemId, state.auditionFocus.segId, false);
