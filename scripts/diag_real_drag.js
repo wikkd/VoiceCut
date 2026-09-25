@@ -125,14 +125,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     console.log("键盘微调:", JSON.stringify({ before: S0, after: S1 }), okK ? "KEY-NUDGE PASS" : "KEY-NUDGE FAIL");
 
     // Ctrl+A 全选/取消全选（真实按键，Ctrl=2）
+    // 第二轮专门在片段文本输入框获得焦点时按：不应漏给浏览器原生全选
     const segCount = () => send("Runtime.evaluate", { expression: `window.__vc.state.selectedSegs.size`, returnByValue: true }).then(r2 => r2.result.result.value);
     const n0 = await segCount();
     await keyEv("a", 65, 2);
     const n1 = await segCount();
     await keyEv("a", 65, 2);
     const n2 = await segCount();
-    const okA = n1 > 0 && n2 === 0;
-    console.log("Ctrl+A 全选:", JSON.stringify({ before: n0, all: n1, toggled: n2 }), okA ? "CTRL-A PASS" : "CTRL-A FAIL");
+    // 焦点在 seg-text 输入框内再按 Ctrl+A：仍应走全选逻辑且不产生原生文本选区
+    const focusIn = await send("Runtime.evaluate", { expression: `(() => {
+      const inp = document.querySelector("#seg-tbody .seg-text");
+      if (!inp) return false;
+      inp.focus();
+      return document.activeElement === inp;
+    })()`, returnByValue: true });
+    const inFocus = focusIn.result.result.value;
+    await keyEv("a", 65, 2);
+    const n3 = await segCount();
+    const nativeSel = (await send("Runtime.evaluate", { expression: `window.getSelection().toString()`, returnByValue: true })).result.result.value;
+    const okA = n1 > 0 && n2 === 0 && (!inFocus || (n3 > 0 && nativeSel === ""));
+    console.log("Ctrl+A 全选:", JSON.stringify({ before: n0, all: n1, toggled: n2, inFocus: inFocus ? n3 : "skip", nativeSel }), okA ? "CTRL-A PASS" : "CTRL-A FAIL");
 
     console.log("页面错误:", errors.length ? errors.join(" | ") : "（无）");
     console.log(ok ? "REAL-DRAG PASS" : "REAL-DRAG FAIL", "|", okW ? "WAVE-DRAG PASS" : "WAVE-DRAG FAIL");

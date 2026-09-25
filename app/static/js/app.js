@@ -248,18 +248,9 @@ import { createProjects } from "/static/js/modules/projects.js";
   // ── 快捷键 ─────────────────────────────────────────────
   function setupShortcuts() {
     window.addEventListener("keydown", (e) => {
-      // Ctrl/Cmd + +/-/0: 屏蔽浏览器页面缩放，改为时间轴缩放
-      if (e.ctrlKey || e.metaKey) {
-        const k = e.key;
-        if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); waveform.zoomIn(); return; }
-        if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); waveform.zoomOut(); return; }
-        if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
-      }
-      const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
-      if (tag === "input" || tag === "textarea" || tag === "select") return;
-      if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
-      // Ctrl+A 全选/取消全选：范围为当前筛选下可见的片段（所见即所选，避免误删被过滤隐藏的行）；
-      // 输入框内不拦截，保留原生"全选文本"。
+      // Ctrl+A 全选/取消全选片段：必须放在所有守卫（含 input/textarea 早退）之前，
+      // 否则焦点在片段文本框里时会漏给浏览器原生全选。范围为当前筛选下可见的片段
+      // （所见即所选，避免误删被过滤隐藏的行）；输入框内选文本请用双击/拖选。
       if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
         e.preventDefault();
         const ids = segments.viewSegIds();
@@ -275,6 +266,16 @@ import { createProjects } from "/static/js/modules/projects.js";
         segments.renderSegments();
         return;
       }
+      // Ctrl/Cmd + +/-/0: 屏蔽浏览器页面缩放，改为时间轴缩放
+      if (e.ctrlKey || e.metaKey) {
+        const k = e.key;
+        if (k === "+" || k === "=" || k === "Add" || k === "NumpadAdd") { e.preventDefault(); waveform.zoomIn(); return; }
+        if (k === "-" || k === "Subtract" || k === "NumpadSubtract") { e.preventDefault(); waveform.zoomOut(); return; }
+        if (k === "0") { e.preventDefault(); waveform.zoomSet(0); return; }
+      }
+      const tag = (/** @type {HTMLElement} */ (e.target).tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return;
+      if (e.ctrlKey && (e.key === "o" || e.key === "O")) { e.preventDefault(); io.importDialog(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
         if (e.shiftKey) store.redo(); else store.undo();
