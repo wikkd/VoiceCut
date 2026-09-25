@@ -249,6 +249,19 @@ def _speakers_worker(c, item_id: str) -> dict:
     pool = project_mod.load_pool(c.cfg.workdir, project_id)
     label_embeds = res.get("label_embeddings") or {}
     cleaned = 0
+    # 孤儿角色：标签全部指向已删除素材、无训练模型、未被片段引用 → 清掉
+    orphan_ids: set = set()
+    existing_ids = {it.id for it in c.store.all()}
+    pj0 = project_mod.load_project(c.cfg.workdir, item.id)
+    referenced = {seg.get("characterId") for seg in pj0["segments"]
+                  if seg.get("characterId")}
+    orphans = speakers_mod.orphan_characters(
+        pool["characters"], existing_ids, referenced)
+    if orphans:
+        orphan_ids = {x["id"] for x in orphans}
+        cleaned += len(orphans)
+        pool["characters"] = [x for x in pool["characters"]
+                              if x["id"] not in orphan_ids]
     if res.get("quality") != "mfcc" and label_embeds:
         # 清理旧版本产生的“一人一窗口”垃圾角色：只删自动命名(说话人N)、仅归属
         # 本素材、从未合并(emb_count<=1)、且未训练(无 exp)的角色；清空引用它们
@@ -297,6 +310,16 @@ def _speakers_worker(c, item_id: str) -> dict:
     project_mod.save_pool(c.cfg.workdir, project_id, chars)
     char_of_label = {lb: cid for lb, cid in assignments.items()}
     proj = project_mod.load_project(c.cfg.workdir, item.id)
+    # 有字幕但零片段：按字幕行补生成片段，识别结果才有"片段 + 试听"
+    if not proj["segments"] and subs:
+        fresh = speakers_mod.segments_from_subs(subs)
+        for sg in fresh:
+            sg["id"] = project_mod.new_uid("s")
+        proj["segments"] = fresh
+    if orphan_ids:
+        for seg in proj["segments"]:
+            if seg.get("characterId") in orphan_ids:
+                seg["characterId"] = None
     # 窗口化声纹分段重新绑定：同一句话含两人时标 mixed 且不自动绑定角色，
     # 避免旧逻辑（每字幕单一声纹）把两人并入同一个角色。
     proj["segments"], mixed_segs = speakers_mod.bind_segments(
@@ -410,6 +433,28 @@ def _project_speakers_run(c, project_id: str) -> dict:
     chars = pool["characters"]
     cleaned = 0
     stale_ids: set = set()
+    # 3a) 孤儿角色：标签全部指向已删除素材的角色永远无法再匹配任何片段，
+    #     只会污染池子（表现为"识别后角色没有归一"），先清掉。
+    existing_ids = {it.id for it in c.store.all()}
+    referenced: set = set()
+    for it in items:
+        pj = project_mod.load_project(c.cfg.workdir, it.id)
+        referenced |= {seg.get("characterId") for seg in pj["segments"]
+                       if seg.get("characterId")}
+    orphans = speakers_mod.orphan_characters(chars, existing_ids, referenced)
+    if orphans:
+        orphan_ids = {x["id"] for x in orphans}
+        cleaned += len(orphans)
+        chars = [x for x in chars if x["id"] not in orphan_ids]
+        for it in items:
+            pj = project_mod.load_project(c.cfg.workdir, it.id)
+            changed = False
+            for seg in pj["segments"]:
+                if seg.get("characterId") in orphan_ids:
+                    seg["characterId"] = None
+                    changed = True
+            if changed:
+                project_mod.save_project(c.cfg.workdir, it.id, pj)
     for s in sources:
         stale = speakers_mod.stale_characters(s["item"].id, chars)
         stale_ids |= {c["id"] for c in stale}
@@ -468,6 +513,13 @@ def _project_speakers_run(c, project_id: str) -> dict:
             raise TaskCancelled()
         spk_segs = res["items"][si]["speaker_segments"]
         proj = project_mod.load_project(c.cfg.workdir, s["item"].id)
+        # 有字幕但零片段的素材：按字幕行补生成片段，识别结果才有
+        # "片段 + 试听"可看（bind_segments 只重绑已有片段）。
+        if not proj["segments"] and s["subs"]:
+            fresh = speakers_mod.segments_from_subs(s["subs"])
+            for sg in fresh:
+                sg["id"] = project_mod.new_uid("s")
+            proj["segments"] = fresh
         proj["segments"], mixed_segs = speakers_mod.bind_segments(
             proj["segments"], spk_segs, char_of_label)
         proj["speaker_segments"] = spk_segs

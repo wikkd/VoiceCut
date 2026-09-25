@@ -151,10 +151,12 @@ export function createPool(ctx) {
 
   async function doIdentifySpeakers() {
     if (!state.currentProject) return toast("请先选择项目");
+    state.identifying = true;  // 识别期间冻结角色池落盘，防止旧快照覆盖结果
     toast("开始项目级说话人识别（ECAPA 声纹，将把项目内全部素材联合聚类，首次含模型加载）…");
     try {
       const j = await api(`/api/projects/${state.currentProject.id}/speakers/generate`, { method: "POST" });
       trackTask(j.task_id, async (result) => {
+        state.identifying = false;
         if (Array.isArray(result.characters)) state.characters = result.characters;
         await loadAllItemData();
         renderPool(); segments.renderSegments(); renderSubs();
@@ -167,7 +169,7 @@ export function createPool(ctx) {
         if (cleaned > 0) msg += `；已清理 ${cleaned} 个旧版本残留角色`;
         toast(msg);
       });
-    } catch (e) { toast("项目说话人识别启动失败: " + e.message, 6000); }
+    } catch (e) { state.identifying = false; toast("项目说话人识别启动失败: " + e.message, 6000); }
   }
 
   function renderAutoAnalyzeBtn() {

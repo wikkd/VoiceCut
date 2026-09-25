@@ -438,6 +438,60 @@ def _cluster_labels(embeddings, thr=_CLUSTER_THR, min_k=_CLUSTER_MIN_K,
     return _merge_similar_clusters(X, lab)
 
 
+def orphan_characters(characters: list, existing_item_ids: set,
+                      referenced_char_ids: set = frozenset()) -> list:
+    """Roles whose labels all point to deleted items.
+
+    Deleting a media item leaves its per-item speaker labels
+    (``<item>:<speaker>``) behind; characters holding only such labels can
+    never match any segment again and keep polluting the pool ("识别后角色
+    没有归一、没有片段").  A character is an orphan when
+
+    * it has at least one label and **every** label's item part is gone,
+    * it carries no trained model (no ``exp``),
+    * no existing segment still references it via ``characterId``.
+
+    Characters with no labels (manually created) or mixed live/dead labels
+    are kept.  Returns the list that should be removed.
+    """
+    out = []
+    for c in characters:
+        if c.get("exp"):
+            continue
+        if c.get("id") in referenced_char_ids:
+            continue
+        labels = c.get("speakerLabels") or []
+        if not labels:
+            continue
+        if any(lb.split(":", 1)[0] in existing_item_ids for lb in labels):
+            continue  # 至少还有一个活素材标签（混合标签也算活）
+        out.append(c)
+    return out
+
+
+def segments_from_subs(subs: list) -> list:
+    """Build a fresh segment list from subtitle lines.
+
+    Speaker recognition only binds *existing* segments (bind_segments works by
+    time overlap); an item that has subtitles but zero segments shows nothing
+    in the character pool -- no rows, no audition.  Generating one segment per
+    subtitle line (same shape the frontend's addSubToSegments produces) lets
+    recognition label them right away.  Only used when the item has no
+    segments yet, so manual work is never overwritten.
+    """
+    segs = []
+    for s in subs:
+        start = float(s["start"] if not hasattr(s, "start") else s.start)
+        end = float(s["end"] if not hasattr(s, "end") else s.end)
+        text = (s["text"] if not hasattr(s, "text") else s.text) or ""
+        if end <= start:
+            continue
+        segs.append({"id": None, "start": start, "end": end, "text": text,
+                     "language": "JP", "speakerLabel": None,
+                     "characterId": None, "mixed": False})
+    return segs
+
+
 def stale_characters(item_id: str, characters: list) -> list:
     """Auto-created garbage characters from previous runs of ``item_id``.
 

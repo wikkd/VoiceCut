@@ -110,6 +110,9 @@ export function createStore(ctx) {
     poolTimer = setTimeout(savePoolNow, 400);
   }
   async function savePoolNow() {
+    // 识别(speakers 任务)运行期间禁止落盘：此刻的 state.characters 可能是
+    // 旧快照，落盘会把后端刚写好的识别结果整池回滚（真实发生过）。
+    if (state.identifying) return;
     if (!state.poolDirty || !state.currentProject || poolInFlight) return;
     const projectId = state.currentProject.id;
     const v = poolVer;

@@ -70,11 +70,14 @@ export function createTasks(ctx) {
           let customToast = false;
           if (info.doneCb) customToast = !!(await info.doneCb(t.result));
           if (!customToast) toast("任务完成");
+          state.identifying = false;  // 识别回调已完成，解冻角色池落盘
         } else if (t.status === "error") {
           state.activeTasks.delete(tid);
+          state.identifying = false;
           toast("任务失败: " + (t.message || "未知错误"), 6000);
         } else if (t.status === "cancelled") {
           state.activeTasks.delete(tid);
+          state.identifying = false;
           toast("任务已取消");
         }
       } catch (e) { /* 网络抖动忽略 */ }
