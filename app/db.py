@@ -59,6 +59,19 @@ CREATE TABLE IF NOT EXISTS item_projects (
     segments TEXT NOT NULL DEFAULT '[]',
     speaker_segments TEXT NOT NULL DEFAULT '[]'
 );
+CREATE TABLE IF NOT EXISTS tasks (
+    id         TEXT PRIMARY KEY,
+    kind       TEXT NOT NULL DEFAULT '',
+    status     TEXT NOT NULL DEFAULT 'pending',
+    progress   REAL NOT NULL DEFAULT 0,
+    message    TEXT,
+    error      TEXT,
+    result     TEXT,
+    depends_on TEXT,
+    created    REAL NOT NULL,
+    started    REAL,
+    finished   REAL
+);
 """
 
 _PROJECT_COLS = ("id", "name", "created", "updated", "extra")
@@ -70,6 +83,19 @@ DEFAULT_PROJECT_NAME = "默认项目"  # default project name
 
 def db_path(workdir: str | Path) -> Path:
     return Path(workdir) / "voicecut.db"
+
+
+def exec_write(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> None:
+    """带锁执行单条写语句并提交（供 TaskManager 等外部模块持久化用）。"""
+    with _db_lock:
+        conn.execute(sql, params)
+        conn.commit()
+
+
+def exec_query(conn: sqlite3.Connection, sql: str, params: tuple = ()) -> list[dict]:
+    """带锁执行查询，返回 dict 行列表。"""
+    with _db_lock:
+        return [dict(r) for r in conn.execute(sql, params)]
 
 
 def get_conn(workdir: str | Path) -> sqlite3.Connection:

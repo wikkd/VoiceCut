@@ -60,21 +60,40 @@ def sessdata() -> str:
     return ""
 
 
+# ── 下载引擎注册表 ──────────────────────────────────────────
+# 新增引擎只需加一条描述（env / exe / 参数构造器），无需改探测与分发逻辑。
+
+def _bbdown_args(exe: str, job: dict, out_dir: Path, sd: str) -> list[str]:
+    cmd = [exe, job["url"], "--work-dir", str(out_dir), "--file-pattern", job["id"]]
+    if sd:
+        cmd += ["--cookie", f"SESSDATA={sd}"]
+    return cmd
+
+
+def _yutto_args(exe: str, job: dict, out_dir: Path, sd: str) -> list[str]:
+    cmd = [exe, job["url"], "-d", str(out_dir), "--no-danmaku"]
+    if sd:
+        cmd += ["-c", sd]
+    return cmd
+
+
+_ENGINES = (
+    {"name": "bbdown", "env": "VC_BBDOWN", "exe": "BBDown", "build_args": _bbdown_args},
+    {"name": "yutto", "env": "VC_YUTTO", "exe": "yutto", "build_args": _yutto_args},
+)
+
+
 def detect_external_downloader() -> tuple[str, str] | None:
     """探测可用的外部下载器，返回 (名称, 可执行文件路径)。
 
-    支持 BBDown（.NET CLI）与 yutto（Python CLI）。可用环境变量
-    ``VC_BBDOWN`` / ``VC_YUTTO`` 显式指定路径。都不可用时返回 None
-    （回退到内置 yt-dlp）。
+    遍历 ``_ENGINES`` 注册表：显式环境变量路径优先，其次 PATH。
+    都不可用时返回 None（回退到内置 yt-dlp）。
     """
-    candidates = [
-        ("bbdown", os.environ.get("VC_BBDOWN", "").strip(), "BBDown"),
-        ("yutto", os.environ.get("VC_YUTTO", "").strip(), "yutto"),
-    ]
-    for name, explicit, exe in candidates:
-        path = explicit or shutil.which(exe) or shutil.which(exe.lower())
+    for eng in _ENGINES:
+        explicit = os.environ.get(eng["env"], "").strip()
+        path = explicit or shutil.which(eng["exe"]) or shutil.which(eng["exe"].lower())
         if path and Path(path).exists():
-            return name, str(path)
+            return eng["name"], str(path)
     return None
 
 
@@ -407,21 +426,14 @@ def _download_external(
     tasks: TaskManager | None,
     task_id: str | None,
 ) -> Path:
-    """用外部下载器（BBDown / yutto）下载完整视频。"""
+    """用外部下载器（BBDown / yutto 等，见 _ENGINES 注册表）下载完整视频。"""
     if tasks and task_id:
         tasks.update(task_id, message=f"下载完整视频（{name}）…")
 
-    if name == "bbdown":
-        cmd = [exe, job["url"], "--work-dir", str(out_dir),
-               "--file-pattern", f"{job['id']}"]
-        sd = sessdata()
-        if sd:
-            cmd += ["--cookie", f"SESSDATA={sd}"]
-    else:  # yutto
-        cmd = [exe, job["url"], "-d", str(out_dir), "--no-danmaku"]
-        sd = sessdata()
-        if sd:
-            cmd += ["-c", sd]
+    eng = next((e for e in _ENGINES if e["name"] == name), None)
+    if eng is None:
+        raise RuntimeError(f"未知下载引擎: {name}")
+    cmd = eng["build_args"](exe, job, out_dir, sessdata())
 
     before = {p for p in out_dir.rglob("*") if p.is_file()}
     proc = subprocess.run(cmd, capture_output=True, text=True,

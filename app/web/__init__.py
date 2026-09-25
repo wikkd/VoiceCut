@@ -33,7 +33,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
 
     log = get_logger()
     store = MediaStore(cfg.workdir)
-    tasks = TaskManager()
+    # 任务管理器持久化到 workdir/voicecut.db 的 tasks 表（重启恢复 interrupted）
+    from app import db as db_mod
+    tasks = TaskManager(conn=db_mod.get_conn(cfg.workdir))
     ctx = WebContext(cfg, store, tasks, log)
     app.extensions["vc_store"] = store
     app.extensions["vc_tasks"] = tasks
