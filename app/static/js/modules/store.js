@@ -171,7 +171,18 @@ export function createStore(ctx) {
     toast("已重做");
   }
 
+  function fillItemStates(states) {
+    // 批量端点结果填充（项目切换一次性拉全量，替代逐素材请求）
+    for (const [id, st] of Object.entries(states || {})) {
+      state.segmentsByItem.set(id, st.segments || []);
+      state.speakerSegsByItem.set(id, st.speaker_segments || []);
+    }
+    if (state.currentItem) {
+      state.speakerSegs = state.speakerSegsByItem.get(state.currentItem.id) || [];
+    }
+  }
+
   return { uid, paletteNext, charById, newSegment, speakerLabelAt, mixedAtRange,
-           autoCharacterFor, loadProject, markDirty, scheduleSaveProject, saveProjectNow,
+           autoCharacterFor, loadProject, fillItemStates, markDirty, scheduleSaveProject, saveProjectNow,
            scheduleSavePool, savePoolNow, pushUndo, undo, redo };
 }

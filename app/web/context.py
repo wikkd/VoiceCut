@@ -11,7 +11,7 @@ from app import db as db_mod
 from app import gptsovits as gptsovits_mod
 from app import project as project_mod
 from app import subtitles as subtitles_mod
-from app.audio_ops import compute_peaks
+from app.audio_ops import compute_peaks, wav_duration
 from app.config import AppConfig
 from app.ffmpeg_util import media_duration
 from app.media_store import MediaItem, MediaStore
@@ -77,7 +77,7 @@ class WebContext:
                       extra: dict | None = None) -> MediaItem:
         item_id = item_id or self.store.new_id()
         project_id = project_id or self.default_project_id()
-        duration = media_duration(wav)
+        duration = wav_duration(wav) or media_duration(wav)  # wav 直读头部，秒回
         peaks = compute_peaks(wav)
         item = MediaItem(
             id=item_id, name=name, wav_path=wav, duration=duration,

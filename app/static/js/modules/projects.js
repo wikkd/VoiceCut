@@ -3,7 +3,7 @@
 // 避免与功能模块形成循环 import。素材列表与项目下拉的 DOM 事件在工厂内一次性绑定。
 export function createProjects(ctx) {
   const { $, esc, fmtDur, toast, api, state, LS_PROJECT,
-          loadProject, saveProjectNow, savePoolNow,
+          loadProject, fillItemStates, saveProjectNow, savePoolNow,
           selectItem, resetWaveUI, renderPool, renderAutoAnalyzeBtn,
           renderSegments, renderSubs, attachActiveTasks, setPage } = ctx;
 
@@ -218,6 +218,15 @@ export function createProjects(ctx) {
 
   async function loadAllItemData() {
     const items = state.items || [];
+    if (!items.length) return;
+    // 批量拉取（1 个请求替代逐素材 N 连发）；失败回退逐个加载
+    if (state.currentProject && fillItemStates) {
+      try {
+        const j = await api(`/api/projects/${state.currentProject.id}/items_state`);
+        fillItemStates(j.states || {});
+        return;
+      } catch (e) { /* fallthrough */ }
+    }
     await Promise.all(items.map(item => loadProject(item, true)));
   }
 

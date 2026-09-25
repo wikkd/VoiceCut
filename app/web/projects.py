@@ -139,6 +139,22 @@ def api_project_settings(project_id: str) -> object:
 
 # ── 每素材项目状态（片段 / 说话人分段） ──────────────────────
 
+@bp.get("/api/projects/<project_id>/items_state")
+def api_project_items_state(project_id: str) -> object:
+    """批量拉取项目内全部素材的片段/说话人分段。
+
+    项目切换/自动分析完成后，前端原本对每个素材单发
+    /api/items/<id>/project（几十连发）；此端点一次返回全量。
+    """
+    c = ctx()
+    states: dict = {}
+    for it in c.store.by_project(project_id):
+        proj = project_mod.load_project(c.cfg.workdir, it.id)
+        states[it.id] = {"segments": proj["segments"],
+                         "speaker_segments": proj["speaker_segments"]}
+    return jsonify({"states": states})
+
+
 @bp.get("/api/items/<item_id>/project")
 def api_project_get(item_id: str) -> object:
     c = ctx()

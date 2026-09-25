@@ -176,6 +176,9 @@ def api_peaks(item_id: str) -> object:
     peaks = item.extra.get("peaks")
     if not peaks:
         peaks = compute_peaks(item.wav_path)
+        # 回写缓存：否则每次请求都重算（百 ms 级）
+        item.extra["peaks"] = peaks
+        c.store.persist(item)
     return jsonify({"id": item.id, "duration": item.duration,
                     "sample_rate": item.sample_rate, "peaks": peaks})
 

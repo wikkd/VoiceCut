@@ -34,6 +34,21 @@ def read_wav(path: str | Path) -> tuple[np.ndarray, int]:
     return mono, sr
 
 
+def wav_duration(path: str | Path) -> float | None:
+    """直读 wav 头取时长（秒）；失败返回 None（调用方回退 ffmpeg）。
+
+    register_item 每次导入都会取时长，原先走 ffmpeg 子进程（~100ms/次），
+    纯头部解析是微秒级。返回值与 media_duration 语义一致（完整文件时长）。
+    """
+    try:
+        info = sf.info(str(path))
+        if info.frames > 0 and info.samplerate > 0:
+            return info.frames / info.samplerate
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def compute_peaks(path: str | Path, max_points: int = PEAK_POINTS) -> list[list[float]]:
     """计算波形 min/max 峰值对，供前端渲染。
 
