@@ -57,3 +57,5 @@ GPT-SoVITS/GPT_SoVITS/text/namedict_cache.pickle
 
 # ── 工作区数据（WorkBuddy 项目记忆，不进版本库）──────────
 .workbuddy/
+rust/vc-audio/target/
+rust/vc-audio/dist/

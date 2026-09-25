@@ -60,3 +60,29 @@
 
 **回归测试关键环节**：①导入→peaks/时长入库 ②自动分析→角色池绑定数不变 ③数据集导出 list.txt 逐字节一致
 ④141 项 pytest 全绿 ⑤browser_test 12 段 ⑥撤销/重做 ⑦大表格滚动下的试听跳转高亮。
+
+---
+
+## Phase 2/3 实施结果（2026-09-25）
+
+### 交付物
+- 工具链：rustup 1.98.1（msvc）+ maturin 1.15.0 装机完成
+- `rust/vc-audio` crate：手写 RIFF/WAVE 解析 + 整块读取 + PCM16 单声道 SIMD 友好快路径；
+  hound 逐样本迭代方案被实测淘汰（比 soundfile 慢 3 倍）
+- `app/audio_ops.py`：`_rust_audio` 存在即走 Rust，否则/`VC_AUDIO_DISABLE=1` 回退纯 Python；
+  两条路径共用 `_finish_metrics` 收尾
+- 差分测试：4 个真实 wav（含最大 168MB）**peaks diff = 0.00e+00、metrics 逐字段一致**
+
+### 性能对照（168MB / 1542s wav，median of 7）
+| 函数 | Python(soundfile/numpy) | Rust(v3 快路径) | 加速比 |
+|---|---|---|---|
+| compute_peaks | 137ms | 133ms | **1.0x** |
+| audio_metrics | 804ms | 763ms | **1.1x** |
+
+### 结论（Phase 3 门禁触发：收益 <30% → 冻结 crate）
+peaks 的 Python 路径本来就是 C 块读，**瓶颈在 IO（读 168MB ≈ 100ms+）**，语言迁移无空间；
+metrics 的 Rust 循环即使车道化也未突破，因为统计本身访存受限。
+**试点达成其真正目的：用实测数据证明"计算密集型迁移到 Rust"在本项目不成立。**
+numpy/soundfile/ffmpeg/torch/CTranslate2 已经是原生层——系统的性能杠杆在
+数据规模治理（Phase 1 已做）与前端渲染（已做），不在语言。
+`vc_audio` 保留在库中（等价实现，无害），后续若出现真正的纯计算热点可复用此工具链。

@@ -1,0 +1,17 @@
+[package]
+name = "vc-audio"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "vc_audio"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py38"] }
+hound = "3.5"
+bytemuck = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
