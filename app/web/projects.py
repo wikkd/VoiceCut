@@ -323,7 +323,8 @@ def _speakers_worker(c, item_id: str) -> dict:
     # 窗口化声纹分段重新绑定：同一句话含两人时标 mixed 且不自动绑定角色，
     # 避免旧逻辑（每字幕单一声纹）把两人并入同一个角色。
     proj["segments"], mixed_segs = speakers_mod.bind_segments(
-        proj["segments"], speaker_segments, char_of_label)
+        proj["segments"], speaker_segments, char_of_label,
+        new_id=project_mod.new_uid)
     proj["speaker_segments"] = speaker_segments
     project_mod.save_project(c.cfg.workdir, item.id, proj)
     return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
@@ -521,7 +522,8 @@ def _project_speakers_run(c, project_id: str) -> dict:
                 sg["id"] = project_mod.new_uid("s")
             proj["segments"] = fresh
         proj["segments"], mixed_segs = speakers_mod.bind_segments(
-            proj["segments"], spk_segs, char_of_label)
+            proj["segments"], spk_segs, char_of_label,
+            new_id=project_mod.new_uid)
         proj["speaker_segments"] = spk_segs
         project_mod.save_project(c.cfg.workdir, s["item"].id, proj)
         total_segs += len(spk_segs)

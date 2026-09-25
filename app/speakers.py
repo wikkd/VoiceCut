@@ -270,14 +270,33 @@ def dominant_label(start, end, speaker_segments, min_cover=0.35, min_sec=0.25):
 
 
 
-def bind_segments(segments, speaker_segments, char_of_label):
+def _split_parts(start, end, speaker_segments):
+    """Contiguous (start, end, label) runs of one mixed segment's time span."""
+    parts: list = []
+    for s in speaker_segments:
+        lb = s.get("label")
+        if not lb:
+            continue
+        ps = max(float(start), float(s["start"]))
+        pe = min(float(end), float(s["end"]))
+        if pe - ps <= 0.01:
+            continue
+        if parts and parts[-1][2] == lb:
+            parts[-1][1] = pe
+        else:
+            parts.append([ps, pe, lb])
+    return parts
+
+
+def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
     """Rebind a segment list to speaker labels by time overlap.
 
     Each segment gets ``speakerLabel`` = dominant label. Segments that really
-    contain two speakers (``mixed``) keep ``characterId=None`` so they are not
-    auto-bound to a single character and surface for manual correction; other
-    segments keep an existing characterId or get the matched one. Returns
-    (segments, mixed_count).
+    contain two speakers (``mixed``) are — when ``new_id`` is given — split at
+    the label-change boundaries so each part binds its own speaker (the text is
+    apportioned by duration ratio; refine wording manually in the segment
+    editor). Without ``new_id`` the old behaviour applies: keep them whole with
+    ``characterId=None`` for manual correction. Returns (segments, mixed_count).
     """
     out = []
     mixed_count = 0
@@ -288,11 +307,34 @@ def bind_segments(segments, speaker_segments, char_of_label):
         if lb:
             seg["speakerLabel"] = lb
             seg["mixed"] = bool(mixed)
-            if mixed:
-                mixed_count += 1
-                seg["characterId"] = None
-            elif not seg.get("characterId") and lb in char_of_label:
-                seg["characterId"] = char_of_label[lb]
+        if mixed:
+            mixed_count += 1
+            parts = (_split_parts(seg.get("start", 0.0), seg.get("end", 0.0),
+                                  speaker_segments)
+                     if new_id is not None else [])
+            if len(parts) >= 2:
+                text = seg.get("text") or ""
+                n = len(text)
+                total = sum(p[1] - p[0] for p in parts)
+                pos = 0
+                for j, (ps, pe, plb) in enumerate(parts):
+                    if j == len(parts) - 1:
+                        take = n - pos
+                    elif n > pos:
+                        take = min(n - pos, max(1, round(n * (pe - ps) / total)))
+                    else:
+                        take = 0
+                    child = {**seg, "id": new_id("s"),
+                             "start": round(ps, 3), "end": round(pe, 3),
+                             "speakerLabel": plb, "mixed": False,
+                             "characterId": char_of_label.get(plb),
+                             "text": text[pos:pos + take]}
+                    pos += take
+                    out.append(child)
+                continue
+            seg["characterId"] = None
+        elif not seg.get("characterId") and lb in char_of_label:
+            seg["characterId"] = char_of_label[lb]
         out.append(seg)
     return out, mixed_count
 
@@ -691,8 +733,10 @@ def _assign_source(subs, acc, label_of_sub, label_embeddings):
         dom = top[0][0]
         second = top[1][0] if len(top) > 1 else None
         second_share = (top[1][1] / len(vecs)) if (len(top) > 1 and vecs) else 0.0
+        # 0.22：对话抢话常是"一人长一句+一人短插话"，0.30 会漏掉大量
+        # 真实的第二人发言（实测 199 行只标出 16 mixed）。
         mixed = bool(second is not None and second != dom and len(vecs) >= 2
-                     and second_share >= 0.30)
+                     and second_share >= 0.22)
         if mixed:
             # emit window-level runs so downstream dominant_label() sees the
             # real second speaker (kept unassigned for manual correction)

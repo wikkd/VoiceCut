@@ -54,3 +54,55 @@ def test_segments_from_subs_drops_empty_and_accepts_objects():
     segs = segments_from_subs([{"start": 5.0, "end": 5.0, "text": "零长"},
                                S()])
     assert len(segs) == 1 and segs[0]["text"] == "obj"
+
+
+# ── mixed 片段拆分（bind_segments new_id）───────────────────
+from app.speakers import bind_segments
+
+
+def _counter():
+    k = [0]
+
+    def nid(prefix):
+        k[0] += 1
+        return f"{prefix}_{k[0]}"
+
+    return nid
+
+
+def test_bind_splits_mixed_segment():
+    segs = [{"id": "s_1", "start": 10.0, "end": 16.0, "text": "ABCDE12345",
+             "characterId": None, "speakerLabel": None, "mixed": False}]
+    spk = [{"start": 10.0, "end": 13.0, "label": "A"},
+           {"start": 13.0, "end": 16.0, "label": "B"}]
+    out, mixed_n = bind_segments(segs, spk, {"A": "cA", "B": "cB"},
+                                 new_id=_counter())
+    assert mixed_n == 1
+    assert len(out) == 2
+    a, b = out
+    assert (a["start"], a["end"], a["speakerLabel"], a["characterId"]) == \
+        (10.0, 13.0, "A", "cA")
+    assert (b["start"], b["end"], b["speakerLabel"], b["characterId"]) == \
+        (13.0, 16.0, "B", "cB")
+    assert a["mixed"] is False and b["mixed"] is False
+    assert a["text"] + b["text"] == "ABCDE12345"  # 文本按时长比例切且不丢字
+    assert a["id"] != b["id"]
+
+
+def test_bind_without_new_id_keeps_old_behaviour():
+    segs = [{"id": "s_1", "start": 10.0, "end": 16.0, "text": "x",
+             "characterId": None, "speakerLabel": None, "mixed": False}]
+    spk = [{"start": 10.0, "end": 13.0, "label": "A"},
+           {"start": 13.0, "end": 16.0, "label": "B"}]
+    out, mixed_n = bind_segments(segs, spk, {"A": "cA", "B": "cB"})
+    assert mixed_n == 1 and len(out) == 1
+    assert out[0]["mixed"] is True and out[0]["characterId"] is None
+
+
+def test_bind_clean_segment_binds_normally():
+    segs = [{"id": "s_1", "start": 0.0, "end": 4.0, "text": "はい",
+             "characterId": None, "speakerLabel": None, "mixed": False}]
+    spk = [{"start": 0.0, "end": 4.0, "label": "A"}]
+    out, mixed_n = bind_segments(segs, spk, {"A": "cA"}, new_id=_counter())
+    assert mixed_n == 0 and len(out) == 1
+    assert out[0]["characterId"] == "cA" and out[0]["speakerLabel"] == "A"
