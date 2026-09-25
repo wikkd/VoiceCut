@@ -7,10 +7,11 @@ export function createTasks(ctx) {
           renderMediaList, refreshItems, loadAllItemData,
           renderPool, renderSegments, renderSubs, selectItem } = ctx;
 
-  function trackTask(taskId, doneCb) {
+  // opts.quiet：静默任务（如声纹重匹配）——仍走气泡进度与取消，但不锁界面
+  function trackTask(taskId, doneCb, opts) {
     const existing = state.activeTasks.get(taskId);
     if (existing) { existing.doneCb = doneCb; return; }  // 同一后台任务去重
-    state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb,
+    state.activeTasks.set(taskId, { msg: "排队中", progress: 0, doneCb, quiet: !!(opts && opts.quiet),
       logs: [`[${new Date().toLocaleTimeString("zh-CN", { hour12: false })}] 任务已提交`] });
     ensurePolling();
     updateStatusbar();
@@ -121,6 +122,7 @@ export function createTasks(ctx) {
     box.innerHTML = "";
     const allLogs = [];
     for (const [, t] of state.activeTasks) {
+      if (t.quiet) continue;   // 静默任务不进遮罩（气泡区仍有进度）
       (t.logs || []).forEach(l => allLogs.push(l));
       const row = document.createElement("div");
       row.className = "busy-task";
@@ -149,10 +151,12 @@ export function createTasks(ctx) {
     renderTaskBubbles();
     info.textContent = state.activeTasks.size
       ? `后台任务 ${state.activeTasks.size} 个（左下气泡可单独取消）` : "就绪";
-    // 后台任务（识别/训练等）运行期锁定页面操作：有任务 → 全屏遮罩，全清 → 解锁
+    // 后台任务运行期锁定页面操作：有「非静默」任务 → 全屏遮罩，全清 → 解锁
+    // （声纹重匹配等 quiet 任务仍显示气泡进度与取消，但不锁界面，用户可继续改下一段）
     const ov = $("#busy-overlay");
     if (ov) {
-      ov.classList.toggle("hidden", !state.activeTasks.size);
+      const locking = [...state.activeTasks.values()].some(t => !t.quiet);
+      ov.classList.toggle("hidden", !locking);
       renderBusyOverlay();
     }
   }

@@ -520,9 +520,18 @@ const makeWav = (seconds, sr = 16000) => {
       vc.updateStatusbar();
       const unlocked = ov.classList.contains('hidden');
       const bubbleGone = !document.querySelector('.toast-bubble.task[data-task-id="fake-busy-1"]');
+      // quiet 任务（声纹重匹配）：不锁界面，但气泡进度仍在
+      vc.state.activeTasks.set('fake-quiet-1', { msg: '声纹重匹配', progress: 0.5, doneCb: null, quiet: true,
+        logs: ['[00:00:01] 重匹配中'] });
+      vc.updateStatusbar();
+      const quietNoMask = ov.classList.contains('hidden');
+      const quietBubble = !!document.querySelector('.toast-bubble.task[data-task-id="fake-quiet-1"]');
+      vc.state.activeTasks.delete('fake-quiet-1');
+      vc.updateStatusbar();
       return { initHidden, locked, hasCancel, hasTaskRow, fillW, msgTxt, logLines, logTxt, unlocked, bubbleGone,
+        quietNoMask, quietBubble,
         ok: initHidden && locked && hasCancel && hasTaskRow && fillW === '40%' && msgTxt === '测试任务'
-          && logLines === 2 && unlocked && bubbleGone };
+          && logLines === 2 && unlocked && bubbleGone && quietNoMask && quietBubble };
     })()`, returnByValue: true });
     console.log("BUSY:", JSON.stringify(rB.result && rB.result.result && rB.result.result.value));
 

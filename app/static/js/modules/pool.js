@@ -44,9 +44,10 @@ export function createPool(ctx) {
 
   // ── 声纹反馈：人工修正的片段作为样本 → 角色质心吸收 → 静默重匹配其他片段 ──
   let fbBusy = false;
+  let fbPending = [];        // 反馈进行中又修正的样本：排队，任务结束后补发（不丢样本）
   async function sendCharacterFeedback(samples) {
     if (!state.currentProject || !samples || !samples.length) return;
-    if (fbBusy || state.identifying) return;   // 识别/反馈进行中不叠加
+    if (fbBusy || state.identifying) { fbPending.push(...samples); return; }   // 不叠加，改为排队
     const seen = new Set(); const uniq = [];
     samples.slice(0, 20).forEach(s => {       // 单次最多吸收 20 个样本
       const k = s.item_id + ":" + s.seg_id;
@@ -68,10 +69,14 @@ export function createPool(ctx) {
         const n = (result.bound || 0) + (result.moved || 0);
         if (n > 0) toast(`已参考你的修正静默更新 ${n} 个片段（新绑定 ${result.bound || 0}，改绑 ${result.moved || 0}）`);
         else if (result.absorbed) toast("已吸收声纹样本，其余片段暂无需更新");
-      });
+        if (fbPending.length) {                       // 期间又有修正 → 补发一批
+          const q = fbPending.splice(0);
+          setTimeout(() => sendCharacterFeedback(q), 120);
+        }
+      }, { quiet: true });   // 静默任务：不锁界面，用户可继续改下一段
       toast("声纹样本吸收中，其他片段将静默更新…");
     } catch (e) {
-      state.identifying = false; fbBusy = false;
+      state.identifying = false; fbBusy = false; fbPending = [];
       toast("声纹反馈启动失败: " + e.message, 6000);
     }
   }
