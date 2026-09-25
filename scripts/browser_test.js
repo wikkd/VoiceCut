@@ -677,6 +677,51 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("AUD:", JSON.stringify(rAud.result && rAud.result.result && rAud.result.result.value));
     if (rAud.result && rAud.result.exceptionDetails) console.log("AUD-EXC:", JSON.stringify(rAud.result.exceptionDetails));
 
+    // POOL：角色改名落盘；识别中(identifying)改名被阻塞后能自动补存（此前会永久丢失）
+    const rPool = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const pid = vc.state.currentProject.id;
+      const getNames = async () => {
+        const j = await (await fetch('/api/projects/' + pid + '/characters')).json();
+        return (j.characters || []).map(c => c.name);
+      };
+      // 确保有一个角色可改名
+      if (!vc.state.characters.length) vc.state.characters.push({ id: 'c-pool1', name: '原名A', color: '#ff6600' });
+      vc.renderPool();
+      await new Promise(r => setTimeout(r, 150));
+      const origPrompt = window.prompt;
+      // 1) 识别进行中改名：应被阻塞（后端暂无新名）
+      vc.state.identifying = true;
+      window.prompt = () => '改名B';
+      document.querySelector('#pool-grid .pool-rename').click();
+      await new Promise(r => setTimeout(r, 700));
+      const blockedNames = await getNames();
+      const blocked = !blockedNames.includes('改名B');
+      // 2) 识别结束 → 自动补存（此前直接丢弃，刷新即丢）
+      vc.state.identifying = false;
+      await new Promise(r => setTimeout(r, 1400));
+      const afterNames = await getNames();
+      const retried = afterNames.includes('改名B');
+      // 3) 标志泄漏自愈：identifying 卡死为 true 且已无活跃任务 → 仍须落盘（否则改动永久丢失）
+      vc.state.activeTasks && vc.state.activeTasks.clear();
+      vc.state.identifying = true;
+      window.prompt = () => '改名D';
+      document.querySelector('#pool-grid .pool-rename').click();
+      await new Promise(r => setTimeout(r, 3800));   // 自检需连续 3 次轮询（约 2.7s）
+      const healed = (await getNames()).includes('改名D');
+      // 4) 正常改名（无识别）立即可保存
+      vc.state.identifying = false;
+      window.prompt = () => '改名C';
+      document.querySelector('#pool-grid .pool-rename').click();
+      await new Promise(r => setTimeout(r, 900));
+      const saved = (await getNames()).includes('改名C');
+      window.prompt = origPrompt;
+      return { blocked, retried, healed, saved, blockedNames, afterNames,
+        ok: blocked && retried && healed && saved };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("POOL:", JSON.stringify(rPool.result && rPool.result.result && rPool.result.result.value));
+    if (rPool.result && rPool.result.exceptionDetails) console.log("POOL-EXC:", JSON.stringify(rPool.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

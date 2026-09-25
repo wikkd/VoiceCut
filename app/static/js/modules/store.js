@@ -103,16 +103,43 @@ export function createStore(ctx) {
   let poolTimer = null;
   let poolInFlight = false;
   let poolVer = 0;
+  let poolRetry = null;
+  let poolFails = 0;      // 连续失败次数：网络持续异常时停止自动重试，避免请求风暴
+  let poolStuck = 0;      // 连续「因 identifying 被挡」次数：用于识别标志泄漏自检
+  // 识别/反馈进行中无法落盘、或保存期间又有新改动 → 轮询补存，避免改名等改动被静默丢弃
+  function schedulePoolRetry(pid) {   // pid：绑定发起时的项目，切项目后旧重试自动作废
+    if (poolRetry || !state.poolDirty || poolFails >= 3) return;
+    poolRetry = setTimeout(() => {
+      poolRetry = null;
+      if (!state.currentProject || state.currentProject.id !== pid) return;
+      // 标志泄漏自检：identifying 仍为 true 但已无任何活跃任务 → 守卫失效（任务异常/取消未复位），
+      // 此时继续等待会永久丢弃改动。连续 3 次（约 2.7s）确认后强制落盘，并在 toast 中明示。
+      if (state.identifying && (!state.activeTasks || state.activeTasks.size === 0)) {
+        poolStuck++;
+        if (poolStuck >= 3) {
+          poolStuck = 0;
+          toast("识别状态已结束但标记未复位，已强制保存角色池改动", 5000);
+          savePoolNow(true);
+          return;
+        }
+      } else {
+        poolStuck = 0;
+      }
+      savePoolNow();
+    }, 900);
+  }
   function scheduleSavePool() {
     state.poolDirty = true;
     poolVer++;
     if (poolTimer) clearTimeout(poolTimer);
     poolTimer = setTimeout(savePoolNow, 400);
   }
-  async function savePoolNow() {
+  async function savePoolNow(force) {
     // 识别(speakers 任务)运行期间禁止落盘：此刻的 state.characters 可能是
     // 旧快照，落盘会把后端刚写好的识别结果整池回滚（真实发生过）。
-    if (state.identifying) return;
+    // 但此前是直接 return —— 识别期间/标志未复位时的改名会被永久丢弃，之后无人重试。
+    // 改为延后重试：等 identifying 解除后自动补存（force 用于确认标志泄漏后强制落盘）。
+    if (state.identifying && !force) { schedulePoolRetry(state.currentProject ? state.currentProject.id : null); return; }
     if (!state.poolDirty || !state.currentProject || poolInFlight) return;
     const projectId = state.currentProject.id;
     const v = poolVer;
@@ -122,10 +149,13 @@ export function createStore(ctx) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ characters: state.characters }) });
       if (poolVer === v) state.poolDirty = false;
+      poolFails = 0;
     } catch (e) {
+      poolFails++;
       toast("角色池保存失败，改动已保留待重试: " + e.message, 6000);
     } finally {
       poolInFlight = false;
+      if (state.poolDirty) schedulePoolRetry(projectId);   // 保存期间又有新改动 → 再补存一次
     }
   }
 

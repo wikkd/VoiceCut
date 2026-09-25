@@ -680,7 +680,8 @@ import { createProjects } from "/static/js/modules/projects.js";
         const payload = JSON.stringify({ segments: segments.segsFor(id), speaker_segments: state.speakerSegsByItem.get(id) || [] });
         navigator.sendBeacon(`/api/items/${id}/project`, new Blob([payload], { type: "application/json" }));
       });
-      if (state.poolDirty && state.currentProject) {
+      // 识别/反馈进行中不落盘（与 savePoolNow 同策略）：此刻的 characters 可能是旧快照
+      if (state.poolDirty && state.currentProject && !state.identifying) {
         const payload = JSON.stringify({ characters: state.characters });
         navigator.sendBeacon(`/api/projects/${state.currentProject.id}/characters`, new Blob([payload], { type: "application/json" }));
       }
