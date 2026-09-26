@@ -767,6 +767,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     clearMultiRegions: waveform.clearMultiRegions,
     stopAudition: waveform.stopAudition,
     loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
+    markDirty: store.markDirty, loadAllItemData: projects.loadAllItemData, segsFor: segments.segsFor,
     openPool: pool.openPool, closePool: pool.closePool, renderPool: pool.renderPool,
     undo: doUndo, redo: doRedo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,
     createProject: projects.createProject, renameProject: projects.renameProject,

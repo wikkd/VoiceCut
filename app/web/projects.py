@@ -306,6 +306,40 @@ def api_speakers_generate(item_id: str) -> object:
     return jsonify({"task_id": tid})
 
 
+def _detach_character_refs(segments: list, ids: set, *, drop_label: bool = False) -> bool:
+    """把引用 ``ids`` 中角色的片段解绑，返回是否有改动。
+
+    **locked 段一律跳过**：人工锁定的片段指到哪个角色由用户自己决定，自动清理
+    （孤儿角色 / 陈旧角色）不得动它 —— 这是用户现象「改完说话人又被识别改回去」
+    的另一半泄漏路径（此前这四处循环只查 characterId，没查 locked）。
+    """
+    changed = False
+    for seg in segments:
+        if seg.get("locked"):
+            continue
+        if seg.get("characterId") in ids:
+            seg["characterId"] = None
+            if drop_label:
+                seg["speakerLabel"] = None
+            changed = True
+    return changed
+
+
+def _save_writeback(c, item_id: str, proj: dict) -> dict:
+    """识别 / 声纹反馈类任务写回片段的**唯一出口**。
+
+    这些任务是「load_project →（秒~分钟）→ normalize/bind → save_project」的整段
+    覆盖写回，而 normalize/bind 判定 ``locked`` 读的是 load 那一刻的快照；用户在
+    任务运行期间改好说话人、经前端 400ms 防抖 POST 落盘，就落在 load…save 的窗口
+    里被聚类结果覆盖（用户现象「改完说话人又被识别改回去」，有概率）。
+
+    统一走 ``save_project_guarding_locked``：落库前在 db 写锁内重读磁盘，把已
+    locked 的人工片段收敛回来。**重新识别前置清理 / 用户显式删除角色等有意清空
+    assignment 的路径不要用本函数**（用 project_mod.save_project）。
+    """
+    return project_mod.save_project_guarding_locked(c.cfg.workdir, item_id, proj)
+
+
 def _speakers_worker(c, item_id: str) -> dict:
     tid = c.tasks.current_task_id()
     item = c.store.require(item_id)
@@ -357,14 +391,8 @@ def _speakers_worker(c, item_id: str) -> dict:
             cleaned = len(stale_ids)
             pool["characters"] = [c for c in pool["characters"] if c["id"] not in stale_ids]
             proj_tmp = project_mod.load_project(c.cfg.workdir, item.id)
-            changed = False
-            for seg in proj_tmp["segments"]:
-                if seg.get("characterId") in stale_ids:
-                    seg["characterId"] = None
-                    seg["speakerLabel"] = None
-                    changed = True
-            if changed:
-                project_mod.save_project(c.cfg.workdir, item.id, proj_tmp)
+            if _detach_character_refs(proj_tmp["segments"], stale_ids, drop_label=True):
+                _save_writeback(c, item.id, proj_tmp)
         # 记忆强绑定：与角色池已有角色高度相似（且唯一最优）的标签直接归并，
         # 跨次识别同人自动并入同一角色，不再每次从零聚类后仅靠弱匹配。
         strong_assign, chars, _matched = speakers_mod.match_labels_strong(
@@ -402,9 +430,7 @@ def _speakers_worker(c, item_id: str) -> dict:
             sg["id"] = project_mod.new_uid("s")
         proj["segments"] = fresh
     if orphan_ids:
-        for seg in proj["segments"]:
-            if seg.get("characterId") in orphan_ids:
-                seg["characterId"] = None
+        _detach_character_refs(proj["segments"], orphan_ids)
     # 窗口化声纹分段重新绑定：同一句话含两人时标 mixed 且不自动绑定角色，
     # 避免旧逻辑（每字幕单一声纹）把两人并入同一个角色。
     # 写回前先去重清理（历史棘轮碎片），重跑识别不再让片段数倍增。
@@ -413,7 +439,7 @@ def _speakers_worker(c, item_id: str) -> dict:
         proj["segments"], speaker_segments, char_of_label,
         new_id=project_mod.new_uid)
     proj["speaker_segments"] = speaker_segments
-    project_mod.save_project(c.cfg.workdir, item.id, proj)
+    _save_writeback(c, item.id, proj)
     return {"count": len(speaker_segments), "total": res["total"], "labeled": res["labeled"],
             "mixed": res.get("mixed", 0), "mixed_segments": mixed_segs,
             "normalized_removed": norm_removed,
@@ -547,7 +573,10 @@ def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
                 seg["characterId"] = new_cid
                 changed = True
         if changed:
-            project_mod.save_project(c.cfg.workdir, it.id, pj)
+            # 上面 546 行的 locked 判定读的是本次 load（时刻 542）的快照：用户此刻
+            # 若正在落盘同一素材的人工指派，仍会撞进 542…550 的窗口。统一写回出口
+            # 在 db 锁内重读磁盘收敛 locked，把窗口压到 0。
+            _save_writeback(c, it.id, pj)
             touched += 1
     # 只并入声纹字段到最新池：任务期间用户的改名/配色不被旧快照回滚
     chars = _merge_pool_fields(c, project_id, chars)
@@ -964,13 +993,8 @@ def _project_speakers_run(c, project_id: str, reset: bool = False) -> dict:
         chars = [x for x in chars if x["id"] not in orphan_ids]
         for it in items:
             pj = project_mod.load_project(c.cfg.workdir, it.id)
-            changed = False
-            for seg in pj["segments"]:
-                if seg.get("characterId") in orphan_ids:
-                    seg["characterId"] = None
-                    changed = True
-            if changed:
-                project_mod.save_project(c.cfg.workdir, it.id, pj)
+            if _detach_character_refs(pj["segments"], orphan_ids):
+                _save_writeback(c, it.id, pj)
     for s in sources:
         stale = speakers_mod.stale_characters(s["item"].id, chars)
         stale_ids |= {c["id"] for c in stale}
@@ -979,14 +1003,8 @@ def _project_speakers_run(c, project_id: str, reset: bool = False) -> dict:
         chars = [c for c in chars if c["id"] not in stale_ids]
         for it in items:
             proj_tmp = project_mod.load_project(c.cfg.workdir, it.id)
-            changed = False
-            for seg in proj_tmp["segments"]:
-                if seg.get("characterId") in stale_ids:
-                    seg["characterId"] = None
-                    seg["speakerLabel"] = None
-                    changed = True
-            if changed:
-                project_mod.save_project(c.cfg.workdir, it.id, proj_tmp)
+            if _detach_character_refs(proj_tmp["segments"], stale_ids, drop_label=True):
+                _save_writeback(c, it.id, proj_tmp)
     label_embeds = res.get("label_embeddings") or {}
     if res.get("quality") != "mfcc" and label_embeds:
         # 记忆强绑定：与角色池已有角色高度相似（且唯一最优）的标签直接归并，
@@ -1056,7 +1074,7 @@ def _project_speakers_run(c, project_id: str, reset: bool = False) -> dict:
             proj["segments"], spk_segs, char_of_label,
             new_id=project_mod.new_uid)
         proj["speaker_segments"] = spk_segs
-        project_mod.save_project(c.cfg.workdir, s["item"].id, proj)
+        _save_writeback(c, s["item"].id, proj)
         total_segs += len(spk_segs)
         total_norm_removed += norm_removed
         total_labeled += res["items"][si]["labeled"]

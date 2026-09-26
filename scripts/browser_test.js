@@ -1180,6 +1180,106 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("GAP:", JSON.stringify(rGap.result && rGap.result.result && rGap.result.result.value));
     if (rGap.result && rGap.result.exceptionDetails) console.log("GAP-EXC:", JSON.stringify(rGap.result.exceptionDetails));
 
+    // NCLB：改完说话人不得被识别收尾的 loadAllItemData() 用服务端快照回滚
+    // 回归点（2026-09-26 修）：「在我修改说话人后，进化识别系统有概率把我设定好的
+    // 说话人再修改」。识别/声纹反馈任务收尾都会 loadAllItemData() 重拉服务端状态，
+    // 而 fillItemStates 此前**无条件覆盖**内存 —— 用户刚改的说话人若还在 400ms 防抖里
+    // （或保存请求被 saveInFlight 静默丢弃仍在队列），就被服务端旧版本抹掉；紧接着那次
+    // 保存再把旧版本当"用户数据"写回，永久固化（人工成果彻底丢失）。
+    // A：拉取前先落盘（未落盘改动 → 服务端最终拿到本地版本）。
+    // B：反向对照 —— 非 dirty 素材必须照旧被服务端状态刷新（否则"保护"变成"永不刷新"）。
+    // C：保存失败（POST 被拒）时，未落盘改动仍不得被回滚 —— 这一例只有 fillItemStates
+    //    的 dirty 保护能救，"先落盘"那道已失效，是 dirty 保护的独立判据。
+    const rNclb = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const sl = (ms) => new Promise(r => setTimeout(r, ms));
+      const item = (vc.state.items || [])[0];
+      if (!item) return { err: 'no item' };
+      const origFetch = window.fetch;
+      const srv = async (id) => {
+        const j = await (await origFetch('/api/items/' + id + '/project')).json();
+        return (j.segments || []).find(x => x.id === segId) || {};
+      };
+      const out = { cases: [] };
+      let segId = null, origCid = null, origLocked = false, origLen = 0;
+      const pick = () => (vc.state.segmentsByItem.get(item.id) || []).find(x => x.id === segId) || {};
+      const srvCid = async () => {
+        const s = await srv(item.id);
+        return s.characterId === undefined ? null : s.characterId;
+      };
+      try {
+        await vc.selectItem(item);
+        await sl(250);
+        const segs = vc.state.segmentsByItem.get(item.id) || [];
+        if (!segs.length) return { err: 'no segments' };
+        segId = segs[0].id;
+        origLen = segs.length;
+        origCid = segs[0].characterId === undefined ? null : segs[0].characterId;
+        origLocked = !!segs[0].locked;
+
+        // ── A：未落盘的人工指派 → loadAllItemData() 必须先把本地改动落盘 ──
+        const a = pick(); a.characterId = 'cPROBE'; a.locked = true;
+        vc.markDirty(item.id);
+        await vc.loadAllItemData();
+        const keptA = pick().characterId === 'cPROBE' && pick().locked === true;
+        await sl(700); await vc.saveProjectNow(); await sl(200);
+        const savedA = (await srvCid()) === 'cPROBE';
+        out.cases.push({ label: 'A', ok: keptA && savedA, keptA, savedA });
+
+        // ── B：反向对照 —— 非 dirty 素材照旧被服务端状态刷新 ──
+        vc.state.dirtyItems.delete(item.id);
+        vc.state.segmentsByItem.set(item.id, []);        // 本地伪造为空
+        await vc.loadAllItemData();
+        const refreshed = (vc.state.segmentsByItem.get(item.id) || []).length === origLen
+          && pick().characterId === 'cPROBE';
+        out.cases.push({ label: 'B', ok: refreshed, refreshed });
+
+        // ── C：保存失败时，未落盘的改动仍不得被 loadAllItemData() 回滚 ──
+        // 只有 fillItemStates 的 dirty 保护能救这一例：拉取前的"先落盘"这一道
+        // 因 POST 被拒而失效，若还照旧用服务端旧版本覆盖内存 → 改动被抹掉，
+        // 且下一次保存会把旧版本当"用户数据"写回（永久固化）。
+        const rawFetch = window.fetch;
+        window.fetch = (u, o) => {
+          const url = String(typeof u === 'string' ? u : ((u && u.url) || ''));
+          if (o && o.method === 'POST' && url.indexOf('/api/items/' + item.id + '/project') >= 0) {
+            return Promise.reject(new Error('net-down'));
+          }
+          return rawFetch(u, o);
+        };
+        const c1 = pick(); c1.characterId = 'cDIRTY'; c1.locked = true;
+        vc.markDirty(item.id);
+        await vc.loadAllItemData();
+        const keptC = pick().characterId === 'cDIRTY' && pick().locked === true;
+        const stillDirty = vc.state.dirtyItems.has(item.id);   // 改动保留待重试
+        const srvC = await srvCid();                           // 服务端仍是上一轮的值
+        window.fetch = rawFetch;
+        out.cases.push({ label: 'C', ok: keptC && stillDirty, keptC, stillDirty, srvC });
+      } finally {
+        window.fetch = origFetch;
+        // 还原被改的片段并落盘
+        const cur = pick();
+        if (cur && cur.id) {
+          cur.characterId = origCid;
+          if (origLocked) cur.locked = true; else delete cur.locked;
+          vc.markDirty(item.id);
+        }
+        await sl(300); await vc.saveProjectNow(); await sl(400);
+        await vc.saveProjectNow();
+        await vc.loadAllItemData();
+        const back = pick();
+        out.restored = !!back && back.id === segId
+          && (back.characterId === undefined ? null : back.characterId) === origCid
+          && !!back.locked === origLocked
+          && (vc.state.segmentsByItem.get(item.id) || []).length === origLen;
+      }
+      out.ok = out.cases.length === 3 && out.restored === true
+        && out.cases.every(c => c.ok === true);
+      out.fails = out.cases.filter(c => c.ok !== true).map(c => c.label);
+      return out;
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("NCLB:", JSON.stringify(rNclb.result && rNclb.result.result && rNclb.result.result.value));
+    if (rNclb.result && rNclb.result.exceptionDetails) console.log("NCLB-EXC:", JSON.stringify(rNclb.result.exceptionDetails));
+
     // 恢复默认页面（剪辑），避免影响后续测试
     await send("Runtime.evaluate", { expression: `window.__vc.setPage('edit')`, returnByValue: true });
     ws.close();

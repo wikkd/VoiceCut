@@ -53,19 +53,24 @@ export function createStore(ctx) {
       state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
       return;
     }
-    try {
-      const proj = await api(`/api/items/${item.id}/project`);
-      state.segmentsByItem.set(item.id, proj.segments || []);
-      state.speakerSegsByItem.set(item.id, proj.speaker_segments || []);
-    } catch (e) {
-      state.segmentsByItem.set(item.id, []);
-      state.speakerSegsByItem.set(item.id, []);
+    // 有未落盘改动的素材不做覆盖式重载：否则刚改好的说话人指派被服务端旧版本
+    // 抹掉，且紧接着那次保存会把旧版本写回服务端（永久固化）。见 fillItemStates。
+    if (!(state.dirtyItems && state.dirtyItems.has(item.id))) {
+      try {
+        const proj = await api(`/api/items/${item.id}/project`);
+        state.segmentsByItem.set(item.id, proj.segments || []);
+        state.speakerSegsByItem.set(item.id, proj.speaker_segments || []);
+      } catch (e) {
+        state.segmentsByItem.set(item.id, []);
+        state.speakerSegsByItem.set(item.id, []);
+      }
     }
     state.speakerSegs = state.speakerSegsByItem.get(item.id) || [];
   }
 
   let saveTimer = null;
   let saveInFlight = false;
+  let savePending = false;             // 保存进行中又来的请求：不能静默丢弃
   const dirtyVer = new Map();          // itemId -> 自增版本：避免覆盖保存期间产生的新改动
   function markDirty(id) {
     state.dirtyItems.add(id);
@@ -79,7 +84,8 @@ export function createStore(ctx) {
   }
   async function saveProjectNow() {
     const ids = Array.from(state.dirtyItems);
-    if (!ids.length || saveInFlight) return;
+    if (!ids.length) return;
+    if (saveInFlight) { savePending = true; return; }   // 排队补跑，见 finally
     const verAt = new Map(ids.map(id => [id, dirtyVer.get(id) || 0]));
     saveInFlight = true;
     try {
@@ -97,6 +103,11 @@ export function createStore(ctx) {
       toast("保存失败，改动已保留待重试: " + e.message, 6000);
     } finally {
       saveInFlight = false;
+      // 此前在飞期间到来的请求是**直接 return**：调用方（如 loadAllItemData 拉取前的
+      // 落盘、selectProject、beforeunload 兜底）以为已经保存，实际改动还留在 dirtyItems
+      // 里；随后服务端旧版本一旦回填内存，这份改动就被当成"用户数据"写回并永久固化。
+      // 改为标记 pending + 收尾补跑一次（dirty 已清则立即返回，不会自旋）。
+      if (savePending) { savePending = false; saveProjectNow(); }
     }
   }
 
@@ -207,8 +218,14 @@ export function createStore(ctx) {
   }
 
   function fillItemStates(states) {
-    // 批量端点结果填充（项目切换一次性拉全量，替代逐素材请求）
+    // 批量端点结果填充（项目切换一次性拉全量，替代逐素材请求）。
+    // 但**有未落盘改动的素材不覆盖**：识别/声纹反馈任务结束时 pool.js 会
+    // loadAllItemData() 重拉服务端状态，此刻用户的说话人改动可能还在 400ms
+    // 防抖里（或保存请求被 saveInFlight 挡下仍在队列）。若用服务端旧版本覆盖
+    // 内存，紧接着那次保存就把旧版本当"用户数据"写回，人工改的说话人被永久
+    // 抹掉 —— 用户现象「改完说话人又被识别改回去」。dirty 素材以本地为准。
     for (const [id, st] of Object.entries(states || {})) {
+      if (state.dirtyItems && state.dirtyItems.has(id)) continue;
       state.segmentsByItem.set(id, st.segments || []);
       state.speakerSegsByItem.set(id, st.speaker_segments || []);
     }

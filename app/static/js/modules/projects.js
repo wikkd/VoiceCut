@@ -227,6 +227,13 @@ export function createProjects(ctx) {
   async function loadAllItemData() {
     const items = state.items || [];
     if (!items.length) return;
+    // 先把本地未落盘的改动写回服务端，再拉服务端状态：否则这次拉取拿到的是
+    // 「用户还没保存」的旧版本，会盖掉内存里刚改好的说话人指派（并且随后那次
+    // 保存会把旧版本当用户数据写回，永久固化）。配合 store.fillItemStates 的
+    // dirty 保护，两道防线都要有：这里解决"还没保存"，那里兜住"正在保存"。
+    if (state.dirtyItems && state.dirtyItems.size && saveProjectNow) {
+      try { await saveProjectNow(); } catch (e) { /* 保存失败时下面的 dirty 保护兜底 */ }
+    }
     // 批量拉取（1 个请求替代逐素材 N 连发）；失败回退逐个加载
     if (state.currentProject && fillItemStates) {
       try {

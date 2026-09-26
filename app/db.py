@@ -134,6 +134,17 @@ def _init_db(workdir: Path, conn: sqlite3.Connection) -> None:
     migrate_legacy(workdir, conn)
 
 
+def lock() -> threading.RLock:
+    """返回全局 db 写锁（可重入）。
+
+    所有 db 写函数都在 ``_db_lock`` 内执行，因此调用方可以 ``with db.lock():``
+    把一段「读 → 改 → 写」收进同一临界区，与其它写者（含前端保存 POST）串行化。
+    识别 worker 的写回靠它把 load 快照的过期窗口压到 0，见
+    ``app.project.save_project_guarding_locked``。
+    """
+    return _db_lock
+
+
 def reset_conns() -> None:
     """Close all cached connections (test helper)."""
     global _conns
