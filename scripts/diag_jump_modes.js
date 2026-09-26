@@ -211,7 +211,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
           out.cases.push({ label: 'P7 滚动后同帧点击', item: A, i: iA, want: +seg.start.toFixed(2),
             s60: +s.toFixed(2), near60: Math.abs(s - seg.start) < 0.45, nearFinal: Math.abs(s - seg.start) < 0.45 });
         } else {
-          out.cases.push({ label: 'P7 滚动后同帧点击', err: 'row gone after scroll' });
+          // 虚拟列表是 rAF 异步重建窗口的：设完 scrollTop 立刻查 DOM 取不到行。
+          // 这不是产品缺陷 —— 真实用户同样点不到还没渲染出来的行。
+          out.cases.push({ label: 'P7 滚动后同帧点击', err: 'row 尚未渲染进 DOM（rAF 未跑，真实用户也点不到）' });
         }
       }
 
@@ -242,6 +244,39 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
       await rapid('P8 连点间隔120ms', 120);
       await rapid('P9 连点间隔400ms', 400);
       await rapid('P10 连点间隔900ms', 900);
+
+      // ── P11 循环模式功能未被回声门破坏：播放推进越过选区终点必须回卷一次 ──
+      // headless 下真实播放不可靠（play() 可能被拒 / 无 tick）→ 与 browser_test 的 AUD 段
+      // 一致，手动 emit("timeupdate") 驱动 loopCheck，用 setTime 调用序列判定。
+      {
+        const i0 = pickI(A, 0.3);
+        const seg = segAt(A, i0);
+        const s = seg.start;
+        vc.state.loop = true;
+        vc.state.auditioning = null; vc.state.auditionSeq = null;
+        vc.state.selection = { start: s, end: s + 2 };   // loopCheck 只读 state.selection
+        const raw2 = vc.state.ws.setTime.bind(vc.state.ws);
+        const calls2 = [];
+        vc.state.ws.setTime = (t) => { calls2.push(+Number(t).toFixed(2)); return raw2(t); };
+        vc.state.ws.emit('timeupdate', s + 0.5);         // 区间内：不得回卷
+        await sl(80);
+        const beforeEnd = calls2.length;
+        vc.state.ws.emit('timeupdate', s + 2.1);         // 越过终点：回卷到选区起点一次
+        await sl(150);
+        const wrapped = calls2.slice(beforeEnd).some(c => Math.abs(c - s) < 0.02);
+        // 回声窗口过去后重新武装 → 第二轮仍能回卷（防"只循环一次"）
+        await sl(300);
+        vc.state.ws.emit('timeupdate', s + 0.4);
+        vc.state.ws.emit('timeupdate', s + 2.1);
+        await sl(150);
+        const round2 = calls2.slice(beforeEnd + 1).some(c => Math.abs(c - s) < 0.02);
+        vc.state.ws.setTime = raw2;
+        out.cases.push({ label: 'P11 循环功能未破坏', item: A, i: i0,
+          want: +(s + 2).toFixed(2), s60: +Number(s).toFixed(2), s560: +Number(s).toFixed(2),
+          s1560: +Number(s).toFixed(2), calls: calls2.slice(0, 6),
+          near60: !calls2.slice(0, beforeEnd).some(c => Math.abs(c - s) < 0.02) && wrapped,
+          nearFinal: wrapped && round2, cur: curId(), curOk: curId() === A, active: true });
+      }
 
       if (vc.state.loop) vc.state.loop = false;
       out.unhandled = unhandled.slice(0, 8); out.unhandledCount = unhandled.length;
