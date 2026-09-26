@@ -19,6 +19,22 @@ export function createWaveform(ctx) {
   window.addEventListener("pointerdown", (e) => { lastDragCtrl = !!(e.ctrlKey || e.metaKey); }, true);
   let dragSelUnbind = null;   // enableDragSelection 的解绑函数（换素材时清理）
 
+  // ── 程序化 seek 与「回卷判定」互斥 ──────────────────────
+  // vendored wavesurfer 的 setTime 覆写里写死了 `emit("timeupdate", t)`（见
+  // app/static/vendor/wavesurfer.esm.js 的 `setTime(t){...,this.updateProgress(t),
+  // this.emit("timeupdate",t)}`），也就是说**程序化跳转会立刻伪造一次 timeupdate**；
+  // 而 loopCheck / auditionCheck 把 timeupdate 一律读成「播放推进到窗口终点」。于是
+  // 一次普通跳转会被误判成播放到位并触发回卷：
+  //   循环模式 ON + 已有选区 [a,b] → 点击 b 之后的片段行 → 回声 tick 触发 loopCheck
+  //   → 播放头被 setTime(旧选区起点)。用户看到「点了片段行，音轨/波形没跳过去」，
+  //   而且只在「往后点」时发生 → 表现为**有概率**不跳转。
+  // 处置：给所有程序化 seek 开一个回声窗口，窗口内的 tick 不参与回卷判定。
+  // 窗口在 ① 每次 setTime 调用（同步回声）② 媒体自身的 seeking/seeked
+  // （seek 落地时还会补一个 timeupdate，携带旧位置或落地位置）三处续期。
+  let seekEchoAt = -1e9;
+  const SEEK_ECHO_MS = 220;
+  function inSeekEcho() { return performance.now() - seekEchoAt < SEEK_ECHO_MS; }
+
   // ── 素材选择 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
     if ((state.dirtyItems.size || state.poolDirty) && state.currentItem && state.currentItem.id !== item.id) {
@@ -93,6 +109,14 @@ export function createWaveform(ctx) {
     });
     state.ws = ws;
 
+    // setTime 包一层统一入口：任何调用方（本模块 / segments / subtitles / app.js /
+    // 控制台脚本）发起程序化 seek 都会自动进入回声窗口，无需逐个改造调用点。
+    const rawSetTime = ws.setTime.bind(ws);
+    ws.setTime = (t) => { seekEchoAt = performance.now(); return rawSetTime(t); };
+    // 媒体 seek 落地时会再补一个 timeupdate（旧位置或落地位置）→ 一并纳入窗口
+    ws.on("seeking", () => { seekEchoAt = performance.now(); });
+    ws.on("seeked", () => { seekEchoAt = performance.now(); });
+
     // 时间轴与波形同步：放大后刻度按绝对坐标定位，需要让容器宽度跟随波形总宽度并随滚动偏移
     const syncTimeline = () => {
       const tl = $("#timeline [part='timeline']");
@@ -148,9 +172,13 @@ export function createWaveform(ctx) {
     ws.on("timeupdate", (t) => {
       $("#cur-time").textContent = fmtT(t);
       videoSync(t);
-      loopCheck(t);
+      // 回卷判定只在「非 seek 回声」的 tick 上进行：程序化跳转伪造的 timeupdate
+      // 会把目标位置误读成「播放到位」，从而把播放头拽回旧选区/试听窗口起点
+      // （「点击片段行不跳转」的根因，见文件上方 seekEchoAt 注释）。
+      // 跳转后 setSelection 会把选区换成目标片段，所以真正的播放 tick 到点时
+      // 判定基准已经是新选区，回卷语义不受影响。
+      if (!inSeekEcho()) { loopCheck(t); auditionCheck(t); }
       subtitles.updateCurrentSub(t);
-      auditionCheck(t);
       updateMMCursor(t);
     });
     ws.on("ready", () => { updateTransport(); updateMMCursor(0); });
@@ -177,8 +205,19 @@ export function createWaveform(ctx) {
   // 点击片段行/跳转：高亮行 + 播放头跳到片段起点 + 把工作选区设为该片段区间
   // （蓝色可拉伸选区，导出/试听/加片段直接可用）。
   async function focusSegment(item, seg) {
+    // 列表渲染与数据可能错位（素材被删 / 虚拟列表窗口重建），缺参直接返回 ——
+    // 否则 `item.id` 抛 TypeError，在 async 里变成 unhandled rejection，点击静默无反应。
+    if (!item || !seg) return;
     if (!state.ws || !state.currentItem || state.currentItem.id !== item.id) await selectItem(item);
     if (!state.ws) return;
+    // 显式跳转 = 接管播放：终止进行中的试听（单段循环 / 多选序列 / 角色池序列）。
+    // 否则试听窗口落在目标片段之前时，跳转后的第一批真实 tick 会把播放头拽回
+    // 试听窗口起点（"点了片段行，播放头没过去/自己弹回去"）。
+    state.auditioning = null;
+    state.auditionSeq = null;
+    state.auditionFocus = null;
+    document.querySelectorAll("#seg-tbody tr.seg-row.playing")
+      .forEach((el) => el.classList.remove("playing"));
     state.ws.setTime(seg.start);
     state.activeSeg = { itemId: item.id, segId: seg.id };
     setSelection(seg.start, seg.end);

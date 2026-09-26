@@ -787,6 +787,93 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("AUD:", JSON.stringify(rAud.result && rAud.result.result && rAud.result.result.value));
     if (rAud.result && rAud.result.exceptionDetails) console.log("AUD-EXC:", JSON.stringify(rAud.result.exceptionDetails));
 
+    // JUMP：点击片段行 → 播放头跳到该片段起点 + 行高亮/选区跟随。
+    // 回归点（2026-09-26 修）：vendored wavesurfer 的 setTime 覆写里写死 emit("timeupdate")，
+    // 于是**程序化跳转也会伪造一次 timeupdate**，被 loopCheck / auditionCheck 误读成
+    // 「播放推进到窗口终点」→ 播放头被 setTime(旧选区起点) 拽回。表现为「点击片段列表
+    // 有概率不在音轨/波形处跳转」，而且只在往选区后面点时可复现。
+    // 判定方式与 AUD 一致：拦截 setTime 调用序列（headless 下 isPlaying 不可靠，
+    // 但 media.currentTime 与 setTime 调用序列可靠），断言"跳到目标"且"未被拽回旧起点"。
+    const rJump = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const sl = (ms) => new Promise(r => setTimeout(r, ms));
+      const itId = vc.state.currentItem.id;
+      const segs = vc.state.segmentsByItem.get(itId);
+      segs.length = 0;
+      // 起点彼此拉开，便于区分"跳到目标"还是"被拽回旧选区起点"
+      [1, 4, 7, 10, 13, 16].forEach((s, k) => segs.push(vc.newSegment(s, s + 1.5, 'j' + k)));
+      vc.state.segFilter.item = itId; vc.state.segFilter.status = 'all'; vc.state.segFilter.text = '';
+      vc.state.loop = false; vc.state.auditioning = null; vc.state.auditionSeq = null;
+      vc.state.auditionFocus = null; vc.state.selectedSegs = new Set();
+      vc.renderSegments();
+      await sl(300);
+      for (let i = 0; i < 60 && !(vc.state.ws && vc.state.ws.getDuration() > 0); i++) await sl(150);
+      // 拦截 setTime：既记录"谁把播放头设成了多少"，也顺带覆盖模块内包的 seek 回声层
+      const raw = vc.state.ws.setTime.bind(vc.state.ws);
+      const calls = [];
+      vc.state.ws.setTime = (t) => { calls.push(+Number(t).toFixed(3)); return raw(t); };
+      const rowByI = (i) => document.querySelector('#seg-tbody tr.seg-row[data-item="' + itId + '"][data-i="' + i + '"]');
+      const clickRow = async (i) => {
+        const tr = rowByI(i);
+        if (!tr) return { err: 'no row ' + i };
+        const td = tr.querySelector('td.col-time');   // 无交互控件的列，隔离"点在哪一列"变量
+        calls.length = 0;
+        td.click();
+        await sl(600);
+        const seg = vc.state.segmentsByItem.get(itId)[i];
+        return { i, want: seg.start, segId: seg.id,
+                 t: vc.state.ws.getCurrentTime(), calls: calls.slice(),
+                 active: vc.state.activeSeg, sel: vc.state.selection ? { ...vc.state.selection } : null };
+      };
+      const hit = (r, want) => !!r && !r.err && r.calls.some(c => Math.abs(c - want) < 0.02);
+      const miss = (r, bad) => !!r && !r.err && r.calls.some(c => Math.abs(c - bad) < 0.02);
+      const okRow = (r) => !!r && !r.err && !!r.active && r.active.segId === r.segId;
+
+      // A) 基线：无选区、loop 关 → 点第 5 行
+      const a = await clickRow(4);
+      const okA = hit(a, a.want) && okRow(a);
+
+      // B) loop 关 + 已有选区(第 1 行) → 点更后面的第 5 行
+      await clickRow(0); await sl(250);
+      const b = await clickRow(4);
+      const okB = hit(b, b.want) && okRow(b) && !miss(b, 1);
+
+      // C) loop 开 + 已有选区(第 1 行) → 点更后面的第 5 行
+      //    ← 本次回归点：修复前 calls 里会多出 1（被 loopCheck 拽回选区起点）
+      vc.state.loop = true;
+      await clickRow(0); await sl(250);
+      const c = await clickRow(4);
+      const okC = hit(c, c.want) && okRow(c) && !miss(c, 1);
+
+      // D) loop 开 + 选第 5 行 → 再往前点第 2 行（反向也必须跳，防回归）
+      await clickRow(4); await sl(250);
+      const d = await clickRow(1);
+      const okD = hit(d, d.want) && okRow(d) && !miss(d, 10);
+
+      // E) 残留试听窗口在目标之前：真实入口点「试听」第 1 行 → 再点第 5 行
+      let hasAud = false;
+      const aBtn = rowByI(0) && rowByI(0).querySelector('.seg-aud');
+      if (aBtn) { aBtn.click(); await sl(500); hasAud = !!(vc.state.auditioning && vc.state.auditioning.loop); }
+      const e = await clickRow(4);
+      const okE = hit(e, e.want) && okRow(e) && !vc.state.auditioning;
+      try { vc.state.ws.pause(); } catch (err) {}
+
+      vc.state.ws.setTime = raw;
+      vc.state.loop = false; vc.state.auditioning = null; vc.state.auditionSeq = null;
+      vc.state.auditionFocus = null; vc.state.segFilter.item = 'all';
+      vc.renderSegments();
+      await sl(200);
+      // 判定只用「setTime 调用序列」：headless 下 media.currentTime 读回不可靠
+      // （AUD 段同理），但调用序列能精确区分"跳到目标"与"被拽回旧选区起点"。
+      const brief = (r) => r && !r.err
+        ? { want: r.want, calls: r.calls, active: !!(r.active && r.active.segId === r.segId) } : r;
+      return { okA, okB, okC, okD, okE, hasAud, a: brief(a), b: brief(b), c: brief(c), d: brief(d), e: brief(e),
+        dur: vc.state.ws.getDuration(), ok: okA && okB && okC && okD && okE };
+
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("JUMP:", JSON.stringify(rJump.result && rJump.result.result && rJump.result.result.value));
+    if (rJump.result && rJump.result.exceptionDetails) console.log("JUMP-EXC:", JSON.stringify(rJump.result.exceptionDetails));
+
     // POOL：角色改名落盘；识别中(identifying)改名被阻塞后能自动补存（此前会永久丢失）
     const rPool = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
