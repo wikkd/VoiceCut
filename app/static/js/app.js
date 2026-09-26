@@ -132,7 +132,16 @@ import { createProjects } from "/static/js/modules/projects.js";
     }
     // 行内编辑控件（文本框/语言/说话人下拉）：不触发行选中——否则 renderSegments 重建行，
     // 正在交互的控件被替换，下拉打不开/change 丢失（曾导致说话人无法更改）
-    if (evtEl(e).closest("input, select")) return;
+    if (evtEl(e).closest("input, select")) {
+      // 但点到**别的片段**的行内控件时必须解除残留的循环试听：试听循环
+      // （state.auditioning.loop）会不停把播放头拽回试听片段，用户表现为
+      // "点了其他片段却锁死在试听片段、退不出循环"。同一段的控件不动 ——
+      // 保留"循环听这一段 + 顺手改它的文本"的工作流。
+      if (state.auditioning && state.auditioning.loop && state.auditioning.segId !== seg.id) {
+        waveform.stopAudition();
+      }
+      return;
+    }
     e.preventDefault();
     const rows = segments.allSegs();
     const flatIdx = rows.findIndex(r => r.seg.id === seg.id);
@@ -756,6 +765,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     WaveSurfer, Timeline, Regions, Minimap,
     markForward: waveform.markForward, unmarkLast: waveform.unmarkLast,
     clearMultiRegions: waveform.clearMultiRegions,
+    stopAudition: waveform.stopAudition,
     loadProject: store.loadProject, saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,
     openPool: pool.openPool, closePool: pool.closePool, renderPool: pool.renderPool,
     undo: doUndo, redo: doRedo, pushUndo: store.pushUndo, doAutosplit: io.doAutosplit, uploadFile: io.uploadFile,

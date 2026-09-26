@@ -35,6 +35,37 @@ export function createWaveform(ctx) {
   const SEEK_ECHO_MS = 220;
   function inSeekEcho() { return performance.now() - seekEchoAt < SEEK_ECHO_MS; }
 
+  // ── 试听循环（state.auditioning）必须能被"任何导航"解除 ──────────
+  // `auditionSegment()` 建立的单段循环试听（state.auditioning = {…, loop:true}）是一个
+  // **粘性状态**：auditionCheck 每次收到越过 end 的 timeupdate 就把播放头 setTime(start)
+  // 拉回来（这是"循环试听"的实现）。问题在于它此前只被两条路径解除：
+  //   ① focusSegment()（点片段行 / 跳转按钮）   ② togglePlay()（空格 / 暂停）
+  // 于是所有**其他**移动播放头的入口都会把播放头反复拽回试听片段，用户看到
+  // 「点击试听后再点其他片段 → 锁死在试听片段、退不出循环」。实测确认失效的入口：
+  //   行内文本框列点击 / 时间轴点击 / 总览条点击 / 波形区点击（走 vendor 的 seekTo）
+  //   / 快进快退按钮与方向键 / 跳末尾→被拽回 / 切换素材（旧窗口残留到新素材）
+  //   / **再点一次「循环」按钮**（最直观的"退出循环"手势，此前完全不生效）
+  // 处置：把"由播放机器自身发起"的 seek 标记为内部 seek，其余一切 setTime 都视为
+  // 用户导航 → 解除试听。已核对 vendor 内部 setTime 调用点只有 5 处：seekTo()（即
+  // 波形/总览条点击，属导航，应当解除）、stopAtPosition 分支（仅 play(from,to) 触发，
+  // 本项目一律 play() 无参）、stop()/skip()（本项目未调用）——因此包装层拦截不会误伤。
+  let seekInternal = false;
+  function setTimeInternal(t) {
+    if (!state.ws) return;
+    seekInternal = true;
+    try { state.ws.setTime(t); } finally { seekInternal = false; }
+  }
+  // 解除试听循环（含多选序列试听与"正在试听"行高亮）。不 pause：用户只是导航，
+  // 该继续播就从新位置继续播；要停音有空格 / 暂停键。
+  function stopAudition() {
+    state.auditioning = null;
+    state.auditionSeq = null;
+    state.auditionIdx = 0;
+    state.auditionFocus = null;
+    document.querySelectorAll("#seg-tbody tr.seg-row.playing")
+      .forEach((el) => el.classList.remove("playing"));
+  }
+
   // ── 素材选择 / 波形加载 ────────────────────────────────
   async function selectItem(item) {
     if ((state.dirtyItems.size || state.poolDirty) && state.currentItem && state.currentItem.id !== item.id) {
@@ -83,6 +114,9 @@ export function createWaveform(ctx) {
     state.selection = null; state.selectionRegion = null;
     state.multiRegions = [];
     state.auditionSeq = null; state.auditionIdx = 0;
+    // 试听窗口必须随素材一起丢弃：否则旧素材的试听区间会残留到新素材上，
+    // 新素材播到该时刻就被"拽回"一个属于旧文件的起点（用户：锁死在试听片段）。
+    state.auditioning = null; state.auditionFocus = null;
     state.activeSeg = null;
     $("#empty-state").classList.add("hidden");
 
@@ -110,9 +144,15 @@ export function createWaveform(ctx) {
     state.ws = ws;
 
     // setTime 包一层统一入口：任何调用方（本模块 / segments / subtitles / app.js /
-    // 控制台脚本）发起程序化 seek 都会自动进入回声窗口，无需逐个改造调用点。
+    // vendor 的 seekTo（波形·总览条点击）/ 控制台脚本）发起程序化 seek 都会自动进入
+    // 回声窗口，无需逐个改造调用点；同时把"非内部 seek"判定为用户导航并解除试听循环
+    // （见上方 stopAudition 注释）。
     const rawSetTime = ws.setTime.bind(ws);
-    ws.setTime = (t) => { seekEchoAt = performance.now(); return rawSetTime(t); };
+    ws.setTime = (t) => {
+      seekEchoAt = performance.now();
+      if (!seekInternal) stopAudition();
+      return rawSetTime(t);
+    };
     // 媒体 seek 落地时会再补一个 timeupdate（旧位置或落地位置）→ 一并纳入窗口
     ws.on("seeking", () => { seekEchoAt = performance.now(); });
     ws.on("seeked", () => { seekEchoAt = performance.now(); });
@@ -188,17 +228,13 @@ export function createWaveform(ctx) {
   // ── 播放控制 ───────────────────────────────────────────
   // 手动暂停（按钮/空格）＝终止试听序列：否则跨素材切换中 in-flight 的
   // playSeqItem 会在 selectItem 返回后把播放重新拉起，表现为"无法暂停"。
+  // 注意两个分支都解除试听：headless / 异常路径下 state.playing 可能为 false
+  // （试听已武装但播放事件没落地），此时按空格是"想停下"而不是"想重播循环"。
   function togglePlay() {
     if (!state.ws) return;
-    if (state.playing) {
-      state.auditionSeq = null;
-      state.auditioning = null;
-      document.querySelectorAll("#seg-tbody tr.seg-row.playing")
-        .forEach((el) => el.classList.remove("playing"));
-      state.ws.pause();
-    } else {
-      state.ws.play();
-    }
+    stopAudition();
+    if (state.playing) state.ws.pause();
+    else state.ws.play();
   }
 
   // ── 片段定位 ───────────────────────────────────────────
@@ -213,11 +249,7 @@ export function createWaveform(ctx) {
     // 显式跳转 = 接管播放：终止进行中的试听（单段循环 / 多选序列 / 角色池序列）。
     // 否则试听窗口落在目标片段之前时，跳转后的第一批真实 tick 会把播放头拽回
     // 试听窗口起点（"点了片段行，播放头没过去/自己弹回去"）。
-    state.auditioning = null;
-    state.auditionSeq = null;
-    state.auditionFocus = null;
-    document.querySelectorAll("#seg-tbody tr.seg-row.playing")
-      .forEach((el) => el.classList.remove("playing"));
+    stopAudition();
     state.ws.setTime(seg.start);
     state.activeSeg = { itemId: item.id, segId: seg.id };
     setSelection(seg.start, seg.end);
@@ -230,7 +262,14 @@ export function createWaveform(ctx) {
     $("#btn-loop").classList.toggle("primary", state.loop);
     $("#btn-loop").innerHTML = ico("loop") + (state.loop ? "循环中" : "循环");
   }
-  function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
+  function toggleLoop() {
+    state.loop = !state.loop;
+    // 关掉「循环」= 退出"循环试听该片段"。用户想停止循环试听时最直观的手势就是
+    // 再点一次这个按钮（提示语写着"循环试听该片段"），此前 toggleLoop 只翻 state.loop，
+    // 试听循环照旧跑 → 用户感知"锁死在试听片段、退不出循环"。
+    if (!state.loop && state.auditioning && state.auditioning.loop) stopAudition();
+    updatePlayUI();
+  }
   function playSelection() {
     if (!state.ws || !state.selection) return toast("请先在时间轴上拖拽出选区");
     if (state.multiRegions.length >= 2) {       // 多选：顺序试听全部标记段
@@ -240,7 +279,9 @@ export function createWaveform(ctx) {
       return;
     }
     if (!state.loop) state.auditioning = { start: state.selection.start, end: state.selection.end };
-    state.ws.setTime(state.selection.start);
+    // 内部 seek：这一次 setTime 是"播放选区"流程自己发起的，不能触发解除
+    // （否则上面刚武装的 auditioning 立刻被清掉，选区播完不会自动停）
+    setTimeInternal(state.selection.start);
     state.ws.play();
   }
   async function playSeqItem() {
@@ -253,9 +294,9 @@ export function createWaveform(ctx) {
     if (!state.ws) { state.auditionSeq = null; return; }
     // await selectItem 期间用户可能已手动暂停（togglePlay 清空序列）——此时不得继续播放
     if (!state.auditionSeq || state.auditionSeq[state.auditionIdx] !== m) return;
-    state.ws.setTime(m.start);
+    setTimeInternal(m.start);   // 序列换段是播放机器自己的 seek，不算用户导航
     state.ws.play();
-    state.auditioning = { start: m.start, end: m.end };
+    state.auditioning = { start: m.start, end: m.end, itemId: m.itemId, segId: m.segId };
     if (m.segId && auditionFocus) auditionFocus(m.itemId, m.segId);
   }
   // 外部入口：按给定顺序连续试听（角色池 = 单一角色的全部片段）
@@ -278,7 +319,7 @@ export function createWaveform(ctx) {
       if (lastWrap === sel) return;   // 同一选区已回卷，等播放头真正离开触发带
       lastWrap = sel;
       state.auditioning = null;
-      state.ws.setTime(sel.start);
+      setTimeInternal(sel.start);   // 循环回卷：播放机器自己的 seek，不得触发解除
     } else if (t < sel.end - 0.3 || t <= sel.start + 0.05) {
       lastWrap = null;                // 已离开触发带或确认回卷到位，允许下一次回卷
     }
@@ -303,7 +344,7 @@ export function createWaveform(ctx) {
       return;
     }
     if (a.loop) {                     // 单段试听：循环播放该片段（手动停止前一直循环）
-      state.ws.setTime(a.start);
+      setTimeInternal(a.start);       // 回卷是试听自己的 seek，不得触发解除（否则循环只跑一轮）
       return;
     }
     state.ws.pause();
@@ -615,6 +656,7 @@ export function createWaveform(ctx) {
 
   return { selectItem, togglePlay, toggleLoop, playSelection, playSequence,
            focusSegment, setSelection, refreshSelColor, selPending,
+           stopAudition,
            updatePlayUI, updateTransport, updateSelUI,
            setupMMSeek, seekBy, adjVolume,
            markForward, unmarkLast, clearMultiRegions, clearSelection,

@@ -429,9 +429,12 @@ export function createSegments(ctx) {
     if (!state.ws) return;
     state.ws.setTime(seg.start);
     state.ws.play();
-    state.auditioning = { start: seg.start, end: seg.end, loop: true };   // 循环试听：到终点自动回卷重播
+    // 循环试听：到终点自动回卷重播。带上 segId/itemId —— app.js 判断"点的是不是
+    // 正在试听的那一段"（点别的片段的行内控件要解除试听，点同一段则保留
+    // "循环听 + 顺手改文本"的工作流）。
+    state.auditioning = { start: seg.start, end: seg.end, itemId: item.id, segId: seg.id, loop: true };
     scrollSegRow(item.id, seg.id);
-    toast("循环试听该片段（空格 / 暂停键停止）", 2500);
+    toast("循环试听该片段（空格 / 暂停键停止，或再点一次「循环」退出）", 2500);
   }
   // 从角色池/素材库等位置试听时：先回到剪辑页并选中对应素材再播放
   async function gotoEditAndPlay(item, seg) {

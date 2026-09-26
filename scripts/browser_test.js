@@ -874,6 +874,135 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("JUMP:", JSON.stringify(rJump.result && rJump.result.result && rJump.result.result.value));
     if (rJump.result && rJump.result.exceptionDetails) console.log("JUMP-EXC:", JSON.stringify(rJump.result.exceptionDetails));
 
+    // AUDX：循环试听（state.auditioning.loop）必须能被"任何导航"解除
+    // 回归点（2026-09-26 修）：「点击试听后再点击其他片段 → 锁死在试听片段、退不出循环」。
+    // auditionSegment() 建立的单段循环试听是粘性状态，此前只由 focusSegment()/togglePlay()
+    // 解除，于是时间轴点击 / 波形点击（vendor 的 seekTo）/ 总览条 / 跳末尾按钮 / 方向键 /
+    // 切换素材 —— 尤其**再点一次「循环」按钮**（用户最直观的退出手势）—— 都会让播放头被
+    // 反复拽回试听片段。判据不依赖真实播放 tick（headless 下不可靠）：武装后手动
+    // emit('timeupdate', end+0.4)，若发生 setTime(start) 即为"仍在循环"。
+    // A 是阳性对照（不操作必须检出循环），I 是反向保护（点本段文本框不得误杀"边听边改"）。
+    const rAudx = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const sl = (ms) => new Promise(r => setTimeout(r, ms));
+      const itId = vc.state.currentItem.id;
+      const segs = vc.state.segmentsByItem.get(itId);
+      const backup = segs.slice();
+      const out = { cases: [] };
+      try {
+        for (let i = 0; i < 60 && !(vc.state.ws && vc.state.ws.getDuration() > 0); i++) await sl(150);
+        const D = Math.max(8, vc.state.ws.getDuration() || 20);
+        const st = [0.03, 0.25, 0.5, 0.75].map(f => +(D * f).toFixed(2));
+        segs.length = 0;
+        st.forEach((s, k) => segs.push(vc.newSegment(s, +(s + 1.5).toFixed(2), 'x' + k)));
+        vc.state.segFilter.item = itId; vc.state.segFilter.status = 'all'; vc.state.segFilter.text = '';
+        vc.renderSegments();
+        await sl(300);
+        const rowByI = (i) => document.querySelector('#seg-tbody tr.seg-row[data-item="' + itId + '"][data-i="' + i + '"]');
+        if (!rowByI(1) || !rowByI(1).querySelector('button.seg-aud') || !rowByI(3)) return { err: 'rows not rendered' };
+
+        const run = async (label, action, expectArmed) => {
+          // 复位：loop 关 + 无选区（隔离 loopCheck）+ 无序列试听
+          vc.state.loop = false;
+          vc.state.auditioning = null; vc.state.auditionSeq = null; vc.state.auditionIdx = 0;
+          vc.state.selection = null; vc.state.activeSeg = null;
+          try { vc.clearSelection(); } catch (e) {}
+          try { vc.state.ws.pause(); } catch (e) {}
+          await sl(60);
+          vc.state.ws.setTime(st[0]);
+          await sl(300);
+          rowByI(1).querySelector('button.seg-aud').click();
+          for (let k = 0; k < 25 && !vc.state.auditioning; k++) await sl(60);
+          const a0 = vc.state.auditioning;
+          if (!a0) { out.cases.push({ label, err: 'arm failed' }); return; }
+          const a = { start: a0.start, end: a0.end };
+          const raw = vc.state.ws.setTime.bind(vc.state.ws);
+          const calls = [];
+          vc.state.ws.setTime = (t) => { calls.push(+Number(t).toFixed(3)); return raw(t); };
+          const extra = await action(a);
+          await sl(420);
+          const armed = !!(vc.state.auditioning && vc.state.auditioning.loop);
+          const actCalls = calls.slice(0, 8);
+          calls.length = 0;
+          vc.state.ws.emit('timeupdate', a.end + 0.4);
+          await sl(150);
+          const wrapCalls = calls.slice(0, 5);
+          vc.state.ws.setTime = raw;
+          try { vc.state.ws.pause(); } catch (e) {}
+          // 两种"仍在循环"：探测 tick 触发回卷；或动作后的等待期内已经回卷
+          const looped = wrapCalls.some(c => Math.abs(c - a.start) < 0.05)
+            || actCalls.slice(1).some(c => Math.abs(c - a.start) < 0.05);
+          const rec = { label, armed, looped, aStart: +a.start.toFixed(2),
+            ok: expectArmed ? (armed && looped) : (!armed && !looped) };
+          if (extra && typeof extra === 'object') Object.assign(rec, extra);
+          out.cases.push(rec);
+        };
+
+        // A 阳性对照：武装后不操作 → 必须仍在循环（否则判据失灵，后面全不可信）
+        await run('A 阳性对照 不操作', async () => {}, true);
+        // B 时间轴原地点击 = 跳转播放头
+        await run('B 时间轴点击', async () => {
+          const tl = document.querySelector('#timeline');
+          const wr = vc.state.ws.getWrapper().getBoundingClientRect();
+          const x = wr.left + wr.width * 0.6;
+          tl.dispatchEvent(new MouseEvent('mousedown', { button: 0, clientX: x, clientY: tl.getBoundingClientRect().top + 5, bubbles: true }));
+          window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        });
+        // C 波形区点击（走 vendor 的 seekTo → setTime，包装层必须也拦住）
+        await run('C 波形区点击', async () => {
+          const w = vc.state.ws.getWrapper();
+          const r = w.getBoundingClientRect();
+          w.dispatchEvent(new MouseEvent('click', { clientX: r.left + r.width * 0.7, clientY: r.top + r.height / 2, bubbles: true }));
+        });
+        // D 总览条点击
+        await run('D 总览条点击', async () => {
+          const mw = document.querySelector('#minimap-wrap');
+          const r = mw.getBoundingClientRect();
+          const x = r.left + r.width * 0.8, y = r.top + r.height / 2;
+          mw.dispatchEvent(new PointerEvent('pointerdown', { clientX: x, clientY: y, bubbles: true }));
+          mw.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: y, bubbles: true }));
+        });
+        // E 跳到末尾按钮（必然越过试听终点）
+        await run('E 按钮跳到末尾', async () => { document.querySelector('#btn-next').click(); });
+        // F 方向键快进（seekBy）
+        await run('F 方向键 ArrowRight', async () => {
+          document.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight', key: 'ArrowRight', bubbles: true }));
+        });
+        // G 再点一次「循环」按钮：开 → 关（用户最直观的"退出循环"手势）
+        await run('G 循环按钮开→关', async () => {
+          const lb = document.querySelector('#btn-loop');
+          lb.click(); await sl(120); lb.click();
+          return { loopState: vc.state.loop };
+        });
+        // H 点**别的片段**的行内文本框：该列不触发行跳转，但必须解除残留循环
+        await run('H 别的片段文本框', async () => {
+          const el = rowByI(3).querySelector('input.seg-text');
+          if (el) el.click();
+        });
+        // I 反向保护：点**正在试听那一段**的文本框 → 必须保留循环（边听边改文本的工作流）
+        await run('I 本段文本框(保留循环)', async () => {
+          const el = rowByI(1).querySelector('input.seg-text');
+          if (el) el.click();
+        }, true);
+      } finally {
+        segs.length = 0; backup.forEach(s => segs.push(s));
+        vc.state.segFilter.item = 'all';
+        vc.state.loop = false;
+        vc.state.auditioning = null; vc.state.auditionSeq = null; vc.state.auditionIdx = 0;
+        try { vc.state.ws.pause(); } catch (e) {}
+        try { vc.clearSelection(); } catch (e) {}
+        vc.renderSegments();
+        await sl(200);
+        out.restored = segs.length === backup.length;
+      }
+      out.ok = out.cases.length === 9 && out.restored === true
+        && out.cases.every(c => c.ok === true);
+      out.fails = out.cases.filter(c => c.ok !== true).map(c => c.label);
+      return out;
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("AUDX:", JSON.stringify(rAudx.result && rAudx.result.result && rAudx.result.result.value));
+    if (rAudx.result && rAudx.result.exceptionDetails) console.log("AUDX-EXC:", JSON.stringify(rAudx.result.exceptionDetails));
+
     // POOL：角色改名落盘；识别中(identifying)改名被阻塞后能自动补存（此前会永久丢失）
     const rPool = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
