@@ -31,6 +31,9 @@ def create_app(cfg: AppConfig | None = None) -> Flask:
     app = Flask(__name__, static_folder=None)
     app.config["VC_CFG"] = cfg
     app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024 * 1024  # 4GB 上传上限
+    # 静态资源禁用浏览器缓存（默认 12h）：本应用是本地开发工具，前端 JS 迭代频繁，
+    # 缓存会让用户在浏览器里一直跑旧代码（选区颜色功能三轮修复都"看不到效果"即此因）。
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
     log = get_logger()
     store = MediaStore(cfg.workdir)
