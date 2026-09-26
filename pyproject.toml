@@ -33,3 +33,7 @@ markers = [
     "env: 环境/GPU/机器相关测试（CI 跳过）",
 ]
 testpaths = ["tests"]
+# 把仓库根加入 sys.path，使 tests/ 里 `from app.xxx import ...` 可用。
+# 不写这条时本地 `python -m pytest` 能过（-m 会把 CWD 塞进 sys.path），
+# 但 CI 用的 `pytest` 控制台脚本不会 → ModuleNotFoundError: No module named 'app'。
+pythonpath = ["."]
