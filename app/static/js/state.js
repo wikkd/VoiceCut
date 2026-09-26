@@ -102,18 +102,43 @@ function loadLayout() {
 export const layout = loadLayout();
 export function saveLayout() { try { localStorage.setItem(LS_KEY, JSON.stringify(layout)); } catch (e) {} }
 
+// 片段列表是可编辑宽表（最多 10 列），面板又能被拖进 140/170px 的窄列——
+// 那种槽位里任何表格都会横向溢出到只剩一条缝（实测溢出 835px）。所以：承载片段列表的那一列强制保底。
+export const SEG_MIN_COL = 560;
+const MID_MIN = 260;                       // 中间列（视频/波形）至少留出的宽度
+function colFloor(ws, slot) {
+  const base = slot === "media" ? 140 : 170;
+  if (layout.area.seg !== slot) return base;
+  const other = slot === "media" ? layout.cols.sub : layout.cols.media;
+  const rw = ws && ws.clientWidth ? ws.clientWidth : 0;
+  const room = rw > 0 ? rw - other - MID_MIN : SEG_MIN_COL;
+  return Math.max(base, Math.min(SEG_MIN_COL, room));
+}
 export function applyLayout() {
   const ws = $("#workspace");
   if (!ws) return;
-  const eff = (px, hid) => hid ? 0 : px;
-  ws.style.setProperty("--w-media", eff(layout.cols.media, layout.hidden.includes("media")) + "px");
-  ws.style.setProperty("--w-sub", eff(layout.cols.sub, layout.hidden.includes("sub")) + "px");
-  ws.style.setProperty("--h-video", eff(layout.rows.video, layout.hidden.includes("video")) + "px");
-  // wave 行必须保底 240px：时间轴 24 + 波形 min 120 + 总览条 46 + 内边距。
-  // 若用裸 1fr，视频/片段行过大或窗口过矮时 wave 行被压扁，时间轴被 overflow:hidden 裁掉——
-  // 真实鼠标拖选时间轴会彻底失效（点到的其实是片段面板），且合成事件测试测不出来。
-  ws.style.setProperty("--h-wave", layout.hidden.includes("wave") ? "0px" : "minmax(240px, 1fr)");
-  ws.style.setProperty("--h-seg", eff(layout.rows.seg, layout.hidden.includes("seg")) + "px");
+  const hid = (p) => layout.hidden.includes(p);
+  const eff = (px, h) => h ? 0 : px;
+  ws.style.setProperty("--w-media", eff(Math.max(layout.cols.media, colFloor(ws, "media")), hid("media")) + "px");
+  ws.style.setProperty("--w-sub", eff(Math.max(layout.cols.sub, colFloor(ws, "sub")), hid("sub")) + "px");
+  // 行高：用户拖出的是「上限」，窗口变矮时行可以收缩（否则 200+240+220=660 超出工作区高度，
+  // 片段列表被整体挤到屏幕外，只剩表头一条缝）。wave 行保底 240px：时间轴 24 + 波形 min 120
+  // + 总览条 46 + 内边距；若用裸 1fr，窗口过矮时时间轴被 overflow:hidden 裁掉——真实鼠标拖选
+  // 时间轴会彻底失效（点到的其实是片段面板），且合成事件测试测不出来。
+  const rows = [
+    hid("video") ? "0px" : `minmax(100px, ${layout.rows.video}px)`,
+    hid("wave") ? "1fr" : "minmax(240px, 1fr)",
+    hid("seg") ? "0px" : `minmax(110px, ${layout.rows.seg}px)`,
+  ].join(" ");
+  ws.style.setProperty("--rows", rows);
+  // 行被压缩时拖拽手柄要跟着实际行高走（否则窗口变矮时手柄浮在面板中间）
+  requestAnimationFrame(() => {
+    const t = getComputedStyle(ws).gridTemplateRows.split(/\s+/);
+    if (t.length === 3) {
+      if (t[0]) ws.style.setProperty("--h-video", t[0]);
+      if (t[2]) ws.style.setProperty("--h-seg", t[2]);
+    }
+  });
   PANELS.forEach((p) => {
     const el = $(PANEL_IDS[p]);
     if (!el) return;
@@ -170,10 +195,10 @@ export function setupSplitters() {
       const c0 = { ...layout.cols }, r0 = { ...layout.rows };
       const onMove = (ev) => {
         const dx = ev.clientX - e.clientX, dy = ev.clientY - e.clientY;
-        if (kind === "col-media") layout.cols.media = clampN(c0.media + dx, 140, rect.width - layout.cols.sub - 200);
-        else if (kind === "col-sub") layout.cols.sub = clampN(c0.sub - dx, 170, rect.width - layout.cols.media - 200);
-        else if (kind === "row-video") layout.rows.video = clampN(r0.video + dy, 100, rect.height - layout.rows.seg - 120);
-        else if (kind === "row-seg") layout.rows.seg = clampN(r0.seg - dy, 120, rect.height - layout.rows.video - 100);
+        if (kind === "col-media") layout.cols.media = clampN(c0.media + dx, colFloor(ws, "media"), Math.max(colFloor(ws, "media"), rect.width - layout.cols.sub - 200));
+        else if (kind === "col-sub") layout.cols.sub = clampN(c0.sub - dx, colFloor(ws, "sub"), Math.max(colFloor(ws, "sub"), rect.width - layout.cols.media - 200));
+        else if (kind === "row-video") layout.rows.video = clampN(r0.video + dy, 100, Math.max(100, rect.height - layout.rows.seg - 120));
+        else if (kind === "row-seg") layout.rows.seg = clampN(r0.seg - dy, 120, Math.max(120, rect.height - layout.rows.video - 100));
         applyLayout();
       };
       const onUp = () => {
@@ -239,4 +264,7 @@ export function initWorkspace() {
   setupSplitters();
   setupGripDrag();
   setupPanelClose();
+  // 列的保底宽度依赖工作区实际宽度、行高上限依赖窗口高度——尺寸变化必须重算
+  let rt = 0;
+  window.addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(applyLayout, 120); });
 }

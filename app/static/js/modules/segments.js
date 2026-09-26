@@ -172,21 +172,21 @@ export function createSegments(ctx) {
     tr.dataset.i = i;
     if (ch) tr.style.borderLeft = "4px solid " + ch.color;
     tr.innerHTML = `
-      <td class="seg-num">${String(i + 1).padStart(2, "0")}</td>
-      <td class="seg-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
-      <td class="seg-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
-      <td class="seg-dur">${fmtDur(seg.end - seg.start)}</td>
-      <td><span class="tag ${tagCls}">${tagTxt}</span></td>
-      <td><button class="chip seg-aud" data-i="${i}">试听</button></td>
-      <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
-      <td><select class="seg-lang" data-i="${i}">
+      <td class="seg-num col-num">${String(i + 1).padStart(2, "0")}</td>
+      <td class="seg-src col-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
+      <td class="seg-time col-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
+      <td class="seg-dur col-dur">${fmtDur(seg.end - seg.start)}</td>
+      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span></td>
+      <td class="col-aud"><button class="chip seg-aud" data-i="${i}">试听</button></td>
+      <td class="col-text"><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
+      <td class="col-lang"><select class="seg-lang" data-i="${i}">
         ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
       </select></td>
-      <td><select class="seg-speaker" data-i="${i}">
+      <td class="col-spk"><select class="seg-speaker" data-i="${i}">
         <option value="">未分配</option>
         ${state.characters.map(c => `<option value="${esc(c.id)}" ${seg.characterId === c.id ? "selected" : ""} style="color:${esc(c.color)}">${esc(c.name)}</option>`).join("")}
       </select></td>
-      <td class="row-actions">
+      <td class="row-actions col-act">
         <button class="chip seg-jump" data-i="${i}">跳转</button>
         <button class="chip danger seg-del" data-i="${i}">删除</button>
       </td>`;

@@ -112,7 +112,9 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
   flex: 1; min-height: 0; position: relative;
   display: grid;
   grid-template-columns: var(--w-media, 220px) 1fr var(--w-sub, 240px);
-  grid-template-rows: var(--h-video, 200px) var(--h-wave, minmax(240px, 1fr)) var(--h-seg, 220px);
+  /* 行高由 applyLayout 写入 --rows：视频/片段行是 minmax(下限, 用户拖出的值)，
+     窗口变矮时行可以收缩到下限，避免总高超出工作区把片段列表挤出屏幕。 */
+  grid-template-rows: var(--rows, 200px minmax(240px, 1fr) 220px);
   grid-template-areas:
     "media video sub"
     "media wave  sub"
@@ -133,14 +135,14 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 
 /* 面板标题栏（拖拽换位手柄） */
 .panel-grip {
-  display: flex; align-items: center; gap: 6px;
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap; row-gap: 4px;
   padding: 5px 10px; background: var(--panel-2);
   border-bottom: 1px solid var(--border);
   cursor: grab; user-select: none; flex-shrink: 0;
 }
 .panel-grip:active { cursor: grabbing; }
-/* 窄面板下优先压缩标题、不折行按钮：按钮保持单行且不被压缩 */
-.panel-grip .chip, .panel-grip .menu-title { white-space: nowrap; flex: 0 0 auto; }
+/* 窄面板下按钮不折字：空间不够时整行换行，而不是把文字拆断或压出面板外 */
+.panel-grip .chip, .panel-grip .menu-title { white-space: nowrap; }
 .panel-grip .grip-title {
   font-weight: 600; font-size: 12px; color: var(--muted);
   margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -240,18 +242,71 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 
 /* ── 片段列表 ── */
 .seg-body { overflow: hidden; }
-#seg-scroll { flex: 1; min-height: 0; overflow: auto; }
-/* 固定布局：列宽完全由表头 th 决定，文本列吃掉剩余空间。
-   避免 auto 布局下窄列被内容撑开、宽内容把「操作」列挤出可视区。 */
+/* 作为容器查询的容器：表格按「面板自己有多宽」降列，而不是按窗口宽度 */
+#seg-scroll { flex: 1; min-height: 0; overflow: auto; container-type: inline-size; container-name: segscroll; }
+/* 固定布局 + 百分比列宽 + 不设 min-width：表格永远等于容器宽度，任何窗口/面板宽度下都
+   不会横向溢出。窄容器靠下面的容器查询逐级隐藏低价值列，并把留下列的百分比放大，保证可读。 */
 #seg-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 #seg-table th {
   position: sticky; top: 0; background: var(--panel-2); text-align: left;
-  padding: 5px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border);
-  z-index: 2; white-space: nowrap; font-weight: 600;
+  padding: 4px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border);
+  z-index: 2; white-space: nowrap; font-weight: 600; overflow: hidden; text-overflow: ellipsis;
 }
 #seg-table td {
-  padding: 5px 8px; border-bottom: 1px solid var(--border);
+  padding: 4px 8px; border-bottom: 1px solid var(--border);
   vertical-align: middle; white-space: nowrap; overflow: hidden;
+}
+/* 列宽（文本列不给宽度 = 吃掉剩余空间）。只写给 thead th：写到 td 上会泄漏到
+   「操作」这种 display:flex 的单元格，把它压成只剩 padding 的条。
+   也不能写在 th 的行内 style 上——行内样式会盖掉下面的容器查询。 */
+#seg-table thead .col-num { width: 3%; }
+#seg-table thead .col-src { width: 7%; }
+#seg-table thead .col-time { width: 10.5%; }
+#seg-table thead .col-dur { width: 5%; }
+#seg-table thead .col-status { width: 7%; }
+#seg-table thead .col-aud { width: 5%; }
+#seg-table thead .col-lang { width: 5%; }
+#seg-table thead .col-spk { width: 10%; }
+#seg-table thead .col-act { width: 9.5%; }
+/* 降列顺序（低价值 → 高价值）：时长 → 语言 → 来源 → # → 状态 → 试听 → 说话人。
+   每次降列后重设留下列的百分比，让它们在小容器里仍有 86px 以上的可读宽度。 */
+@container segscroll (max-width: 980px) {
+  #seg-table .col-dur { display: none; }
+  #seg-table thead .col-time { width: 13%; } #seg-table thead .col-status { width: 8%; }
+  #seg-table thead .col-aud { width: 5.5%; } #seg-table thead .col-lang { width: 6%; }
+  #seg-table thead .col-spk { width: 12%; } #seg-table thead .col-act { width: 11%; }
+}
+@container segscroll (max-width: 860px) {
+  #seg-table .col-lang { display: none; }
+  #seg-table thead .col-time { width: 14%; } #seg-table thead .col-status { width: 9%; }
+  #seg-table thead .col-aud { width: 6%; } #seg-table thead .col-spk { width: 13%; }
+  #seg-table thead .col-act { width: 12%; }
+}
+@container segscroll (max-width: 780px) {
+  #seg-table .col-src { display: none; }
+  #seg-table thead .col-time { width: 15%; } #seg-table thead .col-status { width: 10%; }
+  #seg-table thead .col-aud { width: 6.5%; } #seg-table thead .col-spk { width: 14%; }
+  #seg-table thead .col-act { width: 13%; }
+}
+@container segscroll (max-width: 700px) {
+  #seg-table .col-num { display: none; }
+  #seg-table thead .col-time { width: 16%; } #seg-table thead .col-status { width: 11%; }
+  #seg-table thead .col-aud { width: 7%; } #seg-table thead .col-spk { width: 15%; }
+  #seg-table thead .col-act { width: 14%; }
+}
+@container segscroll (max-width: 620px) {
+  #seg-table .col-status { display: none; }
+  #seg-table thead .col-time { width: 19%; } #seg-table thead .col-aud { width: 8%; }
+  #seg-table thead .col-spk { width: 18%; } #seg-table thead .col-act { width: 17%; }
+}
+@container segscroll (max-width: 500px) {
+  #seg-table .col-aud { display: none; }
+  #seg-table thead .col-time { width: 22%; } #seg-table thead .col-spk { width: 22%; }
+  #seg-table thead .col-act { width: 21%; }
+}
+@container segscroll (max-width: 380px) {
+  #seg-table .col-spk { display: none; }
+  #seg-table thead .col-time { width: 30%; } #seg-table thead .col-act { width: 28%; }
 }
 #seg-table tr:hover td { background: var(--panel-2); }
 #seg-table input[type="text"] { padding: 4px 8px; }
@@ -303,8 +358,7 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 
 /* ── 消息/任务气泡堆叠层（左下角，向上堆叠） ── */
 #toast-stack {
-  /* 上移到传输栏之上（实测传输栏48 + 页面切换栏38 + 状态栏27 = 113px），避免气泡压住播放/循环控件 */
-  position: fixed; left: 14px; bottom: 122px; z-index: 1200;
+  position: fixed; left: 14px; bottom: 36px; z-index: 1200;
   display: flex; flex-direction: column; justify-content: flex-end; gap: 8px;
   max-width: min(430px, 46vw); pointer-events: none;
 }
