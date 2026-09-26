@@ -72,6 +72,7 @@ def test_align_spanning_window_takes_first_to_last() -> None:
 def test_adaptive_silence_with_noise_floor(tmp_path) -> None:
     import numpy as np
     import soundfile as sf
+
     from app.audio_ops import detect_silence_adaptive
 
     sr = 16000
@@ -110,6 +111,7 @@ def test_adaptive_silence_with_noise_floor(tmp_path) -> None:
 def test_adaptive_low_dynamic_range_returns_empty(tmp_path) -> None:
     import numpy as np
     import soundfile as sf
+
     from app.audio_ops import detect_silence_adaptive
 
     sr = 16000
@@ -123,9 +125,10 @@ def test_adaptive_low_dynamic_range_returns_empty(tmp_path) -> None:
 # ── detect_speech_ranges：Silero 封装（monkeypatch 神经推理，测接线） ──
 
 def test_detect_speech_ranges_wraps_silero(tmp_path, monkeypatch) -> None:
+    import faster_whisper.vad as vad_mod
     import numpy as np
     import soundfile as sf
-    import faster_whisper.vad as vad_mod
+
     import app.audio_ops as ao
 
     captured = {}

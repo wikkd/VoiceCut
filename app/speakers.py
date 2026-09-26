@@ -373,7 +373,6 @@ def bind_segments(segments, speaker_segments, char_of_label, new_id=None):
                      if new_id is not None else [])
             if len(parts) >= 2:
                 text = seg.get("text") or ""
-                n = len(text)
                 total = sum(p[1] - p[0] for p in parts)
                 pos = 0
                 for j, (ps, pe, plb) in enumerate(parts):

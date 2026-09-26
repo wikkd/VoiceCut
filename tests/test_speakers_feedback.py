@@ -6,7 +6,6 @@ import pytest
 
 from app import speakers
 
-
 # ── locked：bind_segments 不重绑、不拆分 ──────────────────────
 
 def test_bind_segments_respects_locked() -> None:

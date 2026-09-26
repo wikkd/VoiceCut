@@ -162,6 +162,7 @@ def detect_speech_ranges(
     音频经 ffmpeg 解码重采样到 16k 单声道，全程 O(音频时长) 内存。
     """
     from faster_whisper.vad import VadOptions, get_speech_timestamps
+
     from app.speakers import read_mono16k
 
     mono, sr = read_mono16k(wav_path)

@@ -1,5 +1,5 @@
 """孤儿角色清理 + 字幕生成片段（2026-09-25 说话人识别修复）。"""
-from app.speakers import orphan_characters, segments_from_subs
+from app.speakers import bind_segments, orphan_characters, segments_from_subs
 
 
 def _ch(cid, labels, exp=None):
@@ -57,7 +57,6 @@ def test_segments_from_subs_drops_empty_and_accepts_objects():
 
 
 # ── mixed 片段拆分（bind_segments new_id）───────────────────
-from app.speakers import bind_segments
 
 
 def _counter():

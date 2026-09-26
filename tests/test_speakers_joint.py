@@ -11,7 +11,6 @@ from app.speakers import (
     _window_runs,
 )
 
-
 A = [1.0, 0.0]
 B = [0.0, 1.0]
 CENTROIDS = {"说话人1": A, "说话人2": B}

@@ -23,8 +23,8 @@ def load_subs(item_id):
     srt = WORKDIR / "subs" / f"{item_id}.srt"
     if not srt.exists():
         return []
-    return [ {"start": l.start, "end": l.end, "text": l.text}
-             for l in parse_srt(srt.read_text(encoding="utf-8")) ]
+    return [ {"start": ln.start, "end": ln.end, "text": ln.text}
+             for ln in parse_srt(srt.read_text(encoding="utf-8")) ]
 
 
 def item_embeddings(item_id, subs):
@@ -78,7 +78,6 @@ def main():
 
     # 跨素材合并聚类（模拟项目级联合聚类）
     all_raw = np.concatenate([X for _, X in data.values()])
-    mu_all = np.concatenate([X for _, X in data.values()])
     # 每素材各自的均值
     mus = np.concatenate([np.tile(X.mean(axis=0), (len(X), 1)) for _, X in data.values()])
     all_cms = all_raw - mus

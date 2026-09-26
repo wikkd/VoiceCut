@@ -25,8 +25,8 @@ def main():
         srt = Path(f"workdir/subs/{iid}.srt")
         if not srt.exists():
             continue
-        subs = [{"start": l.start, "end": l.end, "text": l.text}
-                for l in parse_srt(srt.read_text(encoding="utf-8"))]
+        subs = [{"start": ln.start, "end": ln.end, "text": ln.text}
+                for ln in parse_srt(srt.read_text(encoding="utf-8"))]
         if subs:
             sources.append({"wav_path": f"workdir/items/{iid}.wav", "subs": subs})
     total = sum(len(s["subs"]) for s in sources)
