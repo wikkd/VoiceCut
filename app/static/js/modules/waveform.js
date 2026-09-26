@@ -2,7 +2,7 @@
 // 由 createWaveform(ctx) 创建；ctx 注入 util + state + 主流程依赖（项目存取/素材列表/渲染/字幕），
 // 避免与主流程模块形成循环 import。
 export function createWaveform(ctx) {
-  const { $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
+  const { $, api, ico, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
           WaveSurfer, Timeline, Regions, Minimap,
           renderMediaList, loadProject, saveProjectNow, savePoolNow,
           renderSegments, subtitles, auditionFocus } = ctx;
@@ -186,10 +186,10 @@ export function createWaveform(ctx) {
   }
 
   function updatePlayUI() {
-    const icon = state.playing ? "⏸" : "▶";
-    $("#btn-play2").textContent = icon;
+    // 两个按钮里都有 <i class="ico">，只能用 innerHTML —— textContent 会把图标节点整个抹掉。
+    $("#btn-play2").innerHTML = ico(state.playing ? "pause" : "play", "lg");
     $("#btn-loop").classList.toggle("primary", state.loop);
-    $("#btn-loop").textContent = state.loop ? "循环中" : "循环";
+    $("#btn-loop").innerHTML = ico("loop") + (state.loop ? "循环中" : "循环");
   }
   function toggleLoop() { state.loop = !state.loop; updatePlayUI(); }
   function playSelection() {

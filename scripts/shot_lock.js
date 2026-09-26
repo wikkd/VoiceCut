@@ -103,39 +103,61 @@ const makeWav = (seconds, sr = 16000) => {
       await new Promise(r => setTimeout(r, 300));
       const panel = document.getElementById('segments-panel');
       const pr = panel.getBoundingClientRect();
-      // emoji 字形探针：🔒 与「必定缺字」的 U+FFFF 比较渲染宽度。
-      // 两者等宽 → 说明 emoji 也走了 to◆u（缺字体）→ 真机 Chrome 同样是方块。
-      const probeW = (ch) => {
-        const s = document.createElement('span');
-        s.style.cssText = 'position:absolute;left:-9999px;font-size:32px;font-family:inherit';
-        s.textContent = ch;
-        document.body.appendChild(s);
-        const w = s.getBoundingClientRect().width;
-        s.remove();
-        return Math.round(w * 100) / 100;
+      // 图标探针（替代此前的 emoji 字形探针）：.seg-lock 里的 <i class="ico"> 是 CSS mask 图标。
+      // 必须验证 mask-image 解析到**真实的 lock/unlock SVG**，而不是落到 .ico 的「空遮罩兜底」
+      // —— 落到兜底说明类名没定义，页面上只会渲染成 1em 实心方块（肉眼极易漏掉）。
+      const probeIco = (root, name) => {
+        const i = root ? root.querySelector('i.ico') : null;
+        if (!i) return { name, hasIcon: false };
+        const cs = getComputedStyle(i);
+        const mask = cs.webkitMaskImage || cs.maskImage || 'none';
+        const r = i.getBoundingClientRect();
+        return { name, hasIcon: true, cls: i.className,
+                 fallback: mask.indexOf('data:image/svg') >= 0,   // 兜底空遮罩 → 没画出来
+                 // 坑：这段代码整体走「模板字符串 → Runtime.evaluate」，模板会先吃掉
+                 // 反斜杠转义 —— 写成斜杠转义的正则（形如 斜杠 a 反斜杠 斜杠 b 斜杠）
+                 // 到浏览器就退化成提前闭合，报 SyntaxError: Unexpected token '.'。
+                 // 所以下面一律用 [.] 代替点转义，整段不含反斜杠。
+                 svg: (mask.match(/([A-Za-z0-9_.-]+[.]svg)/) || ['', ''])[1],
+                 size: [Math.round(r.width), Math.round(r.height)] };
+      };
+      const rows = [...document.querySelectorAll('#seg-tbody tr.seg-row')];
+      const rowLocked = rows.find(tr => tr.classList.contains('locked'));
+      const rowPlain = rows.find(tr => !tr.classList.contains('locked'));
+      const q = (tr, sel) => (tr ? tr.querySelector(sel) : null);
+      const icons = {
+        lock: probeIco(q(rowLocked, '.seg-lock'), 'lock'),
+        unlock: probeIco(q(rowPlain, '.seg-lock'), 'unlock'),
+        aud: probeIco(q(rows[0], '.seg-aud'), 'aud'),
+        jump: probeIco(q(rows[0], '.seg-jump'), 'jump'),
+        del: probeIco(q(rows[0], '.seg-del'), 'del'),
       };
       return {
         lockedFlags: live.map(s => !!s.locked),
         segRows: live.length,
-        emoji: { lock: probeW('\uD83D\uDD12'), unlock: probeW('\uD83D\uDD13'),
-                 tofu: probeW('\uFFFF'), han: probeW('\u9501') },
+        icons,
         clip: { x: Math.round(pr.x), y: Math.round(pr.y), width: Math.round(pr.width), height: Math.round(pr.height) },
       };
     } catch (e) { return { err: String((e && e.message) || e) }; } })()`, awaitPromise: true, returnByValue: true });
 
     const v = r.result.result.value || {};
+    if (r.result.exceptionDetails) {
+      console.log("EVAL-EXC:", JSON.stringify(r.result.exceptionDetails).slice(0, 700));
+    }
     if (v.err) { console.error("FATAL: " + v.err); return; }
     console.log("SEED:", JSON.stringify({ segRows: v.segRows, lockedFlags: v.lockedFlags }));
-    const e = v.emoji || {};
-    const emojiOk = e.lock !== e.tofu && e.unlock !== e.tofu;
-    console.log("EMOJI:", JSON.stringify(e), "=> 🔒 可渲染:", emojiOk,
-      emojiOk ? "" : "⚠ 真机也会显示为方块，需换字形");
+    const ic = v.icons || {};
+    const bad = Object.entries(ic).filter(([, x]) => !x.hasIcon || x.fallback);
+    const distinct = !!(ic.lock && ic.unlock && ic.lock.svg && ic.lock.svg !== ic.unlock.svg);
+    console.log("ICONS:", JSON.stringify(ic));
+    console.log("ICON-CHECK:", bad.length ? "✗ 未解析到真实 SVG: " + bad.map(([k]) => k).join(",")
+      : "✓ 5 个图标全部解析到真实 SVG", "| lock ≠ unlock:", distinct);
     await sleep(400);
     const cap = await send("Page.captureScreenshot", { format: "png", clip: { ...v.clip, scale: 2 } });
     const p = path.join(OUT, "shot_lock_panel.png");
     fs.writeFileSync(p, Buffer.from(cap.result.data, "base64"));
     console.log("SHOT:", p, "clip=" + JSON.stringify(v.clip));
-    // 状态列特写（放大 4x，看清 🔒/🔓 与琥珀/灰虚线两种态）
+    // 状态列特写（放大 4x，看清锁图标与琥珀实心/灰虚线两种态）
     const zoom = await send("Runtime.evaluate", { expression: `(() => {
       const c = document.querySelectorAll('#seg-table thead th')[4];
       const p = document.getElementById('segments-panel');

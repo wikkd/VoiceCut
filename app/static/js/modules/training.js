@@ -2,7 +2,7 @@
 // 由 createTraining(ctx) 创建；ctx 注入共享依赖（util + state + 主流程 trackTask），
 // 避免与主流程模块形成循环 import。返回的 API 供 setPage / window.__vc 使用。
 export function createTraining(ctx) {
-  const { $, esc, shortName, fmtDur, api, state, toast, trackTask } = ctx;
+  const { $, esc, ico, shortName, fmtDur, api, state, toast, trackTask } = ctx;
 
   // ── 训练交付页 ──
   const train = { roles: [], selected: null, settings: null, logTimer: null };
@@ -112,7 +112,7 @@ export function createTraining(ctx) {
       const card = document.createElement("div");
       card.className = "step-card";
       card.innerHTML = `<span class="st-name">${st.name}</span>
-        <span class="st-state ${st.state}">${st.state === "ok" ? "✓ " + st.desc : st.desc}</span>
+        <span class="st-state ${st.state}">${st.state === "ok" ? ico("ok") + esc(st.desc) : esc(st.desc)}</span>
         <span class="st-actions"><button class="btn primary" data-step="${st.act}" ${running ? "disabled" : ""}>${st.state === "ok" ? "重跑" : "执行"}</button></span>`;
       card.querySelector("button").addEventListener("click", () => startTrain(st.act));
       stepsBox.appendChild(card);

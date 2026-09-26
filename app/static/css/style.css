@@ -46,6 +46,174 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button.primary:hover { filter: brightness(1.08); }
 button.danger { color: var(--danger); border-color: var(--danger); }
 button.btn-auto-on { background: var(--accent); border-color: var(--accent); color: #101018; font-weight: 600; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   HarmonyOS 系统图标（app/static/vendor/harmony-icons/，43 个 SVG / 52 个语义类）
+   ──────────────────────────────────────────────────────────────────────
+   图标 SVG 是 Sketch 导出结构：<defs><path id="path-1"> + <mask> +
+   <use xlink:href="#path-1">。**id 是文档级的**——把多份内联进同一页面会
+   互相抢 `#path-1`，图标全部画错。所以统一走 CSS mask 引用：每个 SVG 仍是
+   独立文档，零 id 冲突，而且可以用 background-color 跟随 currentColor
+   （emoji 是彩色位图字体，做不到这点，小字号下基线与尺寸也不可控）。
+   挑的都是纯单色图标；自带品牌色的（ic_public_error 红、ic_public_list_add_light
+   蓝）走 mask 会塌成实心剪影，已用 ic_public_fail / ic_public_add 替代。
+
+   用法：<i class="ico ico-play"></i>（或 JS 里 util.js 的 ico("play")）。
+   尺寸 = 1em，颜色 = 当前文字色，所以「深/浅色主题、主色/危险色、字号大小」
+   全部自动跟随，不需要逐处指定。
+
+   三处必须一起改，漏一处就会出问题（scripts/check_icons.py 已把前两条接进 CI）：
+     ① 加类名 → 必须在下面有 .ico-<name> 映射，否则 var(--ico) 失效会渲染成实心方块
+     ② 换文件 → 跑 `python scripts/hm_icons.py pick app/static/vendor/harmony-icons`
+     ③ 图标名 → 只能从 vendor 目录里挑；形状先用 `hm_icons.py sheet` 出联络表目检
+   ══════════════════════════════════════════════════════════════════════ */
+.ico {
+  display: inline-block; flex: none;
+  inline-size: 1em; block-size: 1em;
+  background-color: currentColor;
+  /* 兜底：类名拼错 / 漏加映射时退化成「空遮罩」→ 什么都不画。
+     不写这条的话 var(--ico) 失效会让 mask 整条声明作废，background-color
+     直接露出来变成 1em 实心方块（比缺图标更难发现）。
+     scripts/check_icons.py（已接进 CI 的 Icon check 步）会校验
+     「HTML/JS 用到的类名 ⊆ 这里定义的类名」，漏映射会在 CI 上直接红。 */
+  --ico: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E");
+  -webkit-mask: var(--ico) no-repeat center / contain;
+          mask: var(--ico) no-repeat center / contain;
+  vertical-align: -0.125em;   /* 与相邻文字视觉居中（1em 方块按字面下沉 1/8 补偿） */
+  pointer-events: none;
+}
+.ico.lg { inline-size: 1.25em; block-size: 1.25em; }
+.ico.sm { inline-size: 0.85em; block-size: 0.85em; }
+
+/* ── 图标 → 文件映射（语义化类名，便于日后换文件而不动业务代码）
+   映射前都用联络表（scripts/hm_icons.py sheet）目检过实际形状，几个易错的：
+     ic_public_highlight = 星标（不是「适配/高亮」）   → 曾误作 .ico-fit，已换成 corner-brackets
+     ic_public_reset     = ↺ 逆时针（撤销）           ic_public_rotate = ↻ 顺时针（重做）
+     ic_public_voice     = 麦克风 🎤                  ic_public_sound  = 喇叭 🔊
+     ic_public_fast      = 火箭 🚀（自动训练）        ic_device_sound_ai = 音箱轮廓（太弱，弃用）
+     ic_public_storage   = 层叠盘片（数据集）         ic_public_albums = 两个圆角方块
+   ── */
+.ico-folder     { --ico: url("../vendor/harmony-icons/ic_public_folder.svg"); }
+.ico-audio      { --ico: url("../vendor/harmony-icons/ic_public_sound.svg"); }
+.ico-speaker    { --ico: url("../vendor/harmony-icons/ic_public_sound.svg"); }
+.ico-dataset    { --ico: url("../vendor/harmony-icons/ic_public_storage.svg"); }
+.ico-view       { --ico: url("../vendor/harmony-icons/ic_public_view_grid.svg"); }
+.ico-window     { --ico: url("../vendor/harmony-icons/ic_public_drag_handle.svg"); }
+.ico-help       { --ico: url("../vendor/harmony-icons/ic_public_help.svg"); }
+.ico-import     { --ico: url("../vendor/harmony-icons/ic_public_folder.svg"); }
+.ico-url        { --ico: url("../vendor/harmony-icons/ic_public_download.svg"); }
+.ico-download   { --ico: url("../vendor/harmony-icons/ic_public_download.svg"); }
+.ico-identify   { --ico: url("../vendor/harmony-icons/ic_public_voice.svg"); }
+.ico-reidentify { --ico: url("../vendor/harmony-icons/ic_public_refresh.svg"); }
+.ico-auto       { --ico: url("../vendor/harmony-icons/ic_public_text.svg"); }
+.ico-autotrain  { --ico: url("../vendor/harmony-icons/ic_public_fast.svg"); }
+.ico-gapscan    { --ico: url("../vendor/harmony-icons/ic_public_scan.svg"); }
+.ico-pool       { --ico: url("../vendor/harmony-icons/ic_public_contacts_group.svg"); }
+.ico-picture    { --ico: url("../vendor/harmony-icons/ic_public_picture.svg"); }
+.ico-export     { --ico: url("../vendor/harmony-icons/ic_public_download.svg"); }
+.ico-refresh    { --ico: url("../vendor/harmony-icons/ic_public_refresh.svg"); }
+.ico-sort       { --ico: url("../vendor/harmony-icons/ic_public_sift.svg"); }
+.ico-play       { --ico: url("../vendor/harmony-icons/ic_public_play.svg"); }
+.ico-pause      { --ico: url("../vendor/harmony-icons/ic_public_pause.svg"); }
+.ico-start      { --ico: url("../vendor/harmony-icons/ic_public_play_last.svg"); }
+.ico-end        { --ico: url("../vendor/harmony-icons/ic_public_play_next.svg"); }
+.ico-loop       { --ico: url("../vendor/harmony-icons/ic_public_single_cycle.svg"); }
+.ico-audition   { --ico: url("../vendor/harmony-icons/ic_public_play.svg"); }
+.ico-jump       { --ico: url("../vendor/harmony-icons/ic_public_arrow_right.svg"); }
+.ico-voice      { --ico: url("../vendor/harmony-icons/ic_public_voice.svg"); }
+.ico-lock       { --ico: url("../vendor/harmony-icons/ic_public_lock.svg"); }
+.ico-unlock     { --ico: url("../vendor/harmony-icons/ic_public_unlock.svg"); }
+.ico-add        { --ico: url("../vendor/harmony-icons/ic_public_add.svg"); }
+.ico-apply      { --ico: url("../vendor/harmony-icons/ic_public_ok.svg"); }
+.ico-close      { --ico: url("../vendor/harmony-icons/ic_public_close.svg"); }
+.ico-delete     { --ico: url("../vendor/harmony-icons/ic_public_delete.svg"); }
+.ico-edit       { --ico: url("../vendor/harmony-icons/ic_public_edit.svg"); }
+.ico-more       { --ico: url("../vendor/harmony-icons/ic_public_more_list.svg"); }
+.ico-clean      { --ico: url("../vendor/harmony-icons/ic_public_clean.svg"); }
+.ico-merge      { --ico: url("../vendor/harmony-icons/ic_merge.svg"); }
+.ico-undo       { --ico: url("../vendor/harmony-icons/ic_public_reset.svg"); }
+.ico-redo       { --ico: url("../vendor/harmony-icons/ic_public_rotate.svg"); }
+.ico-reset      { --ico: url("../vendor/harmony-icons/ic_public_multiscreen.svg"); }
+.ico-search     { --ico: url("../vendor/harmony-icons/ic_public_search.svg"); }
+.ico-text       { --ico: url("../vendor/harmony-icons/ic_public_text.svg"); }
+.ico-reduce     { --ico: url("../vendor/harmony-icons/ic_public_reduce.svg"); }
+.ico-zoom-in    { --ico: url("../vendor/harmony-icons/ic_public_enlarge.svg"); }
+.ico-zoom-out   { --ico: url("../vendor/harmony-icons/ic_public_reduce.svg"); }
+.ico-fit        { --ico: url("../vendor/harmony-icons/ic_gallery_fullscreen.svg"); }
+.ico-ok         { --ico: url("../vendor/harmony-icons/ic_public_ok.svg"); }
+.ico-score      { --ico: url("../vendor/harmony-icons/ic_public_todo.svg"); }
+.ico-fail       { --ico: url("../vendor/harmony-icons/ic_public_fail.svg"); }
+.ico-list       { --ico: url("../vendor/harmony-icons/ic_public_view_list.svg"); }
+.ico-back       { --ico: url("../vendor/harmony-icons/ic_public_back.svg"); }
+
+/* 表头排序箭头：不用文字箭头字形（⇅/▼/▲ 依赖字体覆盖），统一走 mask + 旋转。 */
+.sort-arrow {
+  display: inline-block; flex: none;
+  inline-size: 0.72em; block-size: 0.72em;
+  background-color: currentColor;
+  --ico: url("../vendor/harmony-icons/ic_public_arrow_up_0.svg");
+  -webkit-mask: var(--ico) no-repeat center / contain;
+          mask: var(--ico) no-repeat center / contain;
+  opacity: 0.45;              /* 未排序：淡显 */
+  vertical-align: -0.1em;
+}
+.sort-arrow.on   { opacity: 1; }
+.sort-arrow.desc { transform: rotate(180deg); }
+
+/* ── 承载图标的控件统一成 flex 行：图标与文字垂直居中、固定 6px 间距。
+   只列真正放了图标的容器，避免把纯文本 chip 的排版一起改掉。 ── */
+#menubar .menu-title,
+#toolbar .btn,
+.panel-grip .chip,
+#transport .chip,
+.page-btn,
+.page-head .btn,
+#media-page-toolbar .chip,
+#pool-header .btn,
+.modal-actions .btn,
+.context-menu button,
+.grip-close,
+#busy-cancel {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.grip-close, #transport .chip.big { justify-content: center; }
+/* 面板标题栏关闭按钮：图标按钮，去掉文字基线影响 */
+.grip-close .ico { vertical-align: 0; }
+
+/* JS 动态渲染的小按钮（片段行 / 角色池 / 素材列表 / 任务气泡）——同样是
+   「图标 + 文字」，但尺寸更紧凑，单独一组，间距 4px。 */
+.row-actions .chip,
+#seg-table .seg-aud,
+.pool-actions .chip,
+.pool-emb,
+.pool-seg .ps-play,
+.pool-sample .pool-sample-play {
+  display: inline-flex; align-items: center; gap: 4px;
+}
+/* 纯图标按钮：居中、无间距 */
+#seg-table .seg-lock,
+.pool-seg .ps-play,
+#media-list .m-del,
+#media-page-list .m-del,
+.toast-bubble.task .tclose {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0;
+}
+/* 面板显隐菜单项：勾选标记用图标（原来是 ::before 的 "✓ " 文本，
+   走 mask 伪元素，继续复用现有的 panel-on / panel-off 机制，无需改 JS） */
+.menu-items button[data-act="panel-toggle"]::before {
+  content: ""; flex: none; inline-size: 1em; block-size: 1em;
+  background-color: currentColor; vertical-align: -0.125em;
+  --ico: url("../vendor/harmony-icons/ic_public_ok.svg");
+  -webkit-mask: var(--ico) no-repeat center / contain;
+          mask: var(--ico) no-repeat center / contain;
+}
+.menu-items button.panel-on { color: var(--text); }
+.menu-items button.panel-off::before { opacity: 0; }
+
+/* 下拉指示箭头（菜单标题专用）：这是通用控件提示而非语义图标，保留文本字形，
+   不受图标集约束——换成图标反而会让「可展开」这一约定失去通用性。 */
+.caret { font-size: 9px; opacity: 0.75; margin-left: 1px; }
+
 input[type="text"], select {
   cursor: auto; background: var(--panel);
 }
@@ -427,8 +595,6 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 .menu-title.chip { background: var(--panel-2); }
 #segments-panel .menu-items { left: auto; right: 0; min-width: 170px; }
 #subtitle-panel .menu-items { min-width: 220px; }
-.menu-items button.panel-on::before { content: "✓ "; color: var(--accent); }
-.menu-items button.panel-off::before { content: "\00a0\00a0"; }
 
 
 /* ── M4 素材/重定向 上下文菜单 ── */
@@ -483,7 +649,7 @@ tr.seg-row.locked .seg-num { color: #ffd166; }
 /* 锁定开关（放在状态列内，紧跟合规标签）。锁定=琥珀实心，未锁定=暗色虚线框（可点）。
    锁定行的行号也用琥珀色，远距离一眼看出哪几段被保护。 */
 #seg-table .seg-lock {
-  margin-left: 4px; padding: 0 4px; font-size: 12px; line-height: 16px; vertical-align: middle;
+  margin-left: 4px; padding: 1px 5px; font-size: 12px;
   color: var(--muted); background: transparent; border: 1px dashed var(--border);
 }
 #seg-table .seg-lock:hover { color: var(--text); border-color: var(--muted); }
@@ -706,8 +872,8 @@ tr.seg-row.locked .seg-num { color: #ffd166; }
 /* 片段列表表头：排序箭头 + 内嵌筛选控件 */
 #seg-table thead th[data-sort] { cursor: pointer; user-select: none; }
 #seg-table thead .th-sort { cursor: pointer; user-select: none; }
-#seg-table thead .sort-arrow { font-size: 10px; opacity: 0.45; margin-left: 2px; }
-#seg-table thead .sort-on .sort-arrow { opacity: 1; color: var(--accent); }
+#seg-table thead .sort-arrow { margin-left: 2px; vertical-align: -0.1em; }
+#seg-table thead .sort-on .sort-arrow { color: var(--accent); }
 #seg-table thead .th-filter {
   display: block; width: 100%; box-sizing: border-box; margin-top: 3px;
   font-size: 11px; height: 20px; padding: 1px 4px; font-weight: normal;
@@ -754,5 +920,5 @@ tr.seg-row.locked .seg-num { color: #ffd166; }
 #busy-overlay .busy-log-line { white-space: pre-wrap; word-break: break-all; }
 
 /* 角色卡片：已吸收声纹样本数（进化程度可见） */
-.pool-emb { font-size: 10px; color: var(--muted, #9aa); margin-left: 6px; white-space: nowrap; }
+.pool-emb { font-size: 10px; color: var(--muted, #9aa); margin-left: 6px; white-space: nowrap; gap: 2px; }
 .pool-emb.strong { color: var(--accent, #6c9cff); font-weight: 600; }

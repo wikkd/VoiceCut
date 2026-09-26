@@ -3,7 +3,7 @@ import Timeline from "/static/vendor/plugins/timeline.esm.js";
 import Regions from "/static/vendor/plugins/regions.esm.js";
 import Minimap from "/static/vendor/plugins/minimap.esm.js";
 
-import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, evtEl, closestEl, LS_PROJECT,
+import { $, $$, esc, shortName, fmtT, fmtSel, fmtDur, api, clampN, evtEl, closestEl, LS_PROJECT, ico,
          SEG_MIN, SEG_MAX, SEEK_STEP, SEEK_FAST, NUDGE_STEP, VOL_STEP, CHAR_PALETTE } from "/static/js/util.js";
 import { state, toast, layout, applyLayout, saveLayout, resetLayout,
          togglePanel, swapPanels, initWorkspace, PANELS } from "/static/js/state.js";
@@ -77,7 +77,8 @@ import { createProjects } from "/static/js/modules/projects.js";
     state.segFilter.item = evtEl(e).value || "all";
     segments.renderSegments();
   });
-  // 表头排序箭头：点击列名循环 默认方向 → 升序 → 恢复时间序；箭头 ⇅/▼/▲ 指示当前状态
+  // 表头排序箭头：点击列名循环 默认方向 → 升序 → 恢复时间序。
+  // 箭头是 CSS mask 图标（.sort-arrow）：.on=当前排序列点亮，.desc=箭头翻转朝下。
   function updateSortArrows() {
     const cur = state.segSort || "time";
     const descDefault = { dur: 1, score: 1 };   // 时长/清晰度默认降序（最优在前），其余默认升序
@@ -85,7 +86,12 @@ import { createProjects } from "/static/js/modules/projects.js";
       const key = el.dataset.sort;
       const arrow = el.querySelector(".sort-arrow");
       const on = cur === key, asc = cur === key + "_asc";
-      if (arrow) arrow.textContent = on ? (descDefault[key] ? "▼" : "▲") : (asc ? "▲" : "⇅");
+      if (arrow) {
+        const active = on || asc;
+        const desc = on && !!descDefault[key];   // asc 分支恒为升序 → 朝上
+        arrow.classList.toggle("on", active);
+        arrow.classList.toggle("desc", active && desc);
+      }
       el.classList.toggle("sort-on", on || asc);
     });
   }
@@ -224,7 +230,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       const mkLock = (label, val, title) => {
         const b = document.createElement("button");
         b.className = "menu-lock";
-        b.textContent = label;
+        b.innerHTML = ico(val ? "lock" : "unlock") + label;
         b.title = title;
         b.addEventListener("click", () => { hideRedirectMenu(); segments.toggleLock(segIds, val); });
         return b;
@@ -245,7 +251,7 @@ import { createProjects } from "/static/js/modules/projects.js";
       // 多选合并：把被自动切分拆开的句子拼回一段（仅同素材内，按时间顺序拼接文本）
       const mb = document.createElement("button");
       mb.className = "menu-merge";
-      mb.textContent = `合并 ${segIds.length} 段`;
+      mb.innerHTML = ico("merge") + `合并 ${segIds.length} 段`;
       mb.title = "把选中的片段拼成一段（起点取最早、终点取最晚，文本按时间顺序拼接）";
       mb.addEventListener("click", () => { hideRedirectMenu(); segments.mergeSegments(segIds); });
       menu.appendChild(mb);
@@ -609,7 +615,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     segsFor: (id) => segments.segsFor(id),
     renderSegments: () => segments.renderSegments(),
     renderPool: () => pool.renderPool() });
-  projects = createProjects({ $, esc, fmtDur, toast, api, state, LS_PROJECT,
+  projects = createProjects({ $, esc, ico, fmtDur, toast, api, state, LS_PROJECT,
     loadProject: store.loadProject, fillItemStates: store.fillItemStates, saveProjectNow: store.saveProjectNow,
     savePoolNow: store.savePoolNow, setPage,
     selectItem: (item) => waveform.selectItem(item),
@@ -620,7 +626,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     renderAutoGapScanBtn: () => pool.renderAutoGapScanBtn(),
     renderSegments: () => segments.renderSegments(), renderSubs: () => subtitles.renderSubs(),
     attachActiveTasks: () => tasks.attachActiveTasks() });
-  tasks = createTasks({ $, api, toast, state, pushUndo: store.pushUndo,
+  tasks = createTasks({ $, api, esc, ico, toast, state, pushUndo: store.pushUndo,
     renderMediaList: projects.renderMediaList, refreshItems: projects.refreshItems,
     loadAllItemData: projects.loadAllItemData,
     renderPool: () => pool.renderPool(), renderSegments: () => segments.renderSegments(),
@@ -628,32 +634,32 @@ import { createProjects } from "/static/js/modules/projects.js";
     // 后台自动识别完成后自动补扫空白区（pool 晚于 tasks 创建 → 闭包注入）
     afterAnalyze: () => pool.scanGaps({ auto: true }),
     selectItem: (item) => waveform.selectItem(item) });
-  segments = createSegments({ $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
+  segments = createSegments({ $, esc, ico, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
     state, toast, api, trackTask: tasks.trackTask,
     charById: store.charById, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject, setPage,
     closePool: () => pool.closePool(),
     // waveform 晚于 segments 创建：用闭包注入，写回片段后把选区从黄色刷回蓝色
     refreshSelColor: () => waveform.refreshSelColor(),
     selectItem: (item) => waveform.selectItem(item) });
-  pool = createPool({ $, $$, esc, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
+  pool = createPool({ $, $$, esc, ico, shortName, fmtT, toast, state, api, trackTask: tasks.trackTask,
     attachActiveTasks: tasks.attachActiveTasks,
     needItem, charById: store.charById, uid: store.uid, paletteNext: store.paletteNext, pushUndo: store.pushUndo,
     scheduleSaveProject: store.scheduleSaveProject, scheduleSavePool: store.scheduleSavePool,
     loadAllItemData: projects.loadAllItemData, segments, setPage,
     playSequence: (seq, idx) => waveform.playSequence(seq, idx),
     renderSubs: () => subtitles.renderSubs() });
-  subtitles = createSubtitles({ $, $$, fmtT, esc, api, toast, state, trackTask: tasks.trackTask,
+  subtitles = createSubtitles({ $, $$, fmtT, esc, ico, api, toast, state, trackTask: tasks.trackTask,
     speakerLabelAt: store.speakerLabelAt, segsFor: segments.segsFor, newSegment: store.newSegment, pushUndo: store.pushUndo, scheduleSaveProject: store.scheduleSaveProject,
     renderSegments: segments.renderSegments,
     setSelection: (s, e) => waveform.setSelection(s, e) });
-  training = createTraining({ $, esc, shortName, fmtDur, api, state, toast, trackTask: tasks.trackTask });
+  training = createTraining({ $, esc, ico, shortName, fmtDur, api, state, toast, trackTask: tasks.trackTask });
   io = createIo({ $, api, state, toast, trackTask: tasks.trackTask, needItem,
     selectResultItem: tasks.selectResultItem, autoAnalyzeDone: tasks.autoAnalyzeDone,
     showModal, hideModal, showResult, saveProjectNow: store.saveProjectNow, pushUndo: store.pushUndo, loadProject: store.loadProject,
     loadAllItemData: projects.loadAllItemData,
     renderSegments: segments.renderSegments, segsFor: segments.segsFor, charById: store.charById, scheduleSaveProject: store.scheduleSaveProject,
     fmtSel, fmtT });
-  waveform = createWaveform({ $, api, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
+  waveform = createWaveform({ $, api, ico, fmtT, fmtDur, fmtSel, clampN, SEEK_STEP, toast, state,
     WaveSurfer, Timeline, Regions, Minimap,
     renderMediaList: projects.renderMediaList, loadProject: store.loadProject,
     saveProjectNow: store.saveProjectNow, savePoolNow: store.savePoolNow,

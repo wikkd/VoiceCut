@@ -2,7 +2,7 @@
 // 由 createSegments(ctx) 创建；ctx 注入 util + state + 主流程依赖（角色/撤销/保存/页面），
 // 避免与主流程模块形成循环 import。selectItem 以闭包形式注入（waveform 实例晚于本模块创建）。
 export function createSegments(ctx) {
-  const { $, esc, shortName, fmtT, fmtDur, fmtSel, SEG_MIN, SEG_MAX,
+  const { $, esc, shortName, fmtT, fmtDur, fmtSel, ico, SEG_MIN, SEG_MAX,
           state, toast, api, trackTask, charById, newSegment, pushUndo,
           scheduleSaveProject, closePool, setPage, selectItem, refreshSelColor } = ctx;
 
@@ -176,8 +176,8 @@ export function createSegments(ctx) {
       <td class="seg-src col-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
       <td class="seg-time col-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
       <td class="seg-dur col-dur">${fmtDur(seg.end - seg.start)}</td>
-      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span><button class="chip seg-lock${seg.locked ? " on" : ""}" data-i="${i}" title="${seg.locked ? "已锁定（人工成果）：对齐发音 / 空白区补扫 / 声纹识别都会跳过它。按静音自动切分是整表替换（有确认、可撤销）。点击解锁" : "未锁定：点击锁定，防止这一段被自动流程（对齐发音 / 补扫 / 声纹识别）覆盖"}">${seg.locked ? "🔒" : "🔓"}</button></td>
-      <td class="col-aud"><button class="chip seg-aud" data-i="${i}">试听</button></td>
+      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span><button class="chip seg-lock${seg.locked ? " on" : ""}" data-i="${i}" title="${seg.locked ? "已锁定（人工成果）：对齐发音 / 空白区补扫 / 声纹识别都会跳过它。按静音自动切分是整表替换（有确认、可撤销）。点击解锁" : "未锁定：点击锁定，防止这一段被自动流程（对齐发音 / 补扫 / 声纹识别）覆盖"}">${ico(seg.locked ? "lock" : "unlock")}</button></td>
+      <td class="col-aud"><button class="chip seg-aud" data-i="${i}">${ico("audition")}试听</button></td>
       <td class="col-text"><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
       <td class="col-lang"><select class="seg-lang" data-i="${i}">
         ${["JP","ZH","EN"].map(l => `<option value="${l}" ${seg.language === l ? "selected" : ""}>${l}</option>`).join("")}
@@ -187,8 +187,8 @@ export function createSegments(ctx) {
         ${state.characters.map(c => `<option value="${esc(c.id)}" ${seg.characterId === c.id ? "selected" : ""} style="color:${esc(c.color)}">${esc(c.name)}</option>`).join("")}
       </select></td>
       <td class="row-actions col-act">
-        <button class="chip seg-jump" data-i="${i}">跳转</button>
-        <button class="chip danger seg-del" data-i="${i}">删除</button>
+        <button class="chip seg-jump" data-i="${i}">${ico("jump")}跳转</button>
+        <button class="chip danger seg-del" data-i="${i}">${ico("delete")}删除</button>
       </td>`;
     return tr;
   }

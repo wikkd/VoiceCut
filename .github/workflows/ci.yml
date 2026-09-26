@@ -25,5 +25,9 @@ jobs:
           pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check .
+      - name: Icon check
+        # 图标类的「用到 ⊆ 定义」+ 文件存在性自检。漏一个映射不会报错，
+        # 只会让图标渲染成 1em 实心方块 —— 视觉上极易漏掉，所以放到 CI 里守。
+        run: python scripts/check_icons.py
       - name: Test
         run: pytest -q -m "not env"

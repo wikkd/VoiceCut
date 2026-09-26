@@ -3,7 +3,7 @@
 // 本模块在其他功能模块之前创建，trackTask 等对外是真函数；
 // 对 pool/segments/subtitles/waveform 的调用以闭包注入，规避模块创建顺序耦合。
 export function createTasks(ctx) {
-  const { $, api, toast, state, pushUndo,
+  const { $, api, esc, ico, toast, state, pushUndo,
           renderMediaList, refreshItems, loadAllItemData,
           renderPool, renderSegments, renderSubs, selectItem, afterAnalyze } = ctx;
 
@@ -55,7 +55,7 @@ export function createTasks(ctx) {
     renderPool();
     const name = (result && (result.role || result.role_id)) || "角色";
     if (result && result.ok) {
-      toast(`「${name}」自动管线完成（${result.trained ? "全阶段训练" : "zero-shot 试听"}），角色池可点「🔊 听声辨认」`, 6000);
+      toast(`「${name}」自动管线完成（${result.trained ? "全阶段训练" : "zero-shot 试听"}），角色池可点「听声辨认」`, 6000);
     } else if (result && result.error) {
       toast(`「${name}」自动管线失败: ${result.error}`, 8000);
     }
@@ -100,12 +100,12 @@ export function createTasks(ctx) {
           let customToast = false;
           if (info.doneCb) customToast = !!(await info.doneCb(t.result));
           if (!customToast) toast("任务完成");
-          finalizeTaskBubble(tid, "done", "✓ 任务完成", 1200);
+          finalizeTaskBubble(tid, "done", "任务完成", 1200);
           state.identifying = false;  // 识别回调已完成，解冻角色池落盘
         } else if (t.status === "error") {
           state.activeTasks.delete(tid);
           state.identifying = false;
-          finalizeTaskBubble(tid, "err", "✗ 任务失败: " + (t.message || "未知错误"), 5000);
+          finalizeTaskBubble(tid, "err", "任务失败: " + (t.message || "未知错误"), 5000);
         } else if (t.status === "cancelled") {
           state.activeTasks.delete(tid);
           state.identifying = false;
@@ -175,7 +175,7 @@ export function createTasks(ctx) {
         b.className = "toast-bubble task";
         b.dataset.taskId = tid;
         b.innerHTML = `<div class="trow"><span class="tmsg"></span>` +
-          `<button class="tclose" title="取消任务">✕</button></div>` +
+          `<button class="tclose" title="取消任务">${ico("close")}</button></div>` +
           `<div class="tbar"><div class="tfill"></div></div>`;
         b.querySelector(".tclose").addEventListener("click", () => {
           api(`/api/tasks/${tid}/cancel`, { method: "POST" }).catch(() => {});
@@ -192,7 +192,11 @@ export function createTasks(ctx) {
     if (!b) { if (cls === "err") toast(msg, 5000); return; }
     b.dataset.taskId = "";   // 脱离 activeTasks 追踪，避免被 renderTaskBubbles 清除
     b.classList.add(cls);
-    b.querySelector(".tmsg").textContent = msg;
+    // done / err 前置一个状态图标（CSS mask，跟随气泡的状态色）；取消/其余为纯文字。
+    // 图标走行内 inline-block（.ico 自带 vertical-align 补偿），所以这里不用改 .tmsg 的布局。
+    const mark = cls === "done" ? ico("ok") : cls === "err" ? ico("fail") : "";
+    const tm = b.querySelector(".tmsg");
+    if (mark) tm.innerHTML = mark + esc(msg); else tm.textContent = msg;
     const bar = b.querySelector(".tbar"); if (bar) bar.remove();
     const x = b.querySelector(".tclose"); if (x) x.remove();
     setTimeout(() => { b.classList.add("out"); setTimeout(() => b.remove(), 280); }, ms);

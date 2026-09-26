@@ -39,6 +39,25 @@ export function esc(s) { const d = document.createElement("div"); d.textContent 
 /** @param {string} s @param {number} [n] @returns {string} */
 export function shortName(s, n = 10) { s = s || ""; return s.length > n ? s.slice(0, n) + "…" : s; }
 
+/**
+ * 生成一个 HarmonyOS 系统图标元素（内联在模板字符串里用）。
+ *
+ * 图标本体是 `app/static/vendor/harmony-icons/*.svg`，着色与尺寸全部由
+ * `css/style.css` 的 `.ico` / `.ico-<name>` 负责——走的是 CSS mask + currentColor，
+ * 所以图标会跟随所在元素的文字颜色（`--text` / `--muted` / `--danger` / 琥珀色…）
+ * 与字号（1em），深色主题下无需逐处指定颜色。
+ *
+ * 为什么不用 emoji：emoji 是彩色位图字体，无法跟随主题色，且在 12px 等小字号下
+ * 尺寸/基线不可控（锁定开关的 🔒 就这样）。
+ *
+ * @param {string} name 图标名（对应 `.ico-<name>`，见 style.css）
+ * @param {string} [extra] 追加的 class（例如状态类）
+ * @returns {string} 可直接插入 innerHTML 的 HTML 片段
+ */
+export function ico(name, extra = "") {
+  return `<i class="ico ico-${name}${extra ? " " + extra : ""}" aria-hidden="true"></i>`;
+}
+
 /** @param {string} url @param {RequestInit} [opts] @returns {Promise<any>} */
 export async function api(url, opts) {
   const r = await fetch(url, opts);

@@ -2,7 +2,7 @@
 // 由 createPool(ctx) 创建；ctx 注入 util + state + 主流程依赖（片段/字幕/保存/撤销），
 // 避免与主流程模块形成循环 import。角色池自身的 DOM 事件在工厂内一次性绑定。
 export function createPool(ctx) {
-  const { $, $$, esc, shortName, fmtT, toast, state, api, trackTask, attachActiveTasks,
+  const { $, $$, esc, ico, shortName, fmtT, toast, state, api, trackTask, attachActiveTasks,
           needItem, charById, uid, paletteNext, pushUndo,
           scheduleSaveProject, scheduleSavePool, loadAllItemData,
           segments, renderSubs, setPage, playSequence } = ctx;
@@ -110,17 +110,17 @@ export function createPool(ctx) {
         <span class="pool-name">${isU ? "未分配" : esc(ch.name)}</span>
         <span class="pool-count">${mine.length} 段</span>
         ${ch ? `<span class="pool-emb${(ch.emb_count || 0) >= 10 ? " strong" : ""}"
-          title="已吸收 ${ch.emb_count || 0} 条声纹样本（每次人工修正说话人都会计入，样本越多质心越稳）">🧬 ${ch.emb_count || 0}</span>` : ""}
+          title="已吸收 ${ch.emb_count || 0} 条声纹样本（每次人工修正说话人都会计入，样本越多质心越稳）">${ico("voice")}${ch.emb_count || 0}</span>` : ""}
       </div>
       ${ch && (ch.speakerLabels || []).length ? `<div class="pool-labels">自动标签: ${ch.speakerLabels.map(esc).join("、")}</div>` : ""}
       ${ch && ch.sample_url ? `<div class="pool-sample">
-          <button class="chip pool-sample-play" data-char="${ch.id}" title="播放自动训练后合成的测试音频，帮助辨认该角色声线">🔊 听声辨认</button>
+          <button class="chip pool-sample-play" data-char="${ch.id}" title="播放自动训练后合成的测试音频，帮助辨认该角色声线">${ico("speaker")}听声辨认</button>
           ${ch.sample_text ? `<span class="pool-sample-text" title="${esc(ch.sample_text)}">「${esc(ch.sample_text.slice(0, 24))}${ch.sample_text.length > 24 ? "…" : ""}」</span>` : ""}
         </div>` : ""}
       <div class="pool-actions">
-        ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">试听</button>
-          <button class="chip pool-rename" data-char="${ch.id}">重命名</button>
-          <button class="chip pool-del danger" data-char="${ch.id}">删除</button>`}
+        ${isU ? "" : `<button class="chip pool-aud" data-char="${ch.id}">${ico("audition")}试听</button>
+          <button class="chip pool-rename" data-char="${ch.id}">${ico("edit")}重命名</button>
+          <button class="chip pool-del danger" data-char="${ch.id}">${ico("delete")}删除</button>`}
       </div>
       <details class="pool-segs">
         <summary>片段（${mine.length}）</summary>
@@ -130,7 +130,7 @@ export function createPool(ctx) {
               <span class="ps-time">${fmtT(seg.start)}~${fmtT(seg.end)}</span>
               <span class="ps-src" title="${esc(item.name)}">${esc(shortName(item.name, 6))}</span>
               <span class="ps-text">${esc(seg.text.slice(0, 24) || "（空）")}</span>
-              <button class="chip ps-play" data-seg="${seg.id}" data-item="${item.id}" title="试听">▶</button>
+              <button class="chip ps-play" data-seg="${seg.id}" data-item="${item.id}" title="试听">${ico("play")}</button>
             </div>`).join("")}
           ${mine.length > 300 ? `<div class="muted">… 其余 ${mine.length - 300} 段未列出</div>` : ""}
         </div>
@@ -277,15 +277,23 @@ export function createPool(ctx) {
     } catch (e) { state.identifying = false; toast("项目说话人识别启动失败: " + e.message, 6000); }
   }
 
+  // 自动开关按钮（自动分析 / 自动训练 / 自动补扫）里的文字统一放在 <span class="btn-label">，
+  // 因为按钮里还有 <i class="ico"> 图标节点 —— 直接写 b.textContent 会把图标整个抹掉。
+  // 兜底：万一 HTML 里没包 span（老缓存），退回写 textContent（图标丢失但文本还在）。
+  function setAutoBtnLabel(sels, on, name) {
+    sels.forEach((sel) => {
+      const b = $(sel);
+      if (!b) return;
+      b.classList.toggle("btn-auto-on", on);
+      const lb = b.querySelector(".btn-label");
+      if (lb) lb.textContent = name + (on ? "·开" : "·关");
+      else b.textContent = name + (on ? "·开" : "·关");
+    });
+  }
+
   function renderAutoAnalyzeBtn() {
     const on = !!state.autoAnalyze;
-    ["#btn-auto-analyze", "#btn-auto-analyze2"].forEach((sel) => {
-      const b = $(sel);
-      if (b) {
-        b.classList.toggle("btn-auto-on", on);
-        b.textContent = on ? "自动分析·开" : "自动分析·关";
-      }
-    });
+    setAutoBtnLabel(["#btn-auto-analyze", "#btn-auto-analyze2"], on, "自动分析");
     // 自动分析已包含"生成字幕 + 识别说话人"，开启时隐藏对应的手动按钮
     ["#btn-identify-speakers", "#pool-identify", "#btn-sub-generate"].forEach((sel) => {
       const b = $(sel);
@@ -343,13 +351,7 @@ export function createPool(ctx) {
 
   function renderAutoTrainingBtn() {
     const on = state.autoTraining !== false;   // 默认开
-    ["#btn-auto-train", "#btn-auto-train2"].forEach((sel) => {
-      const b = $(sel);
-      if (b) {
-        b.classList.toggle("btn-auto-on", on);
-        b.textContent = on ? "自动训练·开" : "自动训练·关";
-      }
-    });
+    setAutoBtnLabel(["#btn-auto-train", "#btn-auto-train2"], on, "自动训练");
   }
   async function toggleAutoTraining() {
     if (!state.currentProject) return toast("请先选择项目");
@@ -367,13 +369,7 @@ export function createPool(ctx) {
 
   function renderAutoGapScanBtn() {
     const on = state.autoGapScan !== false;   // 默认开
-    ["#btn-auto-gapscan", "#btn-auto-gapscan2"].forEach((sel) => {
-      const b = $(sel);
-      if (b) {
-        b.classList.toggle("btn-auto-on", on);
-        b.textContent = on ? "自动补扫·开" : "自动补扫·关";
-      }
-    });
+    setAutoBtnLabel(["#btn-auto-gapscan", "#btn-auto-gapscan2"], on, "自动补扫");
   }
   async function toggleAutoGapScan() {
     if (!state.currentProject) return toast("请先选择项目");

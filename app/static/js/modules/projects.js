@@ -2,7 +2,7 @@
 // 由 createProjects(ctx) 创建；ctx 注入 util + state + 数据层（store）+ 跨模块闭包，
 // 避免与功能模块形成循环 import。素材列表与项目下拉的 DOM 事件在工厂内一次性绑定。
 export function createProjects(ctx) {
-  const { $, esc, fmtDur, toast, api, state, LS_PROJECT,
+  const { $, esc, ico, fmtDur, toast, api, state, LS_PROJECT,
           loadProject, fillItemStates, saveProjectNow, savePoolNow,
           selectItem, resetWaveUI, renderPool, renderAutoAnalyzeBtn,
           renderAutoTrainingBtn, renderAutoGapScanBtn,
@@ -18,7 +18,7 @@ export function createProjects(ctx) {
     li.innerHTML = `<div class="m-name">${esc(item.name)}</div>
       <div class="m-meta"><span class="m-badge">${kindMap[item.kind] || item.kind}</span>
       <span>${fmtDur(item.duration)}</span>
-      <button class="m-del" title="删除素材">✕</button></div>`;
+      <button class="m-del" title="删除素材">${ico("close")}</button></div>`;
     li.addEventListener("click", () => selectItem(item));
     li.addEventListener("contextmenu", (e) => { e.preventDefault(); showMediaMenu(e.clientX, e.clientY, item); });
     li.querySelector(".m-del").addEventListener("click", (e) => {
@@ -114,7 +114,7 @@ export function createProjects(ctx) {
         <span class="m-dur">${fmtDur(item.duration)}</span>
         ${item.sample_rate ? `<span class="m-dim">${Math.round(item.sample_rate / 1000)} kHz</span>` : ""}
         <span class="m-grow"></span>
-        <button class="m-del" title="删除素材">✕</button>
+        <button class="m-del" title="删除素材">${ico("close")}</button>
       </div>
       ${derived || srcTag ? `<div class="m-sub">${derived}${derived && srcTag ? " · " : ""}${srcTag}</div>` : ""}`;
     li.addEventListener("click", () => selectItem(item));
@@ -155,7 +155,10 @@ export function createProjects(ctx) {
     };
     const isCurrent = !!(state.currentItem && state.currentItem.id === item.id);
     btnAdd.disabled = isCurrent;
-    btnAdd.textContent = isCurrent ? "已在工作区" : "添加到工作区";
+    // 菜单项里含 <i class="ico">，只改文本节点所在的 span（写 textContent 会抹掉图标）
+    const addLabel = btnAdd.querySelector(".btn-label");
+    if (addLabel) addLabel.textContent = isCurrent ? "已在工作区" : "添加到工作区";
+    else btnAdd.textContent = isCurrent ? "已在工作区" : "添加到工作区";
     menu.classList.remove("hidden");
   }
   function hideMediaMenu() { const m = $("#media-menu"); if (m) m.classList.add("hidden"); }

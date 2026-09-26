@@ -636,14 +636,14 @@ const makeWav = (seconds, sr = 16000) => {
         row0status: rowAt(0) ? rowAt(0).querySelector('.col-status').outerHTML.slice(0, 180) : null,
         flags: segs.map(s => !!s.locked) };
 
-      // 1) 默认未锁定：开关存在、未点亮
+      // 1) 默认未锁定：开关存在、未点亮（图标是 CSS mask 的 .ico-unlock，不是 emoji 文本）
       const chip0 = chipAt(0);
-      const initOff = !!chip0 && !chip0.classList.contains('on') && chip0.textContent.includes('🔓');
+      const initOff = !!chip0 && !chip0.classList.contains('on') && !!chip0.querySelector('.ico-unlock');
 
       // 2) 点开关 → 锁定（数据 + 视觉 + 行 .locked 类）
       chip0.click(); await wait();
       const onData = segs[0].locked === true;
-      const chipOn = chipAt(0).classList.contains('on') && chipAt(0).textContent.includes('🔒');
+      const chipOn = chipAt(0).classList.contains('on') && !!chipAt(0).querySelector('.ico-lock');
       const rowLocked = rowAt(0).classList.contains('locked');
 
       // 3) 再点 → 解锁
