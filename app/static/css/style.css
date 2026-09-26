@@ -209,9 +209,13 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 /* 两列卡片式：时间列 + 主列（徽标/操作一行、文本一行）。
    窄面板（默认 240px）下四列表格会把文本压成一字宽，故改为两行结构。 */
 #sub-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+/* sticky 必须挂在 thead 上，不能挂在 th 上：th 的包含块是「行」，行高只有表头那么高，
+   Chrome 下 sticky th 没有可移动空间 → 表头会跟着内容滚走（实测滚动 120px 表头也上移 120px）。
+   挂 thead 实测偏移 0，正常吸顶。片段表同理。 */
+#sub-table thead { position: sticky; top: 0; z-index: 1; }
 #sub-table th {
-  position: sticky; top: 0; background: var(--panel-2); text-align: left;
-  padding: 4px 8px; font-size: 11px; color: var(--muted); z-index: 1;
+  background: var(--panel-2); text-align: left;
+  padding: 4px 8px; font-size: 11px; color: var(--muted);
   white-space: nowrap; font-weight: 600;
 }
 #sub-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 12px; }
@@ -247,10 +251,12 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 /* 固定布局 + 百分比列宽 + 不设 min-width：表格永远等于容器宽度，任何窗口/面板宽度下都
    不会横向溢出。窄容器靠下面的容器查询逐级隐藏低价值列，并把留下列的百分比放大，保证可读。 */
 #seg-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+/* sticky 挂 thead（挂在 th 上无效，见 #sub-table 上方注释） */
+#seg-table thead { position: sticky; top: 0; z-index: 2; }
 #seg-table th {
-  position: sticky; top: 0; background: var(--panel-2); text-align: left;
+  background: var(--panel-2); text-align: left;
   padding: 4px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border);
-  z-index: 2; white-space: nowrap; font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-weight: 600; overflow: hidden; text-overflow: ellipsis;
 }
 #seg-table td {
   padding: 4px 8px; border-bottom: 1px solid var(--border);

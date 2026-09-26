@@ -35,10 +35,16 @@ const makeWav = (seconds, sr = 16000) => {
   const fd = new FormData();
   fd.append("file", new Blob([makeWav(200)], { type: "audio/wav" }), "1-初乙在咖啡厅看到了另一个世界.mp4");
   const imp = await (await fetch(`${BASE}/api/import`, { method: "POST", body: fd })).json();
+  let impStatus = "timeout";
   for (let i = 0; i < 90; i++) {
     await sleep(500);
     const t = await (await fetch(`${BASE}/api/tasks/${imp.task_id}`)).json();
-    if (t && (t.status === "done" || t.status === "failed")) break;
+    if (t && (t.status === "done" || t.status === "failed")) { impStatus = t.status; break; }
+  }
+  if (impStatus !== "done") {
+    console.error(`FATAL: 素材导入未完成（status=${impStatus}）——后面所有测量都会空表，直接退出`);
+    server.kill();
+    process.exit(1);
   }
 
   const child = spawn(CHROME, ["--headless=new", "--disable-gpu", "--no-first-run",
@@ -63,9 +69,10 @@ const makeWav = (seconds, sr = 16000) => {
 
     // 造数据（在最大的窗口下先做，之后只改视口尺寸）
     await send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 900, deviceScaleFactor: 1, mobile: false });
-    const seed = `(async () => {
+    const seed = `(async () => { try {
       const vc = window.__vc;
       if (!vc) return { err: 'no __vc' };
+      if (!vc.state.items.length) return { err: 'no items' };
       await vc.selectItem(vc.state.items[0]);
       await new Promise(r => setTimeout(r, 2500));
       const itemId = vc.state.currentItem.id;
@@ -96,10 +103,15 @@ const makeWav = (seconds, sr = 16000) => {
       await vc.selectItem(vc.state.items[0]);
       await new Promise(r => setTimeout(r, 900));
       vc.renderSegments();
-      return { subCount: (up && up.count) || 0 };
-    })()`;
+      return { subCount: (up && up.count) || 0, segRows: vc.state.segmentsByItem.get(itemId).length };
+    } catch (e) { return { err: String((e && e.message) || e) }; } })()`;
     const sd = await send("Runtime.evaluate", { expression: seed, awaitPromise: true, returnByValue: true });
     console.log("SEED:", JSON.stringify(sd.result.result.value));
+    const sv0 = sd.result.result.value || {};
+    if (sv0.err || !sv0.segRows) {
+      console.error("FATAL: 造数据失败 " + JSON.stringify(sv0) + " ——拒绝在空表上测量");
+      return;
+    }
 
     const probe = `(() => {
       const vc = window.__vc;
@@ -111,7 +123,30 @@ const makeWav = (seconds, sr = 16000) => {
       const subTbl = document.getElementById('sub-table');
       const ths = Array.from(segTbl.querySelectorAll('thead th')).map(th => Math.round(th.getBoundingClientRect().width));
       const subThs = Array.from(subTbl.querySelectorAll('thead th')).map(th => Math.round(th.getBoundingClientRect().width));
+      // 粘性表头：#seg-scroll 上加了 container-type:inline-size（隐含 contain:layout），
+      // 需确认没有把 thead 的 sticky 干掉。真正的量测放在探针外、等 rAF 布局后做（见 STICKY）。
+      const scrolled = segSc ? segSc.scrollHeight - segSc.clientHeight : null;
       const firstSegRow = segTbl.querySelector('tbody tr.seg-row');
+      // sticky 失效诊断：列出从 th 到 root 的祖先里，哪些会打断 sticky
+      // （overflow != visible 的非滚动容器 / transform / filter / contain / will-change）
+      const stickyDiag = (() => {
+        const th = segTbl.querySelector('thead th');
+        let el = th, out = [];
+        while (el && el !== document.documentElement) {
+          const cs = getComputedStyle(el);
+          const flags = [];
+          if (cs.overflow !== 'visible' || cs.overflowX !== 'visible' || cs.overflowY !== 'visible') flags.push('overflow=' + cs.overflowX + '/' + cs.overflowY);
+          if (cs.transform !== 'none') flags.push('transform');
+          if (cs.filter !== 'none') flags.push('filter');
+          if (cs.willChange !== 'auto') flags.push('will-change=' + cs.willChange);
+          if (cs.contain && cs.contain !== 'none') flags.push('contain=' + cs.contain);
+          if (cs.containerType && cs.containerType !== 'normal') flags.push('container-type=' + cs.containerType);
+          if (cs.position === 'sticky' || cs.position === 'fixed') flags.push('position=' + cs.position);
+          if (flags.length) out.push((el.id || el.className || el.tagName) + ' [' + flags.join(',') + ']');
+          el = el.parentElement;
+        }
+        return { thPosition: getComputedStyle(th).position, chain: out };
+      })();
       const textInput = segTbl.querySelector('.seg-text');
       const cells = firstSegRow ? Array.from(firstSegRow.children).map(td => Math.round(td.getBoundingClientRect().width)) : [];
       return {
@@ -120,12 +155,12 @@ const makeWav = (seconds, sr = 16000) => {
         subOverflowX: subSc ? subSc.scrollWidth - subSc.clientWidth : null,
         segPanel: box('#segments-panel'), segThs: ths, segCells: cells,
         segMismatch: cells.length === ths.length ? ths.map((t, i) => Math.abs(t - cells[i]) > 2 ? i : -1).filter((i) => i >= 0) : 'len-diff',
+        scrollRange: scrolled, stickyDiag,
         textInputW: textInput ? Math.round(textInput.getBoundingClientRect().width) : null,
         subPanel: box('#subtitle-panel'), subThs,
         subRows: document.querySelectorAll('#sub-tbody tr.sub-row').length,
         segRows: document.querySelectorAll('#seg-tbody tr.seg-row').length,
-        gripWrap: Array.from(document.querySelectorAll('#segments-panel .panel-grip > *')).map(el => Math.round(el.getBoundingClientRect().height)),
-        subGripWrap: Array.from(document.querySelectorAll('#subtitle-panel .panel-grip > *')).map(el => Math.round(el.getBoundingClientRect().height)),
+        gripWrap: Array.from(document.querySelectorAll('#segments-panel .panel-grip > *')).map(el => Math.round(el.getBoundingClientRect().height)),        subGripWrap: Array.from(document.querySelectorAll('#subtitle-panel .panel-grip > *')).map(el => Math.round(el.getBoundingClientRect().height)),
         docOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       };
     })()`;
@@ -149,9 +184,53 @@ const makeWav = (seconds, sr = 16000) => {
       fs.writeFileSync(path.join(ROOT, "workdir", `shot_${w}.png`), Buffer.from(shot.result.data, "base64"));
     }
 
+    // ── STICKY：粘性表头判定。必须等 rAF 真正布局后再量（同步量会得假阴性）；
+    // 并 A/B 两个假设：① th 自身的 overflow:hidden；② sticky 挂到 thead 上。
+    const stickyExpr = `(async () => {
+      const frame = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const one = async (scSel, tblSel) => {
+        const s = document.getElementById(scSel);
+        const t = document.getElementById(tblSel);
+        if (!s || !t || !t.tHead) return { err: 'no nodes' };
+        const off = () => Math.round(t.tHead.getBoundingClientRect().top - s.getBoundingClientRect().top);
+        const range = s.scrollHeight - s.clientHeight;
+        s.scrollTop = Math.min(120, Math.max(0, range)); await frame();
+        const r = { range, scrolledTo: s.scrollTop, base: off() };
+        s.scrollTop = 0; await frame();
+        return r;
+      };
+      const seg = await one('seg-scroll', 'seg-table');
+      const sub = await one('sub-scroll', 'sub-table');
+      // A/B：把 sticky 从 thead 挪回 th，证明结论（th 上确实无效）。
+      // 注意必须用 'static' 覆盖样式表里的 thead{position:sticky}——清空行内样式是无效操作。
+      const t = document.getElementById('seg-table'), th = t && t.querySelector('thead th');
+      let onTh = null;
+      if (t && th) {
+        t.tHead.style.position = 'static'; th.style.position = 'sticky'; th.style.top = '0'; await frame();
+        const s = document.getElementById('seg-scroll');
+        s.scrollTop = Math.min(120, Math.max(0, s.scrollHeight - s.clientHeight)); await frame();
+        onTh = Math.round(t.tHead.getBoundingClientRect().top - s.getBoundingClientRect().top);
+        th.style.position = ''; th.style.top = ''; t.tHead.style.position = '';
+        s.scrollTop = 0; await frame();
+      }
+      return { seg, sub, stickyOnTh: onTh };
+    })()`;
+
     // ── 窄槽位：面板可拖拽换位，把「片段列表」拖进左/右窄列后是否仍可用 ──
     // 左列下限 140px、右列下限 170px（见 state.js clampN），任何固定宽表都会在那里横滚到不可用。
     await send("Emulation.setDeviceMetricsOverride", { width: 1440, height: 860, deviceScaleFactor: 1, mobile: false });
+    {
+      const st = await send("Runtime.evaluate", { expression: stickyExpr, awaitPromise: true, returnByValue: true });
+      const v = st.result.result.value || {};
+      const okv = (v.seg && v.seg.base <= 2) && (v.sub && v.sub.base <= 2);
+      console.log("STICKY:", JSON.stringify(v), "=> " + (okv ? "吸顶正常" : "吸顶失效"));
+      // 滚动状态下截图，目检表头吸顶 + 分隔线
+      await send("Runtime.evaluate", { expression: "(() => { const s = document.getElementById('seg-scroll'); s.scrollTop = 120; return s.scrollTop; })()", returnByValue: true });
+      await sleep(400);
+      const sh = await send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+      fs.writeFileSync(path.join(ROOT, "workdir", "shot_sticky.png"), Buffer.from(sh.result.data, "base64"));
+      await send("Runtime.evaluate", { expression: "(() => { document.getElementById('seg-scroll').scrollTop = 0; })()", returnByValue: true });
+    }
     for (const [slot, w] of [["media", 220], ["sub", 240]]) {
       const set = `(() => { const L = window.__vc.workspace.layout;
         L.area.seg = '${slot}'; window.__vc.workspace.applyLayout(); return L.area.seg; })()`;
