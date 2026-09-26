@@ -10,10 +10,11 @@ from app.tasks import TaskCancelled
 
 
 class _FakeWord:
-    def __init__(self, start: float, end: float, text: str) -> None:
+    # 对齐 faster-whisper Word dataclass：文本字段是 .word（无 .text）
+    def __init__(self, start: float, end: float, word: str) -> None:
         self.start = start
         self.end = end
-        self.text = text
+        self.word = word
 
 
 class _FakeSeg:

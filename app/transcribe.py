@@ -179,8 +179,10 @@ def transcribe_clips_full(
                 ws, we = float(w.start), float(w.end)
             except (TypeError, ValueError):
                 continue
-            if w.text and w.text.strip():
-                words.append((ws, we, w.text))
+            # faster-whisper 的 Word dataclass 字段是 (start, end, word, probability)，
+            # 没有 .text —— 文本在 .word 上
+            if w.word and w.word.strip():
+                words.append((ws, we, w.word))
         if progress_cb and total > 0:
             progress_cb(min(0.9, float(seg.end) / total))
     if progress_cb:
