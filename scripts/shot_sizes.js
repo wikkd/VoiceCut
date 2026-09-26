@@ -155,6 +155,22 @@ const makeWav = (seconds, sr = 16000) => {
         subOverflowX: subSc ? subSc.scrollWidth - subSc.clientWidth : null,
         segPanel: box('#segments-panel'), segThs: ths, segCells: cells,
         segMismatch: cells.length === ths.length ? ths.map((t, i) => Math.abs(t - cells[i]) > 2 ? i : -1).filter((i) => i >= 0) : 'len-diff',
+        lockChips: document.querySelectorAll('#seg-tbody .seg-lock').length,
+        lockOn: document.querySelectorAll('#seg-tbody .seg-lock.on').length,
+        // 状态列里「合规标签 + 锁定开关」是否被单元格裁掉（>0 表示开关超出右边缘被 overflow:hidden 切掉）
+        lockClip: (() => {
+          const td = firstSegRow && firstSegRow.querySelector('td.col-status');
+          const ck = firstSegRow && firstSegRow.querySelector('.seg-lock');
+          return (td && ck) ? Math.round(ck.getBoundingClientRect().right - td.getBoundingClientRect().right) : null;
+        })(),
+        // 操作列 3 个按钮是否超出单元格
+        actClip: (() => {
+          const td = firstSegRow && firstSegRow.querySelector('td.col-act');
+          const btns = td ? td.querySelectorAll('button') : [];
+          const last = btns.length ? btns[btns.length - 1] : null;
+          return (td && last) ? Math.round(last.getBoundingClientRect().right - td.getBoundingClientRect().right) : null;
+        })(),
+        statusCell: firstSegRow && firstSegRow.querySelector('.col-status') ? firstSegRow.querySelector('.col-status').outerHTML.slice(0, 220) : null,
         scrollRange: scrolled, stickyDiag,
         textInputW: textInput ? Math.round(textInput.getBoundingClientRect().width) : null,
         subPanel: box('#subtitle-panel'), subThs,

@@ -116,6 +116,13 @@ import { createProjects } from "/static/js/modules/projects.js";
       if (btn.classList.contains("seg-aud")) { segments.auditionSegment(state.items.find(x => x.id === itemId), seg); return; }
       else if (btn.classList.contains("seg-jump")) { waveform.focusSegment(state.items.find(x => x.id === itemId), seg); return; }
       else if (btn.classList.contains("seg-del")) { segments.deleteSegment(itemId, i); return; }
+      // 锁定开关：多选时作用于整个选区（与右键批量一致），否则只作用于本行
+      else if (btn.classList.contains("seg-lock")) {
+        const sel = Array.from(state.selectedSegs);
+        const ids = (sel.length > 1 && sel.includes(seg.id)) ? sel : [seg.id];
+        segments.toggleLock(ids);
+        return;
+      }
     }
     // 行内编辑控件（文本框/语言/说话人下拉）：不触发行选中——否则 renderSegments 重建行，
     // 正在交互的控件被替换，下拉打不开/change 丢失（曾导致说话人无法更改）
@@ -211,6 +218,29 @@ import { createProjects } from "/static/js/modules/projects.js";
       b.addEventListener("click", () => { hideRedirectMenu(); pool.reassignSegments(segIds, val); });
       return b;
     };
+    // 锁定 / 解锁：批量作用于右键命中的选区（有未锁定的就给「锁定」，有已锁定的就给「解锁」）
+    const lockRows = segments.allSegs().filter(r => segIds.includes(r.seg.id));
+    if (lockRows.length) {
+      const mkLock = (label, val, title) => {
+        const b = document.createElement("button");
+        b.className = "menu-lock";
+        b.textContent = label;
+        b.title = title;
+        b.addEventListener("click", () => { hideRedirectMenu(); segments.toggleLock(segIds, val); });
+        return b;
+      };
+      if (lockRows.some(r => !r.seg.locked)) {
+        menu.appendChild(mkLock(`锁定 ${lockRows.length} 段`, true,
+          "标记为人工成果：自动切分 / 补扫 / 声纹识别改写都会跳过"));
+      }
+      if (lockRows.some(r => r.seg.locked)) {
+        menu.appendChild(mkLock(`解锁 ${lockRows.length} 段`, false,
+          "解除人工标记：自动补扫 / 切分 / 识别可以再改动它"));
+      }
+      const lsep = document.createElement("div");
+      lsep.className = "menu-sep";
+      menu.appendChild(lsep);
+    }
     if (segIds.length >= 2) {
       // 多选合并：把被自动切分拆开的句子拼回一段（仅同素材内，按时间顺序拼接文本）
       const mb = document.createElement("button");
@@ -334,7 +364,7 @@ import { createProjects } from "/static/js/modules/projects.js";
           toast("已取消全选（可见范围）");
         } else {
           ids.forEach(id => state.selectedSegs.add(id));
-          toast(`已全选 ${ids.length} 段（可见范围）——Delete 批量删除 / 右键批量重定向`, 4000);
+          toast(`已全选 ${ids.length} 段（可见范围）——Delete 批量删除 / K 锁定或解锁 / 右键批量操作`, 4000);
         }
         segments.renderSegments();
         return;
@@ -387,6 +417,14 @@ import { createProjects } from "/static/js/modules/projects.js";
         case "e": case "E": io.openExportModal(); break;
         case "n": case "N": io.doDenoise(); break;
         case "v": case "V": io.doSeparate(); break;
+        // K：锁定 / 解锁片段。有选中 → 整个选区；否则 → 当前聚焦片段（点击行 / 跳转定位的那一段）
+        case "k": case "K": {
+          const sel = Array.from(state.selectedSegs);
+          if (sel.length) segments.toggleLock(sel);
+          else if (state.activeSeg && state.activeSeg.segId) segments.toggleLock([state.activeSeg.segId]);
+          else toast("请先点击片段行（或 Ctrl 多选）再按 K");
+          break;
+        }
         case "ArrowLeft": case "ArrowRight": {
           e.preventDefault();
           const d = (e.key === "ArrowRight" ? 1 : -1) * NUDGE_STEP;
@@ -720,6 +758,7 @@ import { createProjects } from "/static/js/modules/projects.js";
     doIdentifySpeakers: pool.doIdentifySpeakers, newSegment: store.newSegment,
     scanGaps: pool.scanGaps, toggleAutoGapScan: pool.toggleAutoGapScan,
     applySelectionToActive: segments.applySelectionToActive, mergeSegments: segments.mergeSegments,
+    toggleSegLock: segments.toggleLock,
     queueRetranscribe: segments.queueRetranscribe,
     toggleAutoAnalyze: pool.toggleAutoAnalyze,
     toggleAutoTraining: pool.toggleAutoTraining,

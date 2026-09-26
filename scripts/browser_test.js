@@ -612,6 +612,110 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("MERGE:", JSON.stringify(rM.result && rM.result.result && rM.result.result.value));
     if (rM.result && rM.result.exceptionDetails) console.log("MERGE-EXC:", JSON.stringify(rM.result.exceptionDetails));
 
+    // LOCK：手动锁定 / 解锁——状态列开关点一下、右键批量、K 快捷键、状态筛选、undo 还原
+    const rLock = await send("Runtime.evaluate", { expression: `(async () => {
+      const vc = window.__vc;
+      const itId = vc.state.currentItem.id;
+      const segs = vc.state.segmentsByItem.get(itId);
+      segs.length = 0;
+      const a = vc.newSegment(0, 2, "あ"), b = vc.newSegment(2, 4, "い"), c = vc.newSegment(4, 6, "う");
+      segs.push(a, b, c);
+      // 关键：把列表限定到当前素材并清掉状态/文本筛选——默认「全部」会把其它素材的片段也混进来，
+      // 行序 ≠ 本素材顺序，按行号取到的就不是自己造的片段（第一版测试就栽在这里）。
+      vc.state.segFilter.item = itId; vc.state.segFilter.status = 'all'; vc.state.segFilter.text = '';
+      vc.state.selectedSegs = new Set();
+      vc.renderSegments();
+      await new Promise(r => setTimeout(r, 250));
+      const rowAt = (k) => document.querySelectorAll('#seg-tbody tr.seg-row')[k];
+      const chipAt = (k) => rowAt(k).querySelector('.seg-lock');
+      const wait = () => new Promise(r => setTimeout(r, 220));
+      let dbg8 = null;
+      const dbg = { rows: document.querySelectorAll('#seg-tbody tr.seg-row').length,
+        chips: document.querySelectorAll('#seg-tbody .seg-lock').length,
+        row0item: rowAt(0) ? rowAt(0).dataset.item : null, row0i: rowAt(0) ? rowAt(0).dataset.i : null,
+        row0status: rowAt(0) ? rowAt(0).querySelector('.col-status').outerHTML.slice(0, 180) : null,
+        flags: segs.map(s => !!s.locked) };
+
+      // 1) 默认未锁定：开关存在、未点亮
+      const chip0 = chipAt(0);
+      const initOff = !!chip0 && !chip0.classList.contains('on') && chip0.textContent.includes('🔓');
+
+      // 2) 点开关 → 锁定（数据 + 视觉 + 行 .locked 类）
+      chip0.click(); await wait();
+      const onData = segs[0].locked === true;
+      const chipOn = chipAt(0).classList.contains('on') && chipAt(0).textContent.includes('🔒');
+      const rowLocked = rowAt(0).classList.contains('locked');
+
+      // 3) 再点 → 解锁
+      chipAt(0).click(); await wait();
+      const offData = segs[0].locked === false;
+      const chipOff = !chipAt(0).classList.contains('on');
+
+      // 4) K 快捷键：只锁第 2 段（无多选 → 作用于聚焦片段，先点行让它成为 activeSeg）
+      rowAt(1).click(); await wait();
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+      await wait();
+      const kLocked = segs[1].locked === true;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true }));
+      await wait();
+      const kUnlocked = segs[1].locked === false;
+
+      // 5) 状态筛选「已锁定」：只留锁定的段
+      segs[2].locked = true;
+      vc.renderSegments(); await wait();
+      const fsel = document.getElementById('seg-filter-status');
+      fsel.value = 'locked';
+      fsel.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait();
+      const filtered = document.querySelectorAll('#seg-tbody tr.seg-row').length;
+      fsel.value = 'all'; fsel.dispatchEvent(new Event('change', { bubbles: true }));
+      await wait();
+
+      // 6) 全部已锁定 → 菜单只给「解锁 N 段」（不应出现「锁定」条目）
+      vc.state.selectedSegs = new Set([a.id, b.id, c.id]);
+      segs.forEach(s => { s.locked = true; });
+      vc.renderSegments(); await wait();
+      rowAt(0).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+      const menu = document.querySelector('#redirect-menu');
+      const lockBtns = [...menu.querySelectorAll('button')];
+      const unBtn = lockBtns.find(x => x.textContent.includes('解锁'));
+      const hasUnlock = !!unBtn && unBtn.textContent.includes('3');
+      const noLockEntry = !lockBtns.some(x => x.textContent.includes('锁定'));
+      unBtn.click(); await wait();
+      const allUnlocked = segs.every(s => s.locked === false);
+
+      // 7) undo 还原锁定状态（toggleLock 记了快照）。注意 .every 对空数组恒真——
+      //    必须同时断言段数，否则「undo 把片段全丢了」也会被判成通过。
+      vc.undo(); await wait();
+      const after7 = vc.state.segmentsByItem.get(itId) || [];
+      const undoRestored = after7.length === 3 && after7.every(s => s.locked === true);
+
+      // 8) 混合状态（1 锁 2 未锁）→ 菜单同时给出「锁定 N 段」与「解锁 N 段」
+      //    坑：undo 用快照「替换」数组对象（sameArray=false），必须重新取回 live 数组再改，
+      //    否则改的是已被丢弃的旧数组，混合状态根本不成立。
+      const live = vc.state.segmentsByItem.get(itId);
+      live[1].locked = false; live[2].locked = false;
+      vc.state.selectedSegs = new Set(live.map(s => s.id));
+      vc.renderSegments(); await wait();
+      rowAt(0).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 150, clientY: 150 }));
+      const menu2 = document.querySelector('#redirect-menu');
+      const labels = [...menu2.querySelectorAll('button')].map(x => x.textContent.trim());
+      const bothEntries = (labels.some(t => t.startsWith('锁定')) ? 1 : 0)
+        + (labels.some(t => t.startsWith('解锁')) ? 1 : 0);
+      dbg8 = { labels, selSize: vc.state.selectedSegs.size, flags: live.map(s => !!s.locked),
+        sameArray: vc.state.segmentsByItem.get(itId) === segs, menuHidden: menu2.classList.contains('hidden') };
+      document.body.click();
+      vc.state.segFilter.item = 'all';      // 还原筛选，避免影响后续段
+      vc.renderSegments(); await wait();
+
+      return { initOff, onData, chipOn, rowLocked, offData, chipOff, kLocked, kUnlocked,
+        filtered, hasUnlock, noLockEntry, allUnlocked, undoRestored, bothEntries, dbg, dbg8,
+        ok: initOff && onData && chipOn && rowLocked && offData && chipOff && kLocked && kUnlocked
+          && filtered === 1 && hasUnlock && noLockEntry && allUnlocked && undoRestored && bothEntries === 2 };
+    })()`, awaitPromise: true, returnByValue: true });
+    console.log("LOCK:", JSON.stringify(rLock.result && rLock.result.result && rLock.result.result.value));
+    if (rLock.result && rLock.result.exceptionDetails) console.log("LOCK-EXC:", JSON.stringify(rLock.result.exceptionDetails));
+
     // SCROLL：点击片段行不应把列表跳回第一条（重渲染保持滚动位置）
     const rSc = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;

@@ -269,7 +269,7 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 #seg-table thead .col-src { width: 7%; }
 #seg-table thead .col-time { width: 10.5%; }
 #seg-table thead .col-dur { width: 5%; }
-#seg-table thead .col-status { width: 7%; }
+#seg-table thead .col-status { width: 8.5%; }
 #seg-table thead .col-aud { width: 5%; }
 #seg-table thead .col-lang { width: 5%; }
 #seg-table thead .col-spk { width: 10%; }
@@ -278,25 +278,25 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
    每次降列后重设留下列的百分比，让它们在小容器里仍有 86px 以上的可读宽度。 */
 @container segscroll (max-width: 980px) {
   #seg-table .col-dur { display: none; }
-  #seg-table thead .col-time { width: 13%; } #seg-table thead .col-status { width: 8%; }
+  #seg-table thead .col-time { width: 13%; } #seg-table thead .col-status { width: 10%; }
   #seg-table thead .col-aud { width: 5.5%; } #seg-table thead .col-lang { width: 6%; }
   #seg-table thead .col-spk { width: 12%; } #seg-table thead .col-act { width: 11%; }
 }
 @container segscroll (max-width: 860px) {
   #seg-table .col-lang { display: none; }
-  #seg-table thead .col-time { width: 14%; } #seg-table thead .col-status { width: 9%; }
+  #seg-table thead .col-time { width: 14%; } #seg-table thead .col-status { width: 11%; }
   #seg-table thead .col-aud { width: 6%; } #seg-table thead .col-spk { width: 13%; }
   #seg-table thead .col-act { width: 12%; }
 }
 @container segscroll (max-width: 780px) {
   #seg-table .col-src { display: none; }
-  #seg-table thead .col-time { width: 15%; } #seg-table thead .col-status { width: 10%; }
+  #seg-table thead .col-time { width: 15%; } #seg-table thead .col-status { width: 12%; }
   #seg-table thead .col-aud { width: 6.5%; } #seg-table thead .col-spk { width: 14%; }
   #seg-table thead .col-act { width: 13%; }
 }
 @container segscroll (max-width: 700px) {
   #seg-table .col-num { display: none; }
-  #seg-table thead .col-time { width: 16%; } #seg-table thead .col-status { width: 11%; }
+  #seg-table thead .col-time { width: 16%; } #seg-table thead .col-status { width: 13%; }
   #seg-table thead .col-aud { width: 7%; } #seg-table thead .col-spk { width: 15%; }
   #seg-table thead .col-act { width: 14%; }
 }
@@ -480,7 +480,14 @@ tr.seg-row.active td:first-child { box-shadow: inset 3px 0 0 #ffd166; }
 
 /* ── 人工锁定片段：行号带锁标记（自动识别/转写不再覆盖） ── */
 tr.seg-row.locked .seg-num { color: #ffd166; }
-tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left: 2px; }
+/* 锁定开关（放在状态列内，紧跟合规标签）。锁定=琥珀实心，未锁定=暗色虚线框（可点）。
+   锁定行的行号也用琥珀色，远距离一眼看出哪几段被保护。 */
+#seg-table .seg-lock {
+  margin-left: 4px; padding: 1px 4px; font-size: 10px; line-height: 15px; vertical-align: middle;
+  color: var(--muted); background: transparent; border: 1px dashed var(--border);
+}
+#seg-table .seg-lock:hover { color: var(--text); border-color: var(--muted); }
+#seg-table .seg-lock.on { color: #ffd166; border: 1px solid rgba(255, 209, 102, 0.75); background: rgba(255, 209, 102, 0.14); }
 
 /* ── M2 角色池子页面 ── */
 #pool-view {

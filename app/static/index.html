@@ -196,7 +196,7 @@
                 <th class="col-time" data-sort="time" title="点击恢复时间顺序">起止 <span class="sort-arrow">⇅</span></th>
                 <th class="col-dur" data-sort="dur" title="点击按时长降序，再点升序，三点恢复时间序">时长 <span class="sort-arrow">⇅</span></th>
                 <th class="col-status">
-                  <span data-sort="score" class="th-sort" title="点击按清晰度分数降序，再点升序">状态 <span class="sort-arrow">⇅</span></span>
+                  <span data-sort="score" class="th-sort" title="左侧为合规标签，右侧 🔒 是锁定开关（锁定后自动切分/补扫/识别改写都会跳过它）；点击这里按清晰度分数降序，再点升序">状态 <span class="sort-arrow">⇅</span></span>
                   <select id="seg-filter-status" class="th-filter" title="按状态过滤">
                     <option value="all">全部</option>
                     <option value="ok">合规</option>
@@ -490,6 +490,7 @@
         <tr><td>E</td><td>导出选区</td></tr>
         <tr><td>N</td><td>降噪</td></tr>
         <tr><td>V</td><td>人声分离</td></tr>
+        <tr><td>K</td><td>锁定 / 解锁片段（有选中则作用于整个选区，否则作用于聚焦片段）</td></tr>
         <tr><td>← →</td><td>平移选区 ±0.5 秒（无选区时快退 / 快进 5 秒）</td></tr>
         <tr><td>Shift+← →</td><td>微调选区终点 ±0.5 秒</td></tr>
         <tr><td>Alt+← →</td><td>微调选区起点 ±0.5 秒</td></tr>
@@ -505,7 +506,7 @@
         <tr><td>Enter</td><td>选区为黄色（已改动未确认）时：确认写回聚焦片段，黄色消失</td></tr>
         <tr><td>Ctrl+Enter</td><td>同上（在输入框内也生效）；选区未改动时不执行</td></tr>
         <tr><td>Delete</td><td>删除选中片段行</td></tr>
-        <tr><td>右键</td><td>取消当前选区 / 取消本次拖拽（不弹浏览器菜单）；片段列表多选后右键：批量重定向 / 合并多段</td></tr>
+        <tr><td>右键</td><td>取消当前选区 / 取消本次拖拽（不弹浏览器菜单）；片段列表多选后右键：批量锁定 / 解锁 / 重定向 / 合并多段</td></tr>
         <tr><td>Ctrl + / −</td><td>放大 / 缩小时间轴（替代浏览器页面缩放）</td></tr>
         <tr><td>Ctrl + 0</td><td>时间轴适配窗口</td></tr>
       </table>

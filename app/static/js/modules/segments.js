@@ -176,7 +176,7 @@ export function createSegments(ctx) {
       <td class="seg-src col-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
       <td class="seg-time col-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
       <td class="seg-dur col-dur">${fmtDur(seg.end - seg.start)}</td>
-      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span></td>
+      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span><button class="chip seg-lock${seg.locked ? " on" : ""}" data-i="${i}" title="${seg.locked ? "已锁定：自动切分 / 补扫 / 声纹识别改写都会跳过它。点击解锁" : "未锁定：点击锁定，保护这一段不被自动流程覆盖"}">${seg.locked ? "🔒" : "🔓"}</button></td>
       <td class="col-aud"><button class="chip seg-aud" data-i="${i}">试听</button></td>
       <td class="col-text"><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
       <td class="col-lang"><select class="seg-lang" data-i="${i}">
@@ -380,6 +380,32 @@ export function createSegments(ctx) {
     toast(`已合并 ${found.length} 段 → ${fmtT(start)} ~ ${fmtT(end)}（${(end - start).toFixed(1)}s）`);
   }
 
+  // 手动锁定 / 解锁片段：locked 是「人工成果」标记——自动切分(autosplit)、空白区补扫、
+  // 声纹识别改写都会跳过它。此前 locked 只在人工编辑文本、指派说话人、重定向、合并时自动置位，
+  // **而且没有任何办法解除**：用户既不能主动保护一个还没被人碰过的片段，也不能解锁交给自动流程重跑。
+  // segIds: 单个 id 或数组；force: true=全部锁定 / false=全部解锁 / 省略=按当前状态取反
+  // （有任一未锁定 → 全锁；全部已锁定 → 全解）。返回 { count, locked }。
+  function toggleLock(segIds, force) {
+    const ids = new Set(Array.isArray(segIds) ? segIds : [segIds]);
+    if (!ids.size || (ids.size === 1 && ![...ids][0])) { toast("请先选择片段（点击行 / Ctrl 多选 / Ctrl+A 全选）"); return { count: 0, locked: null }; }
+    const rows = allSegs().filter(r => ids.has(r.seg.id));
+    if (!rows.length) { toast("选中的片段不存在（可能已被删除）"); return { count: 0, locked: null }; }
+    const target = (force === true || force === false) ? force : !rows.every(r => r.seg.locked);
+    const hit = rows.filter(r => !!r.seg.locked !== target);
+    if (!hit.length) {
+      toast(target ? "所选片段已全部锁定" : "所选片段已全部解锁");
+      return { count: 0, locked: target };
+    }
+    pushUndo(target ? "锁定片段" : "解锁片段");
+    const touched = new Set();
+    hit.forEach(({ item, seg }) => { seg.locked = target; if (item) touched.add(item.id); });
+    touched.forEach(id => scheduleSaveProject(id));
+    renderSegments();
+    toast(`${target ? "已锁定" : "已解锁"} ${hit.length} 段` +
+      (target ? "（自动切分 / 补扫 / 识别改写将跳过）" : "（自动流程可以再改动了）"), 3500);
+    return { count: hit.length, locked: target };
+  }
+
   function deleteSegment(itemId, i) {    const segs = segsFor(itemId);
     const s = segs[i];
     if (s) state.selectedSegs.delete(s.id);
@@ -438,6 +464,7 @@ export function createSegments(ctx) {
 
   return { segsFor, segIssues, allSegs, charSegs, updateSegBadge, renderSegments, viewSegIds,
            addSegmentFromSelection, applySelectionToActive, mergeSegments, deleteSegment, jumpToSegment, auditionSegment,
+           toggleLock,
            gotoEditAndPlay, scrollSegRow, auditionFocus,
            queueRetranscribe, retranscribeEnabled };
 }
