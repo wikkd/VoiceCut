@@ -11,6 +11,7 @@ from flask import Blueprint, current_app, jsonify, request
 from app import audio_ops as audio_ops_mod
 from app import autosplit as autosplit_mod
 from app import db as db_mod
+from app import gptsovits as gptsovits_mod
 from app import project as project_mod
 from app import speakers as speakers_mod
 from app import subtitles as subtitles_mod
@@ -792,6 +793,10 @@ def _maybe_auto_pipeline(c, project_id: str, result: dict) -> dict:
 def _auto_role_worker(c, project_id: str, role: dict) -> dict:
     """单角色自动管线：数据量足够则全阶段训练，随后（或跳过训练直接）
     用该角色参考音频合成一段试听，写入角色池供用户听声辨认。"""
+    # 延迟导入：training 是独立 Blueprint（app.web.__init__ 里 projects 先注册），
+    # 且 _training_worker 是训练交付页的内部实现——这里刻意复用它，使
+    # 「自动管线」与「手动点训练」走完全同一条代码路径。模块级导入会形成环。
+    from app.web.training import _training_worker
     tid = c.tasks.current_task_id()
     role_id = role["id"]
     settings = gptsovits_mod.load_settings(c.cfg.workdir)
@@ -832,6 +837,7 @@ def _auto_role_worker(c, project_id: str, role: dict) -> dict:
 
 def _auto_infer_sample(c, project_id: str, role: dict, exp: str, lang: str) -> dict:
     """为角色合成一段试听音频并把地址写进角色池。"""
+    from app.web.training import _pick_ref_clip  # 延迟导入，理由同 _auto_role_worker
     tid = c.tasks.current_task_id()
     settings = gptsovits_mod.load_settings(c.cfg.workdir)
     segs, sources, _mj = c.role_clips(project_id, role["id"])
