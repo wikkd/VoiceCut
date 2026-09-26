@@ -19,8 +19,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install ruff
+          # 用 dev 清单（含 pytest / ruff）——此前只装了 requirements.txt + ruff，
+          # 而 Lint 步一直失败挡在前面，所以 Test 步的 "pytest: command not found"
+          # 从未暴露：CI 其实从来没有跑过测试。
+          pip install -r requirements-dev.txt
       - name: Lint
         run: ruff check .
       - name: Test

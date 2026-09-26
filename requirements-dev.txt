@@ -1,0 +1,5 @@
+# VoiceCut 开发 / CI 依赖（运行时不需要，勿并入 requirements.txt）
+# 安装方式: uv pip install --python .venv\Scripts\python.exe -r requirements-dev.txt
+-r requirements.txt
+pytest>=8.0
+ruff>=0.6
