@@ -36,12 +36,16 @@ export function createSubtitles(ctx) {
       tr.className = "sub-row" + (i === state.currentSubIdx ? " cur" : "");
       tr.dataset.i = i;
       tr.innerHTML = `
-        <td>${fmtT(s.start)} ~ ${fmtT(s.end)}</td>
-        <td class="sub-text">${esc(s.text)}</td>
-        <td class="sub-speaker">${ch ? `<span class="spk-badge" style="background:${esc(ch.color)}">${esc(ch.name)}</span>` : (lbl ? `<span class="spk-badge">${esc(lbl)}</span>` : "")}</td>
-        <td class="sub-act">
-          <button class="chip sub-sel" data-i="${i}">选区</button>
-          <button class="chip primary sub-add" data-i="${i}">加片段</button>
+        <td class="sub-time"><span>${fmtT(s.start)}</span><span class="end">${fmtT(s.end)}</span></td>
+        <td class="sub-main">
+          <div class="sub-line">
+            ${ch ? `<span class="spk-badge" style="background:${esc(ch.color)}">${esc(ch.name)}</span>` : (lbl ? `<span class="spk-badge">${esc(lbl)}</span>` : "")}
+            <span class="sub-act">
+              <button class="chip sub-sel" data-i="${i}">选区</button>
+              <button class="chip primary sub-add" data-i="${i}">加片段</button>
+            </span>
+          </div>
+          <div class="sub-text">${esc(s.text)}</div>
         </td>`;
       tb.appendChild(tr);
     });

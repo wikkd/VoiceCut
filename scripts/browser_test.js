@@ -540,10 +540,16 @@ const makeWav = (seconds, sr = 16000) => {
     console.log("TRAIN:", JSON.stringify(rT.result && rT.result.result && rT.result.result.value));
 
     // BUSY：后台任务运行期全屏操作锁——挂任务显遮罩、清任务解锁；遮罩含进度行与日志条
-    const rB = await send("Runtime.evaluate", { expression: `(() => {
+    const rB = await send("Runtime.evaluate", { expression: `(async () => {
       const vc = window.__vc;
       const ov = document.querySelector('#busy-overlay');
       if (!ov) return { skip: 'no overlay' };
+      // 先等真实后台任务跑完（导入/自动分析会污染下面的纯内存断言，此前偶发误报）
+      for (let i = 0; i < 120 && vc.state.activeTasks.size; i++) {
+        await new Promise(r => setTimeout(r, 500));
+      }
+      const drained = vc.state.activeTasks.size === 0;
+      vc.updateStatusbar();
       const initHidden = ov.classList.contains('hidden');
       vc.state.activeTasks.set('fake-busy-1', { msg: '测试任务', progress: 0.4, doneCb: null,
         logs: ['[00:00:01] 步骤一完成', '[00:00:02] 正在处理步骤二'] });
@@ -567,11 +573,11 @@ const makeWav = (seconds, sr = 16000) => {
       const quietBubble = !!document.querySelector('.toast-bubble.task[data-task-id="fake-quiet-1"]');
       vc.state.activeTasks.delete('fake-quiet-1');
       vc.updateStatusbar();
-      return { initHidden, locked, hasCancel, hasTaskRow, fillW, msgTxt, logLines, logTxt, unlocked, bubbleGone,
+      return { drained, initHidden, locked, hasCancel, hasTaskRow, fillW, msgTxt, logLines, logTxt, unlocked, bubbleGone,
         quietNoMask, quietBubble,
-        ok: initHidden && locked && hasCancel && hasTaskRow && fillW === '40%' && msgTxt === '测试任务'
+        ok: drained && initHidden && locked && hasCancel && hasTaskRow && fillW === '40%' && msgTxt === '测试任务'
           && logLines === 2 && unlocked && bubbleGone && quietNoMask && quietBubble };
-    })()`, returnByValue: true });
+    })()`, awaitPromise: true, returnByValue: true });
     console.log("BUSY:", JSON.stringify(rB.result && rB.result.result && rB.result.result.value));
 
     // MERGE：多选片段 → 右键菜单「合并 N 段」→ 区间/文本合并、locked，undo 可还原

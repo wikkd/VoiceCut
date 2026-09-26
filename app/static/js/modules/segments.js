@@ -174,8 +174,8 @@ export function createSegments(ctx) {
     tr.innerHTML = `
       <td class="seg-num">${String(i + 1).padStart(2, "0")}</td>
       <td class="seg-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
-      <td>${fmtT(seg.start)} ~ ${fmtT(seg.end)}</td>
-      <td>${fmtDur(seg.end - seg.start)}</td>
+      <td class="seg-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
+      <td class="seg-dur">${fmtDur(seg.end - seg.start)}</td>
       <td><span class="tag ${tagCls}">${tagTxt}</span></td>
       <td><button class="chip seg-aud" data-i="${i}">试听</button></td>
       <td><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>

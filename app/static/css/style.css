@@ -139,9 +139,12 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
   cursor: grab; user-select: none; flex-shrink: 0;
 }
 .panel-grip:active { cursor: grabbing; }
+/* 窄面板下优先压缩标题、不折行按钮：按钮保持单行且不被压缩 */
+.panel-grip .chip, .panel-grip .menu-title { white-space: nowrap; flex: 0 0 auto; }
 .panel-grip .grip-title {
   font-weight: 600; font-size: 12px; color: var(--muted);
   margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1 1 auto; min-width: 0;
 }
 .grip-close {
   padding: 0 7px; font-size: 13px; line-height: 1.6; cursor: pointer;
@@ -201,19 +204,29 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
   min-height: 20px; border-left: 3px solid var(--accent); word-break: break-all;
 }
 #sub-scroll { flex: 1; min-height: 0; overflow: auto; border-top: 1px solid var(--border); }
-#sub-table { width: 100%; border-collapse: collapse; }
+/* 两列卡片式：时间列 + 主列（徽标/操作一行、文本一行）。
+   窄面板（默认 240px）下四列表格会把文本压成一字宽，故改为两行结构。 */
+#sub-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 #sub-table th {
   position: sticky; top: 0; background: var(--panel-2); text-align: left;
   padding: 4px 8px; font-size: 11px; color: var(--muted); z-index: 1;
+  white-space: nowrap; font-weight: 600;
 }
-#sub-table td { padding: 3px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: 12px; }
+#sub-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 12px; }
+#sub-table td.sub-time {
+  width: 74px; font-variant-numeric: tabular-nums; line-height: 1.3; white-space: nowrap;
+}
+#sub-table td.sub-time .end { display: block; color: var(--muted); }
+#sub-table td.sub-main { white-space: normal; }
+.sub-line { display: flex; align-items: center; gap: 5px; min-height: 18px; }
+.sub-line .sub-act { margin-left: auto; display: flex; gap: 3px; flex-wrap: nowrap; }
+.sub-act button { padding: 1px 6px; font-size: 11px; }
+#sub-table td.sub-main .sub-text { margin-top: 2px; line-height: 1.35; word-break: break-word; }
 #sub-table tr.sub-row { cursor: pointer; }
 #sub-table tr.sub-row:hover td { background: var(--panel-2); }
 #sub-table tr.sub-row.cur td { background: var(--accent-dim); }
-#sub-table tr.sub-row.cur td.sub-text { color: var(--accent); font-weight: 600; }
+#sub-table tr.sub-row.cur td.sub-main .sub-text { color: var(--accent); font-weight: 600; }
 #sub-empty { padding: 8px 14px; }
-.sub-act { display: flex; gap: 4px; }
-.sub-act button { padding: 1px 8px; font-size: 11px; }
 
 /* ── 传输栏（固定 Chrome，窗口底部） ── */
 #transport {
@@ -228,23 +241,35 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 /* ── 片段列表 ── */
 .seg-body { overflow: hidden; }
 #seg-scroll { flex: 1; min-height: 0; overflow: auto; }
-#seg-table { width: 100%; border-collapse: collapse; }
+/* 固定布局：列宽完全由表头 th 决定，文本列吃掉剩余空间。
+   避免 auto 布局下窄列被内容撑开、宽内容把「操作」列挤出可视区。 */
+#seg-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 #seg-table th {
   position: sticky; top: 0; background: var(--panel-2); text-align: left;
-  padding: 6px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border);
-  z-index: 2;
+  padding: 5px 8px; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border);
+  z-index: 2; white-space: nowrap; font-weight: 600;
 }
-#seg-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+#seg-table td {
+  padding: 5px 8px; border-bottom: 1px solid var(--border);
+  vertical-align: middle; white-space: nowrap; overflow: hidden;
+}
 #seg-table tr:hover td { background: var(--panel-2); }
 #seg-table input[type="text"] { padding: 4px 8px; }
 #seg-table select { padding: 3px 6px; font-size: 12px; }
+/* 行内控件撑满列宽（固定布局下默认宽度不会自适应，会溢出被裁切） */
+#seg-table .seg-text, #seg-table .seg-lang, #seg-table .seg-speaker { width: 100%; min-width: 0; }
 .seg-num { font-weight: 600; color: var(--muted); }
+/* 时间/时长：等宽数字对齐，单行不折行 */
+.seg-time, .seg-dur { font-variant-numeric: tabular-nums; }
+.seg-time .sep { color: var(--muted); margin: 0 3px; }
+.seg-dur { color: var(--muted); }
 .seg-ok { color: var(--ok); }
 .seg-warn { color: var(--warn); }
 .seg-bad { color: var(--danger); }
 tr.seg-row.bad { background: rgba(255, 107, 107, 0.08); }
-.row-actions { display: flex; gap: 4px; }
-.row-actions button { padding: 2px 8px; font-size: 11px; }
+.row-actions { display: flex; gap: 4px; flex-wrap: nowrap; }
+.row-actions button { padding: 2px 7px; font-size: 11px; }
+.seg-aud { padding: 2px 8px; font-size: 11px; }
 #seg-empty { padding: 10px 14px; }
 
 /* ── 分隔条 ── */
@@ -278,7 +303,8 @@ body.panel-dragging { user-select: none; cursor: grabbing; }
 
 /* ── 消息/任务气泡堆叠层（左下角，向上堆叠） ── */
 #toast-stack {
-  position: fixed; left: 14px; bottom: 36px; z-index: 1200;
+  /* 上移到传输栏之上（实测传输栏48 + 页面切换栏38 + 状态栏27 = 113px），避免气泡压住播放/循环控件 */
+  position: fixed; left: 14px; bottom: 122px; z-index: 1200;
   display: flex; flex-direction: column; justify-content: flex-end; gap: 8px;
   max-width: min(430px, 46vw); pointer-events: none;
 }
@@ -616,12 +642,13 @@ tr.seg-row.locked .seg-num::after { content: "🔒"; font-size: 9px; margin-left
 #seg-table thead .sort-arrow { font-size: 10px; opacity: 0.45; margin-left: 2px; }
 #seg-table thead .sort-on .sort-arrow { opacity: 1; color: var(--accent); }
 #seg-table thead .th-filter {
-  display: block; width: 100%; box-sizing: border-box; margin-top: 2px;
+  display: block; width: 100%; box-sizing: border-box; margin-top: 3px;
   font-size: 11px; height: 20px; padding: 1px 4px; font-weight: normal;
-  color: var(--fg, #e6e6f0); background: var(--panel-2);
+  color: var(--text); background: var(--panel-3);
   border: 1px solid var(--border); border-radius: 4px;
 }
-#seg-table thead th input.th-filter { display: inline-block; width: 140px; margin-left: 8px; }
+/* 文本筛选：与来源/状态筛选统一为「标签在上、控件在下」的两行表头，避免挤压列宽 */
+#seg-table thead th input.th-filter { display: block; width: 100%; margin: 3px 0 0; height: 20px; }
 #seg-table thead .th-filter:focus { outline: none; border-color: var(--accent); }
 
 /* ---- 后台任务运行期全屏操作锁 ---- */

@@ -158,7 +158,10 @@
         <div id="sub-scroll">
           <table id="sub-table">
             <thead>
-              <tr><th style="width:110px">起止</th><th>文本</th><th style="width:76px">说话人</th><th style="width:90px">操作</th></tr>
+              <tr>
+                <th style="width:74px">起止</th>
+                <th title="字幕文本 · 说话人徽标 · 选区/加片段操作">字幕文本</th>
+              </tr>
             </thead>
             <tbody id="sub-tbody"></tbody>
           </table>
@@ -188,11 +191,11 @@
           <table id="seg-table">
             <thead>
               <tr>
-                <th style="width:38px">#</th>
-                <th style="width:70px">来源 <select id="seg-filter-item" class="th-filter" title="按素材过滤"><option value="all">全部</option></select></th>
-                <th style="width:130px" data-sort="time" title="点击恢复时间顺序">起止 <span class="sort-arrow">⇅</span></th>
-                <th style="width:64px" data-sort="dur" title="点击按时长降序，再点升序，三点恢复时间序">时长 <span class="sort-arrow">⇅</span></th>
-                <th style="width:104px">
+                <th style="width:36px">#</th>
+                <th style="width:92px">来源 <select id="seg-filter-item" class="th-filter" title="按素材过滤"><option value="all">全部</option></select></th>
+                <th style="width:126px" data-sort="time" title="点击恢复时间顺序">起止 <span class="sort-arrow">⇅</span></th>
+                <th style="width:58px" data-sort="dur" title="点击按时长降序，再点升序，三点恢复时间序">时长 <span class="sort-arrow">⇅</span></th>
+                <th style="width:92px">
                   <span data-sort="score" class="th-sort" title="点击按清晰度分数降序，再点升序">状态 <span class="sort-arrow">⇅</span></span>
                   <select id="seg-filter-status" class="th-filter" title="按状态过滤">
                     <option value="all">全部</option>
@@ -202,11 +205,11 @@
                     <option value="unassigned">未指派</option>
                   </select>
                 </th>
-                <th style="width:72px">试听</th>
-                <th>文本（可编辑） <input id="seg-filter-text" class="th-filter" type="text" placeholder="筛选文本…" title="按片段文本关键字过滤"></th>
-                <th style="width:84px">语言</th>
-                <th style="width:96px" data-sort="char" title="点击按角色分组排序，再点恢复时间序">说话人 <span class="sort-arrow">⇅</span></th>
-                <th style="width:90px">操作</th>
+                <th style="width:54px">试听</th>
+                <th>文本（可编辑）<input id="seg-filter-text" class="th-filter" type="text" placeholder="筛选文本…" title="按片段文本关键字过滤"></th>
+                <th style="width:62px">语言</th>
+                <th style="width:132px" data-sort="char" title="点击按角色分组排序，再点恢复时间序">说话人 <span class="sort-arrow">⇅</span></th>
+                <th style="width:104px">操作</th>
               </tr>
             </thead>
             <tbody id="seg-tbody"></tbody>
