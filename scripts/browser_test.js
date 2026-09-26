@@ -810,13 +810,17 @@ const makeWav = (seconds, sr = 16000) => {
         if (url.indexOf('/api/tasks/fake-gap') >= 0) return json({ status: 'done', progress: 1,
           result: { added: fakeSegs.length, bound: 1, pending: 0, items_scanned: 1,
                     new_segments: fakeSegs,
-                    characters: [{ id: 'c-gap', name: '补扫角色', color: '#12ab34', emb_count: 3 }] } });
+                    // 模拟后端旧名快照：任务开始时的名字 + 任务内新增的声纹计数。
+                    // 修复后前端只并入声纹/试听字段，旧名不得覆盖用户改的新名
+                    characters: [{ id: 'c-gap', name: '任务前旧名', color: '#12ab34', emb_count: 3 }] } });
         if (url.indexOf('/api/transcribe') >= 0) { calls.transcribe++; return json({ task_id: 'fake-tr' }); }
         return orig(u, o);
       };
       const item = (vc.state.items || [])[0];
       if (!item) return { err: 'no item' };
       await vc.selectItem(item);
+      // 预置同名角色并模拟用户已改名（任务运行期间的改名）
+      vc.state.characters.push({ id: 'c-gap', name: '我的新名', color: '#12ab34', speakerLabels: [], emb_count: 0 });
       const before = (vc.state.segmentsByItem.get(item.id) || []).length;
       // 手动补扫：立即发起一次请求
       vc.scanGaps ? vc.scanGaps() : null;
@@ -826,9 +830,11 @@ const makeWav = (seconds, sr = 16000) => {
       const masked = !document.getElementById('busy-overlay').classList.contains('hidden');
       const quietTask = [...vc.state.activeTasks.values()].some(t => t.quiet);
       await new Promise(r => setTimeout(r, 2200));
-      // 结果写回：角色池更新 + 新片段落入 state
+      // 结果写回：声纹计数并入 + 用户改名不被旧名快照覆盖
       const chars = vc.state.characters || [];
-      const poolGot = chars.some(c => c.id === 'c-gap');
+      const cGap = chars.find(c => c.id === 'c-gap') || {};
+      const embMerged = cGap.emb_count === 3;        // 任务内声纹计数并入
+      const nameKept = cGap.name === '我的新名';      // 旧名快照不得覆盖
       const after = (vc.state.segmentsByItem.get(item.id) || []).length;
       const segsAdded = after > before;      // 假数据未真落盘，仅记录不参与判定
       await new Promise(r => setTimeout(r, 1600));   // 等重识别防抖(1.2s)触发
@@ -842,8 +848,8 @@ const makeWav = (seconds, sr = 16000) => {
       const offOk = calls.scan === scanBefore;
       vc.state.autoGapScan = true;
       window.fetch = orig;
-      return { manualFired, masked, quietTask, poolGot, segsAdded, linked, offOk, calls,
-        ok: manualFired && !masked && quietTask && poolGot && linked && offOk };
+      return { manualFired, masked, quietTask, embMerged, nameKept, segsAdded, linked, offOk, calls,
+        ok: manualFired && !masked && quietTask && embMerged && nameKept && linked && offOk };
     })()`, awaitPromise: true, returnByValue: true });
     console.log("GAP:", JSON.stringify(rGap.result && rGap.result.result && rGap.result.result.value));
     if (rGap.result && rGap.result.exceptionDetails) console.log("GAP-EXC:", JSON.stringify(rGap.result.exceptionDetails));

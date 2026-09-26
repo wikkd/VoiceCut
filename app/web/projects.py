@@ -464,6 +464,30 @@ def api_speakers_feedback() -> object:
     return jsonify({"task_id": tid})
 
 
+def _merge_pool_fields(c, project_id: str, chars: list,
+                       fields: tuple = ("embedding", "emb_count")) -> list:
+    """后台任务写池防覆盖：把任务内变更的字段并入**落盘时刻的最新池**再保存。
+
+    声纹反馈 / 空白区补扫等静默任务运行期间用户可继续编辑角色池（改名、
+    配色、合并）。若直接保存任务开始时 load 的 chars 快照，会把任务期间
+    的用户改名整池回滚（片段列表显示回旧名）。此处改为落盘时刻重新 load
+    最新池，只按角色 id 并入本任务拥有的字段（默认 embedding/emb_count），
+    其余字段一律以最新池为准；任务期间被删除的角色直接丢弃其声纹更新。
+    返回写回后的最新角色列表（供任务 result 使用，前端据此刷新声纹计数）。
+    """
+    fresh = project_mod.load_pool(c.cfg.workdir, project_id)
+    by_id = {ch["id"]: ch for ch in fresh["characters"]}
+    for ch in chars:
+        dst = by_id.get(ch.get("id"))
+        if dst is None:
+            continue
+        for k in fields:
+            if k in ch:
+                dst[k] = ch[k]
+    project_mod.save_pool(c.cfg.workdir, project_id, fresh["characters"])
+    return fresh["characters"]
+
+
 def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
     tid = c.tasks.current_task_id()
     pool = project_mod.load_pool(c.cfg.workdir, project_id)
@@ -524,7 +548,8 @@ def _speakers_feedback_worker(c, project_id: str, samples: list) -> dict:
         if changed:
             project_mod.save_project(c.cfg.workdir, it.id, pj)
             touched += 1
-    project_mod.save_pool(c.cfg.workdir, project_id, chars)
+    # 只并入声纹字段到最新池：任务期间用户的改名/配色不被旧快照回滚
+    chars = _merge_pool_fields(c, project_id, chars)
     return {"absorbed": n_absorbed, "bound": stats["bound"], "moved": stats["moved"],
             "scanned": stats["scanned"], "skipped": stats["skipped"],
             "items_touched": touched, "characters": chars}
@@ -668,7 +693,8 @@ def _speakers_gapscan_worker(c, project_id: str, min_dur: float, max_dur: float,
             added.extend({"item_id": it.id, "id": s["id"],
                           "start": s["start"], "end": s["end"]} for s in news)
     if bound:
-        project_mod.save_pool(c.cfg.workdir, project_id, chars)
+        # 只并入声纹字段到最新池：补扫是静默任务，期间用户的改名不被旧快照回滚
+        chars = _merge_pool_fields(c, project_id, chars)
     return {"added": len(added), "bound": bound, "pending": pending,
             "items_scanned": len(items), "new_segments": added, "characters": chars}
 

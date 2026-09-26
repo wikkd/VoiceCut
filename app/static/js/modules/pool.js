@@ -43,6 +43,21 @@ export function createPool(ctx) {
   }
 
   // ── 声纹反馈：人工修正的片段作为样本 → 角色质心吸收 → 静默重匹配其他片段 ──
+  // 静默任务结果只并入声纹/试听字段，绝不动 name/color 等用户可见字段——
+  // 服务端任务开始时的旧名快照若整池覆盖，会把任务期间刚改的名字盖回去
+  //（片段列表显示回旧名）。识别类任务（autoAnalyzeDone）整池替换是有意为之，不在此列。
+  function mergeCharFields(chars) {
+    if (!Array.isArray(chars)) return;
+    const byId = new Map(state.characters.map(c => [c.id, c]));
+    chars.forEach(ch => {
+      const dst = byId.get(ch.id);
+      if (!dst) return;
+      ["embedding", "emb_count", "sample_url", "sample_text", "sample_at"].forEach(k => {
+        if (k in ch) dst[k] = ch[k];
+      });
+    });
+  }
+
   let fbBusy = false;
   let fbPending = [];        // 反馈进行中又修正的样本：排队，任务结束后补发（不丢样本）
   async function sendCharacterFeedback(samples) {
@@ -63,7 +78,7 @@ export function createPool(ctx) {
       trackTask(j.task_id, async (result) => {
         state.identifying = false; fbBusy = false;
         pushUndo("声纹反馈");   // 反馈会静默改绑大量片段，纳入撤销
-        if (Array.isArray(result.characters)) state.characters = result.characters;
+        mergeCharFields(result.characters);
         await loadAllItemData();
         renderPool(); segments.renderSegments();
         const n = (result.bound || 0) + (result.moved || 0);
@@ -310,7 +325,7 @@ export function createPool(ctx) {
           return true;
         }
         pushUndo("补扫空白区");   // 新片段写回前快照，可撤销
-        if (Array.isArray(result.characters)) state.characters = result.characters;
+        mergeCharFields(result.characters);
         await loadAllItemData();
         renderPool(); segments.renderSegments();
         const msg = `空白区补扫：新增 ${result.added} 段（自动归入角色 ${result.bound} 段，待定 ${result.pending} 段）`;
