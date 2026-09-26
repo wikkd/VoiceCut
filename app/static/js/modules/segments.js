@@ -176,7 +176,7 @@ export function createSegments(ctx) {
       <td class="seg-src col-src" title="${esc(item.name)}">${esc(shortName(item.name))}</td>
       <td class="seg-time col-time">${fmtT(seg.start)}<span class="sep">~</span>${fmtT(seg.end)}</td>
       <td class="seg-dur col-dur">${fmtDur(seg.end - seg.start)}</td>
-      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span><button class="chip seg-lock${seg.locked ? " on" : ""}" data-i="${i}" title="${seg.locked ? "已锁定：自动切分 / 补扫 / 声纹识别改写都会跳过它。点击解锁" : "未锁定：点击锁定，保护这一段不被自动流程覆盖"}">${seg.locked ? "🔒" : "🔓"}</button></td>
+      <td class="col-status"><span class="tag ${tagCls}">${tagTxt}</span><button class="chip seg-lock${seg.locked ? " on" : ""}" data-i="${i}" title="${seg.locked ? "已锁定（人工成果）：对齐发音 / 空白区补扫 / 声纹识别都会跳过它。按静音自动切分是整表替换（有确认、可撤销）。点击解锁" : "未锁定：点击锁定，防止这一段被自动流程（对齐发音 / 补扫 / 声纹识别）覆盖"}">${seg.locked ? "🔒" : "🔓"}</button></td>
       <td class="col-aud"><button class="chip seg-aud" data-i="${i}">试听</button></td>
       <td class="col-text"><input type="text" class="seg-text" data-i="${i}" value="${esc(seg.text)}" placeholder="输入转写文本…" title="修改后按回车确认生效；未回车失焦将放弃修改"></td>
       <td class="col-lang"><select class="seg-lang" data-i="${i}">
@@ -380,8 +380,13 @@ export function createSegments(ctx) {
     toast(`已合并 ${found.length} 段 → ${fmtT(start)} ~ ${fmtT(end)}（${(end - start).toFixed(1)}s）`);
   }
 
-  // 手动锁定 / 解锁片段：locked 是「人工成果」标记——自动切分(autosplit)、空白区补扫、
-  // 声纹识别改写都会跳过它。此前 locked 只在人工编辑文本、指派说话人、重定向、合并时自动置位，
+  // 手动锁定 / 解锁片段：locked 是「人工成果」标记。后端尊重它的路径（已逐条核对）：
+  //   align_segments_to_speech 跳过 locked（对齐发音）
+  //   speakers.bind_segments / rescan 不重绑不拆分 locked（声纹反馈 / 识别改写 / 空白区补扫）
+  //   _reset_project_pool 重新识别时保留文本与 locked
+  // 例外：按静音自动切分（/autosplit）是整表替换，不读 locked —— 但它前端有 confirm
+  // 与 pushUndo 兜底，属显式破坏性操作。
+  // 此前 locked 只在人工编辑文本、指派说话人、重定向、合并时自动置位，
   // **而且没有任何办法解除**：用户既不能主动保护一个还没被人碰过的片段，也不能解锁交给自动流程重跑。
   // segIds: 单个 id 或数组；force: true=全部锁定 / false=全部解锁 / 省略=按当前状态取反
   // （有任一未锁定 → 全锁；全部已锁定 → 全解）。返回 { count, locked }。
@@ -402,7 +407,7 @@ export function createSegments(ctx) {
     touched.forEach(id => scheduleSaveProject(id));
     renderSegments();
     toast(`${target ? "已锁定" : "已解锁"} ${hit.length} 段` +
-      (target ? "（自动切分 / 补扫 / 识别改写将跳过）" : "（自动流程可以再改动了）"), 3500);
+      (target ? "（对齐 / 补扫 / 识别将跳过它）" : "（自动流程可以再改动了）"), 3500);
     return { count: hit.length, locked: target };
   }
 

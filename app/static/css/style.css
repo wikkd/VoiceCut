@@ -296,7 +296,7 @@ body:not([data-page="edit"]) #menubar .menu { display: none; }
 }
 @container segscroll (max-width: 700px) {
   #seg-table .col-num { display: none; }
-  #seg-table thead .col-time { width: 16%; } #seg-table thead .col-status { width: 13%; }
+  #seg-table thead .col-time { width: 16%; } #seg-table thead .col-status { width: 14%; }
   #seg-table thead .col-aud { width: 7%; } #seg-table thead .col-spk { width: 15%; }
   #seg-table thead .col-act { width: 14%; }
 }
@@ -483,7 +483,7 @@ tr.seg-row.locked .seg-num { color: #ffd166; }
 /* 锁定开关（放在状态列内，紧跟合规标签）。锁定=琥珀实心，未锁定=暗色虚线框（可点）。
    锁定行的行号也用琥珀色，远距离一眼看出哪几段被保护。 */
 #seg-table .seg-lock {
-  margin-left: 4px; padding: 1px 4px; font-size: 10px; line-height: 15px; vertical-align: middle;
+  margin-left: 4px; padding: 0 4px; font-size: 12px; line-height: 16px; vertical-align: middle;
   color: var(--muted); background: transparent; border: 1px dashed var(--border);
 }
 #seg-table .seg-lock:hover { color: var(--text); border-color: var(--muted); }
